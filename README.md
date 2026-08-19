@@ -6,12 +6,10 @@
 ```
 onAIr/
 ├── apps/
-│   └── frontend/     # Vite + React 19 + TypeScript + Tailwind CSS v4
-├── packages/         # 공유 패키지 (현재 비어 있음, 추후 shared-types 등 추가 예정)
+│   └── frontend/
+├── packages/
 └── docs/
 ```
-
-JS 패키지가 `apps/frontend` 하나뿐이라 pnpm workspace나 Turborepo 없이, `apps/frontend`를 일반 npm 프로젝트로 독립 실행합니다. 나중에 `packages/shared-types`처럼 JS 패키지가 늘어나면 그때 pnpm workspace + Turborepo 구성을 다시 고려합니다.
 
 ## 시작하기
 
@@ -38,16 +36,13 @@ npm run build
 
 ## apps/frontend
 
-- 스택: Vite + React 19 + TypeScript + Tailwind CSS v4, React Router, Zustand, TanStack Query, hls.js, idb, recharts
-- 라우트: `/listen`(청취자 플레이어), `/experiment`(실험 참여), `/admin`(계측 대시보드) — `/`는 `/listen`으로 리다이렉트
-- 폴더 구조(`src/` 기준):
-  - `app/` — 앱 셸, 라우팅
-  - `routes/` — 페이지별 화면
-  - `player/` — HLS 재생 훅
-  - `realtime/` — WebSocket 클라이언트 및 실시간 상태 스토어
-  - `interaction/` — 채팅/음성 요청 입력
-  - `telemetry/` — IndexedDB 기반 지연 계측(L_ack, L_res, E_sync)
-  - `experiment/` — 실험 그룹/설문
-  - `shared/` — 백엔드와 공유하는 타입(`types.ts`)과 REST API 클라이언트(`api.ts`)
-- 백엔드 API 계약(요청 상태값, WebSocket 이벤트 타입 등)은 `src/shared/types.ts`에 정의되어 있고, REST 호출은 `src/shared/api.ts`를 통해서만 이루어집니다.
+- 스택: Vite + React 19 + TypeScript + Tailwind CSS v4 (React Router, Zustand, TanStack Query, hls.js, idb, recharts는 의존성만 추가된 상태, 아직 미사용)
+- 현재는 부트스트랩 뼈대(`app/App.tsx`, `main.tsx`, `index.css`)만 있고, 기능 폴더는 앞으로 채워나갈 자리로 비워뒀습니다:
+  - `routes/{listen,experiment,admin}/` — 화면별 페이지 (예정)
+  - `player/` — HLS 재생 훅 (예정)
+  - `realtime/` — WebSocket 클라이언트 및 실시간 상태 스토어 (예정)
+  - `interaction/` — 채팅/음성 요청 입력 (예정)
+  - `telemetry/` — 지연 계측 (예정)
+  - `experiment/` — 실험 그룹/설문 (예정)
+  - `shared/` — 백엔드와 공유하는 타입 및 REST API 클라이언트 (예정)
 - HLS 스트림(`VITE_HLS_URL`, nginx)과 REST/WS API(`VITE_API_BASE_URL`/`VITE_WS_URL`, FastAPI)는 서로 다른 서버이므로 환경변수를 분리해서 관리합니다.
