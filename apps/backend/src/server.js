@@ -1,5 +1,9 @@
 import { createServer } from 'node:http';
-import { route } from './http/router.js';
+import { loadEnvironment } from './config/env.js';
+
+loadEnvironment();
+
+const { route } = await import('./http/router.js');
 
 const port = Number(process.env.PORT ?? 3000);
 

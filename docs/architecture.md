@@ -6,7 +6,7 @@
 2. The scheduler estimates whether serving a request now risks stream underrun.
 3. If the buffer is healthy, the scheduler prioritizes the oldest waiting request.
 4. If the buffer is thin, the scheduler schedules continuity filler first.
-5. Each decision is logged so the policy can later be evaluated against continuity and responsiveness metrics.
+5. Each decision is returned to the caller so the policy can later be recorded and evaluated against continuity and responsiveness metrics.
 
 ## Policy inputs
 

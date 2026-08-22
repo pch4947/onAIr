@@ -13,6 +13,10 @@ const state = {
 export async function route(request, response) {
   const url = new URL(request.url, `http://${request.headers.host}`);
 
+  if (request.method === 'OPTIONS') {
+    return sendNoContent(response);
+  }
+
   if (request.method === 'GET' && url.pathname === '/health') {
     return sendJson(response, 200, { ok: true, service: 'onAIr backend' });
   }
@@ -25,9 +29,13 @@ export async function route(request, response) {
     });
   }
 
+  if (request.method === 'GET' && url.pathname === '/api/requests') {
+    return sendJson(response, 200, { requests: state.requests });
+  }
+
   if (request.method === 'POST' && url.pathname === '/api/requests') {
     const body = await readJson(request);
-    if (!body.prompt || typeof body.prompt !== 'string') {
+    if (!body || !body.prompt || typeof body.prompt !== 'string') {
       return sendJson(response, 400, { error: 'prompt is required' });
     }
 
@@ -45,6 +53,9 @@ export async function route(request, response) {
 
   if (request.method === 'POST' && url.pathname === '/api/scheduler/tick') {
     const body = await readJson(request);
+    if (!body) {
+      return sendJson(response, 400, { error: 'invalid JSON' });
+    }
     const bufferSeconds = Number(body.bufferSeconds ?? state.stream.bufferSeconds);
     const oldestRequestAgeSeconds = getOldestRequestAgeSeconds();
     const decision = decideNextSegment({
@@ -81,13 +92,32 @@ function getOldestRequestAgeSeconds() {
 }
 
 function sendJson(response, statusCode, payload) {
-  response.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
+  response.writeHead(statusCode, {
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Origin': '*',
+    'Content-Type': 'application/json; charset=utf-8'
+  });
   response.end(JSON.stringify(payload, null, 2));
+}
+
+function sendNoContent(response) {
+  response.writeHead(204, {
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Origin': '*'
+  });
+  response.end();
 }
 
 async function readJson(request) {
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
   if (chunks.length === 0) return {};
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    return null;
+  }
 }
