@@ -1,0 +1,28 @@
+# 로컬 개발용 스테이션 설정 — 실제 운영에서는 station.created 이벤트가 이 역할을 대체한다 (M3)
+station:
+  id: st_local_dev
+  profile:
+    dj_name: "새벽"
+    tone: "차분하고 따뜻한 존댓말"
+    concept: "심야 스터디 라디오"
+  broadcast_minutes: 60
+
+policy:
+  name: naive_fifo            # 정책 A/B/C는 기획서 8장 확정 후 추가 (설계 문서 4.2)
+
+pipeline:
+  llm: dummy                  # 제공자 확정(확인 3) 전까지 더미 — M1에서 실 어댑터 추가
+  tts: dummy
+  max_concurrent_generations: 2
+  target_buffer_sec: 30
+  safety_rules: config/safety_rules.yaml
+
+transport:
+  kind: stdout                # redis는 확인 1(통신 채널) 확정 후 구현
+  audio_dir: var/audio
+
+telemetry:
+  sqlite_path: var/engine_metrics.sqlite
+
+context:
+  recent_segments: 8          # 방송 맥락 = 최근 N개 세그먼트 요약 (확인 10 결정)
