@@ -6,11 +6,12 @@
 
 ```
 onAIr/
-|-- apps/
-|   |-- backend/
-|   `-- frontend/
-|-- packages/
-`-- docs/
+├── apps/
+│   ├── backend/
+│   ├── engine/
+│   └── frontend/
+├── packages/
+└── docs/
 ```
 
 ## 시작하기
@@ -59,6 +60,11 @@ npm run build
 ```
 
 브랜치, 커밋, PR 규칙은 [docs/CONVENTIONS.md](docs/CONVENTIONS.md)를 참고하세요.
+
+## apps/engine
+
+- 대본 엔진 (Python 3.12 + asyncio) — 편성 관리자, LLM/TTS 생성 파이프라인, 안전 계층
+- 설계 문서: [docs/ENGINE_ARCHITECTURE.md](docs/ENGINE_ARCHITECTURE.md), 실행 방법: [apps/engine/README.md](apps/engine/README.md)
 
 ## apps/frontend
 
