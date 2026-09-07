@@ -27,6 +27,7 @@ class EngineSettings:
     """스테이션과 무관한 엔진 인프라 설정 (설정 파일의 station 외 항목)."""
 
     transport_kind: str = "stdout"
+    transport_base_url: str = "http://localhost:3000"
     audio_dir: Path = field(default_factory=lambda: Path("var/audio"))
     sqlite_path: Path = field(default_factory=lambda: Path("var/engine_metrics.sqlite"))
     safety_rules_path: Path = field(default_factory=lambda: Path("config/safety_rules.yaml"))

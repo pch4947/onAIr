@@ -22,7 +22,11 @@ class EngineManager:
                             max_segments: int | None = None) -> StationEngine:
         if config.station_id in self._stations:
             raise ValueError(f"station already running: {config.station_id}")
-        transport = make_transport(self.settings.transport_kind)
+        transport = make_transport(
+            self.settings.transport_kind,
+            base_url=self.settings.transport_base_url,
+            audio_root=self.settings.audio_dir,
+        )
         engine = StationEngine(config, self.settings, transport)
         self._stations[config.station_id] = engine
         self._tasks[config.station_id] = asyncio.create_task(

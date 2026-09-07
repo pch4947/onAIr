@@ -18,8 +18,9 @@ pipeline:
   safety_rules: config/safety_rules.yaml
 
 transport:
-  kind: stdout                # redis는 확인 1(통신 채널) 확정 후 구현
-  audio_dir: var/audio
+  kind: http
+  base_url: http://localhost:3000
+  audio_dir: ../../var/onair-audio
 
 telemetry:
   sqlite_path: var/engine_metrics.sqlite

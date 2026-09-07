@@ -3,7 +3,7 @@
 편성 관리자가 코너 편성표에 따라 LLM 대본을 생성하고 TTS 오디오를 백엔드에 제출하는 파트입니다.
 
 - 설계 문서: [docs/ENGINE_ARCHITECTURE.md](../../docs/ENGINE_ARCHITECTURE.md)
-- 현재 상태: **M0 스켈레톤** — 더미 LLM/TTS로 파이프라인 종단 관통. 백엔드 미연동(stdout 더미 전송).
+- 현재 상태: **M0 관통** — 더미 LLM/TTS가 공용 오디오 폴더에 파일을 만들고 HTTP로 백엔드에 제출.
 
 ## 시작하기
 
@@ -20,8 +20,9 @@ pip install -e ".[dev]"
 onair-engine --config config/station.example.yaml --max-segments 6 --demo-request "요즘 잠이 안 와요"
 ```
 
-- 세그먼트 제출이 `SUBMIT {...}` JSON 라인으로 출력됩니다 (백엔드 계약 확정 전까지의 stdout 더미).
-- 생성된 오디오는 `var/audio/`, 계측 로그는 `var/engine_metrics.sqlite`에 쌓입니다.
+- 백엔드가 먼저 `http://localhost:3000`에서 실행 중이어야 합니다.
+- 세그먼트는 `POST /api/segments`로 제출됩니다.
+- 생성된 오디오는 `../../var/onair-audio/`, 계측 로그는 `var/engine_metrics.sqlite`에 쌓입니다.
 - `--max-segments` 없이 실행하면 설정된 방송 시간 동안 계속 돕니다 (Ctrl+C로 종료).
 
 ## 테스트 / 린트
@@ -45,11 +46,11 @@ src/onair_engine/
 ├── ack.py            # 접수 확인 단축 경로 (사전 렌더 캐시)
 ├── catalog.py        # 음원 카탈로그 (엔진 소유)
 ├── sources/rss.py    # RSS 수집기 (M2 실구현)
-├── transport.py      # 백엔드 어댑터 (stdout 더미 / redis는 계약 확정 후)
+├── transport.py      # 백엔드 어댑터 (HTTP 제출 / stdout 더미)
 └── telemetry.py      # SQLite 계측 (generation_log, request_log, decision_log)
 ```
 
 ## 다음 단계
 
 설계 문서 9장 단계별 구현 계획(M0~M4)과 10장 확인 필요 사항을 참고하세요.
-당장의 미결: 백엔드 통신 채널(확인 1, 1주차 계약), LLM/TTS 제공자 선정(확인 3).
+당장의 미결: LLM/TTS 제공자 선정(확인 3).
