@@ -46,7 +46,7 @@ def make_pipeline(tmp_path):
         corners=build_corners(catalog=Catalog(), rss=RssCollector()),
         llm=make_llm("dummy"), tts=make_tts("dummy"), safety=SafetyChecker(RULES),
         telemetry=Telemetry(tmp_path / "metrics.sqlite", "st_test"),
-        audio_dir=tmp_path / "audio",
+        audio_root=tmp_path / "audio",
     )
 
 
@@ -56,8 +56,12 @@ def test_dummy_pipeline_produces_segment(tmp_path):
     sub = asyncio.run(pipeline.run(job))
     assert sub is not None
     assert sub.duration_ms > 0
-    assert Path(sub.audio_ref).exists()
     assert sub.kind == SegmentKind.FILLER
+    # audio_ref는 공유 오디오 루트 기준 POSIX 상대 경로여야 한다 (설계 문서 5.1).
+    # 백엔드가 URL로 이어붙이므로 OS 경로 구분자가 섞이면 안 된다.
+    assert sub.audio_ref.startswith("st_test/")
+    assert "\\" not in sub.audio_ref
+    assert (tmp_path / "audio" / sub.audio_ref).exists()
 
 
 def test_l0_blocks_contact_info():

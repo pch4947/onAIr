@@ -9,10 +9,20 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 
 
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
+
+
+def to_audio_ref(audio_root: Path | str, path: Path | str) -> str:
+    """제출 페이로드의 audio_ref — 공유 오디오 루트 기준 POSIX 상대 경로 (설계 문서 5.1).
+
+    백엔드가 URL 경로로 그대로 이어붙일 수 있어야 하므로 OS 경로 구분자에 의존하지 않는다.
+    엔진과 백엔드가 같은 루트를 가리킨다는 것이 이 값의 전제다 (확인 1).
+    """
+    return Path(path).resolve().relative_to(Path(audio_root).resolve()).as_posix()
 
 
 class SegmentKind(StrEnum):
