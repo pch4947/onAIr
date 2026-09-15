@@ -15,9 +15,12 @@ export interface Track {
   audioUrl: string
 }
 
+export type RequestStatusVariant = 'generating' | 'queued' | 'played' | 'rejected' | 'muted'
+
 export interface RequestStatusItem {
   id: string
   text: string
+  variant: RequestStatusVariant
   visibleToSelfOnly: boolean
 }
 
@@ -68,11 +71,11 @@ export const PLAYLIST: Track[] = [
 export const SYNC_OFFSET_SEC = 0.3
 
 export const MY_REQUEST_STATUSES: RequestStatusItem[] = [
-  { id: '1', text: '사연 · GENERATING', visibleToSelfOnly: false },
-  { id: '2', text: '신청곡 · QUEUED', visibleToSelfOnly: false },
-  { id: '3', text: '사연 · PLAYED', visibleToSelfOnly: false },
-  { id: '4', text: 'REJECTED', visibleToSelfOnly: true },
-  { id: '5', text: '접수됨 · 확인 생략', visibleToSelfOnly: true },
+  { id: '1', text: '사연 · GENERATING', variant: 'generating', visibleToSelfOnly: false },
+  { id: '2', text: '신청곡 · QUEUED', variant: 'queued', visibleToSelfOnly: false },
+  { id: '3', text: '사연 · PLAYED', variant: 'played', visibleToSelfOnly: false },
+  { id: '4', text: 'REJECTED', variant: 'rejected', visibleToSelfOnly: true },
+  { id: '5', text: '접수됨 · 확인 생략', variant: 'muted', visibleToSelfOnly: true },
 ]
 
 export const CHAT_MESSAGES: ChatMessage[] = [
