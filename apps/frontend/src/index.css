@@ -1,13 +1,6 @@
 @import "tailwindcss";
 
-/*
-  디자인 토큰. Tailwind v4의 @theme 안에 정의해서 --color-*, --radius-*, --font-*
-  네임스페이스에 맞는 항목은 bg-primary, rounded-lg, font-sans 같은 유틸리티로도 바로 쓸 수 있습니다.
-  값 출처: Figma "00_Main_방송 선택" 프레임
-  (fileKey nPwLaMMSueelPCvj8Pf4li, node 42:55) — 다른 화면 작업 중 값이 다르면 그때 갱신합니다.
-*/
 @theme {
-  /* Colors */
   --color-bg: #fafafa;
   --color-surface: #ffffff;
   --color-sidebar: #1f1f26;
@@ -28,29 +21,31 @@
   --color-thumbnail: #1a1a21;
   --color-thumbnail-icon: #808099;
 
-  /* 상태 배지 색상 — 근사값. 03_Admin/04_Board 화면 작업 커밋에서 Figma 확인 후 갱신 예정 */
-  --color-status-generating: #f2a93b;
-  --color-status-queued: #7b61ff;
-  --color-status-played: #4caf50;
-  --color-status-rejected: #e53333;
-  --color-status-muted: #9ca3af;
+  --color-chip-bg: #f2f2f7;
+  --color-chip-text: #595966;
+  --color-field-bg: #f7f7f7;
+  --color-field-border: #e0e0e0;
+  --color-field-placeholder: #9999a3;
+  --color-label: #4d4d57;
 
-  /* Radius */
+  --color-status-generating: #d99926;
+  --color-status-queued: #7373cc;
+  --color-status-played: #4da64d;
+  --color-status-rejected: #bf4040;
+  --color-status-muted: #808099;
+
+  --color-album: #383847;
+  --color-experiment: #6b4ade;
+  --color-danger: #cc3333;
+
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 10px;
+  --radius-xl: 16px;
 
-  /* Typography — Figma는 Inter를 쓰지만 한글 글리프가 없어 시스템 폰트로 대체 */
   --font-sans: 'Pretendard', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 }
 
-/*
-  Tailwind Preflight가 box-sizing, margin/padding/border, list-style, link, table,
-  form 기본 reset을 이미 처리해서, 여기서는 Preflight가 다루지 않는 항목만 보강합니다.
-
-  html{font-size:62.5%} 트릭은 넣지 않았습니다 — Tailwind 유틸리티(p-4, text-sm 등)는
-  브라우저 기본 16px 루트 기준 rem이라, 루트 font-size를 바꾸면 전체 스케일이 어긋납니다.
-*/
 @layer base {
   button {
     cursor: pointer;
