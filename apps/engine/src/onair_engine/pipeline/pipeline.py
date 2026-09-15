@@ -8,7 +8,14 @@ import logging
 import time
 from pathlib import Path
 
-from ..domain import GenerationJob, SegmentKind, SegmentSubmission, StationProfile, new_id
+from ..domain import (
+    GenerationJob,
+    SegmentKind,
+    SegmentSubmission,
+    StationProfile,
+    new_id,
+    to_audio_ref,
+)
 from ..telemetry import Telemetry
 from .llm import LlmClient
 from .safety import SafetyChecker
@@ -22,7 +29,7 @@ logger = logging.getLogger(__name__)
 class GenerationPipeline:
     def __init__(self, *, station_id: str, profile: StationProfile, corners: dict,
                  llm: LlmClient, tts: TtsClient, safety: SafetyChecker,
-                 telemetry: Telemetry, audio_dir: Path):
+                 telemetry: Telemetry, audio_root: Path):
         self.station_id = station_id
         self.profile = profile
         self.corners = corners
@@ -30,7 +37,9 @@ class GenerationPipeline:
         self.tts = tts
         self.safety = safety
         self.telemetry = telemetry
-        self.audio_dir = Path(audio_dir)
+        # audio_root는 백엔드와 공유하는 오디오 루트, audio_dir은 이 스테이션의 하위 디렉토리
+        self.audio_root = Path(audio_root)
+        self.audio_dir = self.audio_root / station_id
 
     async def run(self, job: GenerationJob) -> SegmentSubmission | None:
         """성공 시 제출 페이로드, REJECT 시 None.
@@ -71,7 +80,7 @@ class GenerationPipeline:
         return SegmentSubmission(
             id=seg_id,
             station_id=self.station_id,
-            audio_ref=str(out_path),
+            audio_ref=to_audio_ref(self.audio_root, out_path),
             duration_ms=duration_ms,
             corner_type=job.corner_type,
             kind=_KIND_BY_CORNER.get(job.corner_type, SegmentKind.SPEECH),

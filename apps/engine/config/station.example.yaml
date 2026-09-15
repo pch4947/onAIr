@@ -19,8 +19,11 @@ pipeline:
   safety_rules: config/safety_rules.yaml
 
 transport:
-  kind: stdout                # redis는 확인 1(통신 채널) 확정 후 구현
-  audio_dir: var/audio
+  kind: stdout                # stdout | http — redis는 확인 1(통신 채널) 확정 후 구현
+  base_url: http://localhost:3000   # kind: http 일 때 백엔드 주소
+                                    # 토큰은 ONAIR_ENGINE_TOKEN 환경변수로 주입
+  audio_dir: var/audio        # 백엔드와 공유하는 오디오 루트.
+                              # 제출 페이로드의 audio_ref는 이 경로 기준 상대 경로다
 
 telemetry:
   sqlite_path: var/engine_metrics.sqlite
