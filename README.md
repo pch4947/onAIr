@@ -27,27 +27,13 @@ npm run dev
 
 `.env`에 `VITE_API_BASE_URL`/`VITE_WS_URL`(백엔드)과 `VITE_HLS_URL`(HLS 스트림)을 채워주세요.
 
-백엔드:
+백엔드 (FastAPI 전환 1단계):
 
-```bash
-cd apps/backend
-cp .env.example .env
-npm start
-```
+Python 3.12 이상이 필요합니다. 실행 방법은 [백엔드 README](apps/backend/README.md)를 참고하세요.
+FastAPI는 health, 요청 큐, 방송 상태 및 스케줄러 API를 제공하며 기본 포트는 `3000`입니다.
+기존 Node 백엔드를 Python으로 이식했습니다. Redis/HLS는 후속 단계입니다.
 
-기본 포트는 `3000`이며, 필요하면 `PORT` 환경 변수로 변경할 수 있습니다.
-
-## 백엔드 API
-
-```http
-GET /health
-GET /api/stream/state
-GET /api/requests
-POST /api/requests
-POST /api/scheduler/tick
-```
-
-백엔드는 요청 큐, 생성 예상 시간, 남은 스트림 버퍼를 함께 보고 다음 편성 행동을 결정하는 초기 정책을 포함합니다. 자세한 구조는 [docs/architecture.md](docs/architecture.md)를 참고하세요.
+전환 범위와 Redis/HLS 후속 단계는 [전환 계획](docs/BACKEND_MIGRATION.md)에 정리했습니다.
 
 ## 커밋 전 체크
 
