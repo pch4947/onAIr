@@ -2,11 +2,12 @@
 
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { usePlaybackController } from '@/player/usePlaybackController'
 import { ExperimentSurveyModal } from '@/routes/listen/ExperimentSurveyModal'
 import {
   CHAT_MESSAGES,
-  CURRENT_TRACK,
   MY_REQUEST_STATUSES,
+  PLAYLIST,
   STATION_INFO,
   SYNC_OFFSET_SEC,
 } from '@/routes/listen/mock'
@@ -21,6 +22,8 @@ export function ListenPage() {
   const [isSurveyOpen, setIsSurveyOpen] = useState(false)
   const [chatInput, setChatInput] = useState('')
   const navigate = useNavigate()
+  const { audioRef, currentTrack, isPlaying, positionSec, togglePlay } =
+    usePlaybackController(PLAYLIST)
 
   const handleSendChat = (event: React.FormEvent) => {
     event.preventDefault()
@@ -53,15 +56,30 @@ export function ListenPage() {
             <span>♪</span>
           </div>
 
+          <audio ref={audioRef} />
+
           <div>
-            <p>코너: {CURRENT_TRACK.cornerName}</p>
+            <p>코너: {currentTrack.cornerName}</p>
             <p>
-              지금 재생 중 — {CURRENT_TRACK.title} · {CURRENT_TRACK.artist}
+              지금 재생 중 — {currentTrack.title} · {currentTrack.artist}
             </p>
-            <progress value={CURRENT_TRACK.positionSec} max={CURRENT_TRACK.durationSec} />
-            <span>
-              {formatTime(CURRENT_TRACK.positionSec)} / {formatTime(CURRENT_TRACK.durationSec)}
-            </span>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={togglePlay}
+                className="rounded-full bg-neutral-900 px-3 py-1 text-sm text-white"
+              >
+                {isPlaying ? '일시정지' : '재생'}
+              </button>
+              <progress
+                value={positionSec}
+                max={currentTrack.durationSec}
+                className="h-2 flex-1 accent-neutral-900"
+              />
+              <span className="text-sm text-neutral-500">
+                {formatTime(positionSec)} / {formatTime(currentTrack.durationSec)}
+              </span>
+            </div>
             <p>동기화 오차(E_sync): {SYNC_OFFSET_SEC}s</p>
           </div>
 
