@@ -2,46 +2,15 @@
 
 export interface BoardPost {
   id: string
+  title: string
   author: string
-  content: string
-  status: string
-  hasReplay: boolean
+  timeAgo: string
 }
 
 export const BOARD_POSTS: BoardPost[] = [
-  {
-    id: '1',
-    author: '익명',
-    content: '오늘 하루 정말 힘들었는데 위로되는 곡 하나 부탁드려요',
-    status: 'GENERATING',
-    hasReplay: false,
-  },
-  {
-    id: '2',
-    author: '라디오러',
-    content: '무드: 잔잔한 밤 — 잔잔한 곡으로 부탁드려요',
-    status: 'QUEUED',
-    hasReplay: false,
-  },
-  {
-    id: '3',
-    author: '별밤지기',
-    content: '친구랑 다퉜는데 화해하고 싶어요. 응원 한마디 부탁드려요',
-    status: '방송에 반영됨 · PLAYED',
-    hasReplay: true,
-  },
-  {
-    id: '4',
-    author: '익명',
-    content: '신나는 곡으로 부탁드려요!',
-    status: '대기 중',
-    hasReplay: false,
-  },
-  {
-    id: '5',
-    author: '조용한밤',
-    content: '오늘 면접 합격 후기 나누고 싶어요 :)',
-    status: '방송에 반영됨 · PLAYED',
-    hasReplay: true,
-  },
+  { id: '1', title: '오늘 하루 위로가 필요해요', author: '익명', timeAgo: '2분 전' },
+  { id: '2', title: '잔잔한 밤, 듣고 싶은 곡이 있어요', author: '라디오러버', timeAgo: '5분 전' },
+  { id: '3', title: '친구와 화해하고 싶어요', author: '별밤지기', timeAgo: '12분 전' },
+  { id: '4', title: '신나는 곡 추천해주세요', author: '익명', timeAgo: '20분 전' },
+  { id: '5', title: '면접 합격 후기 나누고 싶어요', author: '조용한밤', timeAgo: '34분 전' },
 ]

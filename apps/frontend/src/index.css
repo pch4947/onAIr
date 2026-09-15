@@ -1,1 +1,77 @@
 @import "tailwindcss";
+
+@theme {
+  --color-bg: #fafafa;
+  --color-surface: #ffffff;
+  --color-sidebar: #1f1f26;
+
+  --color-primary: #3366e5;
+  --color-primary-strong: #4d66d9;
+
+  --color-text: #262626;
+  --color-text-muted: #808080;
+  --color-text-inverse: #ffffff;
+  --color-nav-inactive: #bfbfcc;
+
+  --color-border: #dedede;
+  --color-hashtag: #5973bf;
+  --color-live: #e53333;
+  --color-viewer: #598c59;
+
+  --color-thumbnail: #1a1a21;
+  --color-thumbnail-icon: #808099;
+
+  --color-chip-bg: #f2f2f7;
+  --color-chip-text: #595966;
+  --color-field-bg: #f7f7f7;
+  --color-field-border: #e0e0e0;
+  --color-field-placeholder: #9999a3;
+  --color-label: #4d4d57;
+
+  --color-status-generating: #d99926;
+  --color-status-queued: #7373cc;
+  --color-status-played: #4da64d;
+  --color-status-rejected: #bf4040;
+  --color-status-muted: #808099;
+
+  --color-album: #383847;
+  --color-experiment: #6b4ade;
+  --color-danger: #cc3333;
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 16px;
+
+  --font-sans: 'Pretendard', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+@layer base {
+  button {
+    cursor: pointer;
+  }
+
+  p,
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    overflow-wrap: break-word;
+  }
+
+  html,
+  body,
+  #root {
+    width: 100%;
+    min-height: 100%;
+  }
+
+  body {
+    min-height: 100vh;
+    font-family: var(--font-sans);
+    color: var(--color-text);
+    background-color: var(--color-surface);
+  }
+}
