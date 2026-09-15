@@ -12,16 +12,20 @@ policy:
 
 pipeline:
   llm: dummy                  # 제공자 확정(확인 3) 전까지 더미 — M1에서 실 어댑터 추가
-  tts: dummy                  # dummy(무음 wav) | edge(실제 한국어 발화 mp3, 인터넷 필요, pip install -e ".[tts]")
-  # tts_voice: ko-KR-SunHiNeural  # edge 보이스 (ko-KR-InJoonNeural = 남성)
+  tts: dummy                  # dummy(무음 wav) | google(Cloud TTS, GOOGLE_TTS_API_KEY 필요)
+                              # | edge(청취 테스트용, pip install -e ".[tts]")
+  # tts_voice: ko-KR-Chirp3-HD-Aoede  # google 기본값. 남성: ko-KR-Chirp3-HD-Charon
+                                      # edge 기본값: ko-KR-SunHiNeural
+  tts_cache_dir: var/tts_cache  # 같은 문장 재합성 방지 캐시 — 엔진 전용, audio_dir 밖에 둔다
   max_concurrent_generations: 2
   target_buffer_sec: 30
   safety_rules: config/safety_rules.yaml
 
 transport:
-  kind: stdout                # stdout | http — redis는 확인 1(통신 채널) 확정 후 구현
+  kind: stdout                # stdout | http | redis (계약: docs/ENGINE_REDIS_CONTRACT.md)
   base_url: http://localhost:3000   # kind: http 일 때 백엔드 주소
                                     # 토큰은 ONAIR_ENGINE_TOKEN 환경변수로 주입
+  redis_url: redis://localhost:6379/0  # kind: redis 일 때. 비밀번호가 있으면 ONAIR_REDIS_URL로 주입
   audio_dir: var/audio        # 백엔드와 공유하는 오디오 루트.
                               # 제출 페이로드의 audio_ref는 이 경로 기준 상대 경로다
 
