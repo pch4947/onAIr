@@ -18,11 +18,14 @@ export interface PolicyOption {
   label: string
 }
 
+export type RequestLogVariant = 'generating' | 'queued' | 'played' | 'rejected' | 'muted'
+
 export interface RequestLogItem {
   id: string
   time: string
   request: string
   status: string
+  variant: RequestLogVariant
   policyLabel: string
 }
 
@@ -41,7 +44,7 @@ export const BUFFER_STATUS: BufferStatus = {
 
 export const POLICY_OPTIONS: PolicyOption[] = [
   { id: 'A', label: 'A. 경계 대기' },
-  { id: 'B', label: 'B. 즉시 채배' },
+  { id: 'B', label: 'B. 즉시 재배치' },
   { id: 'C', label: 'C. 접수+지연' },
 ]
 
@@ -55,6 +58,7 @@ export const REQUEST_LOG: RequestLogItem[] = [
     time: '21:04:12',
     request: '사연: 오늘 하루 힘들었어요',
     status: 'GENERATING',
+    variant: 'generating',
     policyLabel: '정책 C',
   },
   {
@@ -62,6 +66,7 @@ export const REQUEST_LOG: RequestLogItem[] = [
     time: '21:03:58',
     request: '신청곡: OOO - 좋은 날',
     status: 'QUEUED',
+    variant: 'queued',
     policyLabel: '정책 C',
   },
   {
@@ -69,6 +74,7 @@ export const REQUEST_LOG: RequestLogItem[] = [
     time: '21:02:30',
     request: '사연: 응원 부탁드려요',
     status: 'PLAYED',
+    variant: 'played',
     policyLabel: '정책 C',
   },
   {
@@ -76,13 +82,15 @@ export const REQUEST_LOG: RequestLogItem[] = [
     time: '21:01:47',
     request: '사연: 정치 얘기 좀 해주세요',
     status: 'REJECTED (L1)',
+    variant: 'rejected',
     policyLabel: '—',
   },
   {
     id: '5',
     time: '21:01:02',
-    request: '신청곡: 무드 - 잔잔한 밤',
+    request: '신청곡: 무드 - 잔잔한',
     status: '접수 · 확인 생략',
+    variant: 'muted',
     policyLabel: '정책 C',
   },
 ]
