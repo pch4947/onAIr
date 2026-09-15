@@ -6,12 +6,13 @@ export interface StationInfo {
   viewerCount: number
 }
 
-export interface CurrentTrack {
+export interface Track {
+  id: string
   cornerName: string
   title: string
   artist: string
-  positionSec: number
   durationSec: number
+  audioUrl: string
 }
 
 export interface RequestStatusItem {
@@ -37,13 +38,32 @@ export const STATION_INFO: StationInfo = {
   viewerCount: 37,
 }
 
-export const CURRENT_TRACK: CurrentTrack = {
-  cornerName: '감성 발라드 나이트',
-  title: '곡 제목',
-  artist: '아티스트',
-  positionSec: 83,
-  durationSec: 225,
-}
+export const PLAYLIST: Track[] = [
+  {
+    id: '1',
+    cornerName: '감성 발라드 나이트',
+    title: '새벽의 편지',
+    artist: 'AI DJ 세라',
+    durationSec: 12,
+    audioUrl: '/mock-audio/track-1.wav',
+  },
+  {
+    id: '2',
+    cornerName: '오늘의 주제',
+    title: '오늘 하루 이야기',
+    artist: 'AI DJ 세라',
+    durationSec: 10,
+    audioUrl: '/mock-audio/track-2.wav',
+  },
+  {
+    id: '3',
+    cornerName: '심야 사연',
+    title: '잔잔한 위로',
+    artist: 'AI DJ 세라',
+    durationSec: 14,
+    audioUrl: '/mock-audio/track-3.wav',
+  },
+]
 
 export const SYNC_OFFSET_SEC = 0.3
 
