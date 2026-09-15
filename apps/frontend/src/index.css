@@ -1,1 +1,82 @@
 @import "tailwindcss";
+
+/*
+  디자인 토큰. Tailwind v4의 @theme 안에 정의해서 --color-*, --radius-*, --font-*
+  네임스페이스에 맞는 항목은 bg-primary, rounded-lg, font-sans 같은 유틸리티로도 바로 쓸 수 있습니다.
+  값 출처: Figma "00_Main_방송 선택" 프레임
+  (fileKey nPwLaMMSueelPCvj8Pf4li, node 42:55) — 다른 화면 작업 중 값이 다르면 그때 갱신합니다.
+*/
+@theme {
+  /* Colors */
+  --color-bg: #fafafa;
+  --color-surface: #ffffff;
+  --color-sidebar: #1f1f26;
+
+  --color-primary: #3366e5;
+  --color-primary-strong: #4d66d9;
+
+  --color-text: #262626;
+  --color-text-muted: #808080;
+  --color-text-inverse: #ffffff;
+  --color-nav-inactive: #bfbfcc;
+
+  --color-border: #dedede;
+  --color-hashtag: #5973bf;
+  --color-live: #e53333;
+  --color-viewer: #598c59;
+
+  --color-thumbnail: #1a1a21;
+  --color-thumbnail-icon: #808099;
+
+  /* 상태 배지 색상 — 근사값. 03_Admin/04_Board 화면 작업 커밋에서 Figma 확인 후 갱신 예정 */
+  --color-status-generating: #f2a93b;
+  --color-status-queued: #7b61ff;
+  --color-status-played: #4caf50;
+  --color-status-rejected: #e53333;
+  --color-status-muted: #9ca3af;
+
+  /* Radius */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+
+  /* Typography — Figma는 Inter를 쓰지만 한글 글리프가 없어 시스템 폰트로 대체 */
+  --font-sans: 'Pretendard', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+/*
+  Tailwind Preflight가 box-sizing, margin/padding/border, list-style, link, table,
+  form 기본 reset을 이미 처리해서, 여기서는 Preflight가 다루지 않는 항목만 보강합니다.
+
+  html{font-size:62.5%} 트릭은 넣지 않았습니다 — Tailwind 유틸리티(p-4, text-sm 등)는
+  브라우저 기본 16px 루트 기준 rem이라, 루트 font-size를 바꾸면 전체 스케일이 어긋납니다.
+*/
+@layer base {
+  button {
+    cursor: pointer;
+  }
+
+  p,
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    overflow-wrap: break-word;
+  }
+
+  html,
+  body,
+  #root {
+    width: 100%;
+    min-height: 100%;
+  }
+
+  body {
+    min-height: 100vh;
+    font-family: var(--font-sans);
+    color: var(--color-text);
+    background-color: var(--color-surface);
+  }
+}
