@@ -27,7 +27,9 @@ class EngineSettings:
     """스테이션과 무관한 엔진 인프라 설정 (설정 파일의 station 외 항목)."""
 
     transport_kind: str = "stdout"
-    audio_dir: Path = field(default_factory=lambda: Path("var/audio"))
+    transport_base_url: str = "http://localhost:3000"  # transport_kind="http"일 때 백엔드 주소
+    transport_token: str | None = None  # 내부 통신 토큰 — 환경변수로 주입한다
+    audio_dir: Path = field(default_factory=lambda: Path("var/audio"))  # 공유 오디오 루트
     sqlite_path: Path = field(default_factory=lambda: Path("var/engine_metrics.sqlite"))
     safety_rules_path: Path = field(default_factory=lambda: Path("config/safety_rules.yaml"))
     llm: str = "dummy"
@@ -43,16 +45,17 @@ class StationEngine:
         self.transport = transport
         self.telemetry = Telemetry(settings.sqlite_path, config.station_id)
 
-        audio_dir = Path(settings.audio_dir) / config.station_id
+        # 제출 페이로드의 audio_ref는 이 루트 기준 상대 경로로 나간다 (설계 문서 5.1)
+        audio_root = Path(settings.audio_dir)
         tts = make_tts(settings.tts)
         safety = SafetyChecker(settings.safety_rules_path)
         corners = build_corners(catalog=Catalog(), rss=RssCollector())
         pipeline = GenerationPipeline(
             station_id=config.station_id, profile=config.profile, corners=corners,
             llm=make_llm(settings.llm), tts=tts, safety=safety,
-            telemetry=self.telemetry, audio_dir=audio_dir,
+            telemetry=self.telemetry, audio_root=audio_root,
         )
-        self.ack_cache = AckCache(tts=tts, audio_dir=audio_dir)
+        self.ack_cache = AckCache(tts=tts, audio_root=audio_root, station_id=config.station_id)
         self.scheduler = Scheduler(
             config=config,
             order=FixedRunningOrderBuilder().build(config),

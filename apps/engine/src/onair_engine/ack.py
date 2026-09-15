@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .domain import to_audio_ref
 from .pipeline.tts import TtsClient
 
 # MVP 템플릿 — 요청 내용을 반영한 개인화 ack는 COULD로 미룸
@@ -20,9 +21,10 @@ ACK_TEMPLATES = [
 class AckCache:
     """스테이션마다 DJ 보이스가 다르므로 스테이션 생성 시점에 사전 렌더링한다."""
 
-    def __init__(self, *, tts: TtsClient, audio_dir: Path):
+    def __init__(self, *, tts: TtsClient, audio_root: Path, station_id: str):
         self._tts = tts
-        self._dir = Path(audio_dir) / "ack"
+        self._root = Path(audio_root)
+        self._dir = self._root / station_id / "ack"
         self._entries: list[tuple[str, int]] = []  # (audio_ref, duration_ms)
         self._next = 0
 
@@ -30,7 +32,7 @@ class AckCache:
         for i, text in enumerate(ACK_TEMPLATES):
             path = self._dir / f"ack_{i}.wav"
             duration_ms = await self._tts.synthesize(text, path)
-            self._entries.append((str(path), duration_ms))
+            self._entries.append((to_audio_ref(self._root, path), duration_ms))
 
     def pick(self) -> tuple[str, int]:
         entry = self._entries[self._next % len(self._entries)]
