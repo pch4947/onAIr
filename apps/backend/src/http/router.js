@@ -1,4 +1,8 @@
 import { decideNextSegment } from '../domain/scheduler.js';
+import { enqueueSegment, getBufferSeconds, parseSegmentSubmission } from '../domain/segment-queue.js';
+import { resolve } from 'node:path';
+
+const audioRoot = resolve(process.env.ONAIR_AUDIO_ROOT ?? '../../var/onair-audio');
 
 const state = {
   stream: {
@@ -7,7 +11,8 @@ const state = {
     currentSegment: null,
     updatedAt: new Date().toISOString()
   },
-  requests: []
+  requests: [],
+  segments: []
 };
 
 export async function route(request, response) {
@@ -25,7 +30,37 @@ export async function route(request, response) {
     return sendJson(response, 200, {
       stream: state.stream,
       pendingRequestCount: state.requests.length,
+      queuedSegmentCount: state.segments.length,
       oldestRequestAgeSeconds: getOldestRequestAgeSeconds()
+    });
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/segments') {
+    return sendJson(response, 200, {
+      audioRoot,
+      bufferSeconds: getBufferSeconds(state.segments),
+      segments: state.segments
+    });
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/segments') {
+    const body = await readJson(request);
+    if (!body) return sendJson(response, 400, { error: 'invalid JSON' });
+
+    const parsed = parseSegmentSubmission(body, audioRoot);
+    if (!parsed.ok) return sendJson(response, 400, { error: parsed.error });
+    if (state.segments.some((segment) => segment.id === parsed.value.id)) {
+      return sendJson(response, 409, { error: 'segment id already exists' });
+    }
+
+    state.segments = enqueueSegment(state.segments, parsed.value);
+    updateStreamFromQueue();
+    const position = state.segments.findIndex((segment) => segment.id === parsed.value.id) + 1;
+
+    return sendJson(response, 201, {
+      segment: parsed.value,
+      position,
+      bufferSeconds: state.stream.bufferSeconds
     });
   }
 
@@ -89,6 +124,16 @@ function getOldestRequestAgeSeconds() {
   if (state.requests.length === 0) return 0;
   const oldest = state.requests[0];
   return Math.round((Date.now() - Date.parse(oldest.createdAt)) / 1000);
+}
+
+function updateStreamFromQueue() {
+  const bufferSeconds = getBufferSeconds(state.segments);
+  state.stream = {
+    ...state.stream,
+    status: state.segments.length > 0 ? 'buffered' : 'ready',
+    bufferSeconds,
+    updatedAt: new Date().toISOString()
+  };
 }
 
 function sendJson(response, statusCode, payload) {
