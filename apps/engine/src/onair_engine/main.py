@@ -27,7 +27,6 @@ def load_config(path: Path) -> tuple[StationConfig, EngineSettings]:
     tel = raw.get("telemetry", {})
     settings = EngineSettings(
         transport_kind=tr.get("kind", "stdout"),
-        transport_base_url=tr.get("base_url", "http://localhost:3000"),
         audio_dir=Path(tr.get("audio_dir", "var/audio")),
         sqlite_path=Path(tel.get("sqlite_path", "var/engine_metrics.sqlite")),
         safety_rules_path=Path(pipe.get("safety_rules", "config/safety_rules.yaml")),

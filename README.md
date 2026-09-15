@@ -43,13 +43,11 @@ npm start
 GET /health
 GET /api/stream/state
 GET /api/requests
-GET /api/segments
 POST /api/requests
-POST /api/segments
 POST /api/scheduler/tick
 ```
 
-대본 엔진은 공용 오디오 폴더에 `.wav` 파일을 만든 뒤 `POST /api/segments`로 세그먼트 메타데이터를 제출합니다. 백엔드는 우선순위 대기열과 남은 버퍼 시간을 갱신합니다. 공용 폴더 경로는 양쪽에서 `ONAIR_AUDIO_ROOT`와 `transport.audio_dir`로 같은 위치를 가리켜야 합니다.
+백엔드는 요청 큐, 생성 예상 시간, 남은 스트림 버퍼를 함께 보고 다음 편성 행동을 결정하는 초기 정책을 포함합니다. 자세한 구조는 [docs/architecture.md](docs/architecture.md)를 참고하세요.
 
 ## 커밋 전 체크
 
