@@ -7,6 +7,7 @@ dependencies = ["PyYAML>=6.0"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6"]
+tts = ["edge-tts>=7.2"]  # pipeline.tts: edge (실제 발화 청취 테스트용)
 
 [project.scripts]
 onair-engine = "onair_engine.main:cli"

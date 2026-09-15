@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 from pathlib import Path
 
 import yaml
@@ -32,6 +33,7 @@ def load_config(path: Path) -> tuple[StationConfig, EngineSettings]:
         safety_rules_path=Path(pipe.get("safety_rules", "config/safety_rules.yaml")),
         llm=pipe.get("llm", "dummy"),
         tts=pipe.get("tts", "dummy"),
+        tts_voice=pipe.get("tts_voice"),
         max_concurrent_generations=int(pipe.get("max_concurrent_generations", 2)),
         target_buffer_sec=float(pipe.get("target_buffer_sec", 30)),
     )
@@ -45,9 +47,16 @@ def cli(argv: list[str] | None = None) -> None:
                         help="N개 제출 후 종료 (관통 테스트용)")
     parser.add_argument("--demo-request", action="append", default=[], metavar="TEXT",
                         help="기동 2초 후 주입할 가짜 청취자 요청 (반복 지정 가능)")
+    parser.add_argument("--tts", choices=["dummy", "edge"], default=None,
+                        help="설정 파일의 pipeline.tts를 덮어쓴다")
     args = parser.parse_args(argv)
 
+    # 생성된 대본을 SCRIPT 라인으로 보여준다 (SUBMIT 페이로드에는 대본 텍스트가 없다)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
     config, settings = load_config(args.config)
+    if args.tts:
+        settings.tts = args.tts
     manager = EngineManager(settings)
     try:
         asyncio.run(manager.run_local(

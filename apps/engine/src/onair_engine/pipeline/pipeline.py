@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 
@@ -14,6 +15,8 @@ from .safety import SafetyChecker
 from .tts import TtsClient
 
 _KIND_BY_CORNER = {"filler": SegmentKind.FILLER}
+
+logger = logging.getLogger(__name__)
 
 
 class GenerationPipeline:
@@ -58,7 +61,8 @@ class GenerationPipeline:
 
         # [4] TTS
         seg_id = new_id("seg")
-        out_path = self.audio_dir / f"{seg_id}.wav"
+        logger.info("SCRIPT %s [%s] %s", seg_id, job.corner_type, script.text)
+        out_path = self.audio_dir / f"{seg_id}{self.tts.file_ext}"
         duration_ms = await self.tts.synthesize(script.text, out_path)
         t3 = time.time()
         self._log(job, "tts", t2, t3, "ok")

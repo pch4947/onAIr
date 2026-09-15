@@ -32,6 +32,7 @@ class EngineSettings:
     safety_rules_path: Path = field(default_factory=lambda: Path("config/safety_rules.yaml"))
     llm: str = "dummy"
     tts: str = "dummy"
+    tts_voice: str | None = None  # None이면 어댑터 기본 보이스
     max_concurrent_generations: int = 2
     target_buffer_sec: float = 30.0
 
@@ -44,7 +45,7 @@ class StationEngine:
         self.telemetry = Telemetry(settings.sqlite_path, config.station_id)
 
         audio_dir = Path(settings.audio_dir) / config.station_id
-        tts = make_tts(settings.tts)
+        tts = make_tts(settings.tts, voice=settings.tts_voice)
         safety = SafetyChecker(settings.safety_rules_path)
         corners = build_corners(catalog=Catalog(), rss=RssCollector())
         pipeline = GenerationPipeline(

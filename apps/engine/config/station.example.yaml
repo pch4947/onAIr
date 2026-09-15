@@ -12,7 +12,8 @@ policy:
 
 pipeline:
   llm: dummy                  # 제공자 확정(확인 3) 전까지 더미 — M1에서 실 어댑터 추가
-  tts: dummy
+  tts: dummy                  # dummy(무음 wav) | edge(실제 한국어 발화 mp3, 인터넷 필요, pip install -e ".[tts]")
+  # tts_voice: ko-KR-SunHiNeural  # edge 보이스 (ko-KR-InJoonNeural = 남성)
   max_concurrent_generations: 2
   target_buffer_sec: 30
   safety_rules: config/safety_rules.yaml
