@@ -1,53 +1,51 @@
-// FEATURE: 04_Board_게시판 화면
+// 04_Board_게시판 화면
 
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Sidebar } from '@/app/Sidebar'
 import { NewPostModal } from '@/routes/board/NewPostModal'
 import { BOARD_POSTS } from '@/routes/board/mock'
 
 export function BoardPage() {
-  const navigate = useNavigate()
   const [isModalOpen, setIsModalOpen] = useState(false)
 
   return (
-    <div>
-      <aside>
-        <div>onAIr</div>
-        <nav>
-          <button type="button" onClick={() => navigate('/')}>
-            홈 · 방송 선택
-          </button>
-          <button type="button" onClick={() => navigate('/admin')}>
-            운영자 콘솔
-          </button>
-        </nav>
-      </aside>
+    <div className="flex min-h-screen">
+      <Sidebar active="board" />
 
-      <main>
-        <header>
-          <h1>게시판</h1>
-          <p>사연과 듣고 싶은 곡을 자유롭게 남겨보세요</p>
+      <main className="flex-1 bg-bg p-8">
+        <header className="mb-5 flex flex-col gap-1">
+          <h1 className="text-[22px] font-semibold text-text">게시판</h1>
+          <p className="text-[13px] text-text-muted">사연과 듣고 싶은 곡을 자유롭게 남겨보세요</p>
         </header>
 
-        <div>
+        <div className="mb-5 flex h-16 items-center justify-between rounded-md border border-border bg-surface p-5">
           <input
             type="text"
             placeholder="지금 떠오르는 이야기나 듣고 싶은 곡을 자유롭게 남겨보세요"
             readOnly
             onClick={() => setIsModalOpen(true)}
+            className="flex-1 bg-transparent text-[13px] text-text-muted placeholder:text-text-muted"
           />
-          <button type="button" onClick={() => setIsModalOpen(true)}>
+          <button
+            type="button"
+            onClick={() => setIsModalOpen(true)}
+            className="flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-4.5 py-2.5 text-xs font-semibold text-white"
+          >
             + 새 글 작성
           </button>
         </div>
 
-        <ul>
+        <ul className="flex flex-col gap-2.5">
           {BOARD_POSTS.map((post) => (
-            <li key={post.id}>
-              <p>{post.author}</p>
-              <p>{post.content}</p>
-              <span>{post.status}</span>
-              {post.hasReplay && <button type="button">▶ 다시보기</button>}
+            <li
+              key={post.id}
+              className="flex flex-col gap-2 rounded-md border border-[#e6e6e6] bg-surface px-4 py-3.5"
+            >
+              <p className="text-[15px] font-semibold text-text">{post.title}</p>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-text">{post.author}</span>
+                <span className="text-[11px] text-[#999]">· {post.timeAgo}</span>
+              </div>
             </li>
           ))}
         </ul>
