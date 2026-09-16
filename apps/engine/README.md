@@ -23,6 +23,59 @@ onair-engine --config config/station.example.yaml --max-segments 6 --demo-reques
 - 세그먼트 제출이 `SUBMIT {...}` JSON 라인으로 출력됩니다 (백엔드 계약 확정 전까지의 stdout 더미).
 - 생성된 오디오는 `var/audio/`, 계측 로그는 `var/engine_metrics.sqlite`에 쌓입니다.
 - `--max-segments` 없이 실행하면 설정된 방송 시간 동안 계속 돕니다 (Ctrl+C로 종료).
+- 생성된 대본은 `SCRIPT seg_xxx [코너] 대본...` 라인으로 함께 출력됩니다.
+- 요청 답변(request_reply)은 10번째 세그먼트 전후에 나오므로 요청 흐름을 보려면 `--max-segments 15` 이상을 주세요.
+
+### 더미 대본을 실제 음성으로 듣기
+
+더미 LLM은 코너별로 방송처럼 들리는 고정 대본을 반환합니다. `--tts edge`를 주면 Microsoft Edge 온라인 TTS(API 키 불필요, 인터넷 필요)가 대본을 한국어로 읽어 mp3로 저장합니다.
+
+```bash
+pip install -e ".[tts]"
+onair-engine --tts edge --max-segments 15 --demo-request "요즘 잠이 안 와요"
+```
+
+- 오디오: `var/audio/st_local_dev/seg_xxx.mp3` (ack는 `ack/ack_N.mp3`)
+- 보이스 변경: 설정 파일 `pipeline.tts_voice` (기본 `ko-KR-SunHiNeural`, 남성 `ko-KR-InJoonNeural`)
+- 제공자 확정(확인 3) 전 청취 테스트용 어댑터입니다. 비공식 엔드포인트이므로 운영에는 쓰지 않습니다.
+
+### Google Cloud TTS
+
+1. Google Cloud 콘솔에서 **Cloud Text-to-Speech API**를 사용 설정하고, API 키를 만들어 이 API로만 제한합니다.
+2. 키를 환경변수로 넣고 실행합니다 (키는 설정 파일·커밋에 넣지 않습니다).
+
+```powershell
+$env:GOOGLE_TTS_API_KEY = "발급받은 키"
+onair-engine --tts google --max-segments 15 --demo-request "요즘 잠이 안 와요"
+```
+
+- 기본 보이스는 `ko-KR-Chirp3-HD-Aoede`(여성)입니다. `pipeline.tts_voice`로 바꿉니다 (남성: `ko-KR-Chirp3-HD-Charon`).
+- 추가 의존성은 없습니다 (표준 라이브러리 REST 호출).
+- 다른 제공자(유료 모델, 로컬 오픈소스 TTS)로 옮길 때는 `pipeline/tts.py`에 `TtsClient` 프로토콜(`file_ext`, `cache_namespace`, `synthesize`)을 지키는 어댑터를 추가하고 `make_tts`에 등록하면 됩니다.
+
+### 오디오 파일 관리
+
+- 모든 TTS 출력은 `audio.CachedTts`를 거칩니다.
+  - **원자적 쓰기**: `.이름.랜덤.tmp.확장자`로 쓴 뒤 교체합니다. 백엔드는 완성된 파일만 봅니다.
+  - **캐시**: `pipeline.tts_cache_dir`(기본 `var/tts_cache`)에 텍스트 단위로 저장합니다. ack·filler처럼 반복되는 문장은 API를 다시 호출하지 않습니다.
+  - **길이 실측**: `duration_ms`는 파일에서 잰 값입니다 (mutagen).
+- 파일 정리 책임과 보존 기간은 [Redis 계약 문서](../../docs/ENGINE_REDIS_CONTRACT.md) 5.1절에 있습니다.
+
+### Redis 전송
+
+계약: [docs/ENGINE_REDIS_CONTRACT.md](../../docs/ENGINE_REDIS_CONTRACT.md)
+
+```powershell
+pip install -e ".[redis]"
+wsl sudo apt install -y redis-server   # 로컬 Redis (최초 1회)
+wsl redis-server --daemonize yes
+onair-engine --transport redis
+wsl redis-cli XRANGE engine:st_local_dev:out - + COUNT 5
+```
+
+- 세그먼트 제출과 요청 상태는 `engine:{station_id}:out`으로 나갑니다.
+- 백엔드가 `engine:{station_id}:in`에 넣은 `request.arrived`는 요청 큐로, `station.closed`는 방송 정지로 처리됩니다.
+- 테스트는 fakeredis를 쓰므로 Redis 서버 없이 `pytest`로 돌아갑니다.
 
 ## 테스트 / 린트
 

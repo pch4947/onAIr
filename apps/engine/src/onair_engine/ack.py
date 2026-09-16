@@ -30,7 +30,7 @@ class AckCache:
 
     async def prerender(self) -> None:
         for i, text in enumerate(ACK_TEMPLATES):
-            path = self._dir / f"ack_{i}.wav"
+            path = self._dir / f"ack_{i}{self._tts.file_ext}"
             duration_ms = await self._tts.synthesize(text, path)
             self._entries.append((to_audio_ref(self._root, path), duration_ms))
 

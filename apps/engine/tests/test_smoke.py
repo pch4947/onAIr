@@ -6,13 +6,14 @@ from onair_engine.catalog import Catalog
 from onair_engine.corners import build_corners
 from onair_engine.domain import (
     GenerationJob,
+    ListenerRequest,
     Material,
     SegmentKind,
     StationConfig,
     StationProfile,
 )
 from onair_engine.engine import EngineSettings, StationEngine
-from onair_engine.pipeline.llm import make_llm
+from onair_engine.pipeline.llm import DummyLlmClient, detect_corner, make_llm
 from onair_engine.pipeline.pipeline import GenerationPipeline
 from onair_engine.pipeline.safety import SafetyChecker
 from onair_engine.pipeline.tts import make_tts
@@ -62,6 +63,35 @@ def test_dummy_pipeline_produces_segment(tmp_path):
     assert sub.audio_ref.startswith("st_test/")
     assert "\\" not in sub.audio_ref
     assert (tmp_path / "audio" / sub.audio_ref).exists()
+
+
+def test_dummy_llm_writes_readable_script_per_corner():
+    corners = build_corners(catalog=Catalog(), rss=RssCollector())
+    request = ListenerRequest(request_id="req_t1", kind="story", body="요즘 잠이 안 와요",
+                              requester_ref="tester", received_at=0.0)
+    materials = {
+        "opening": Material(),
+        "briefing": Material(text="- 도서관 야간 개방 연장: 시험 기간 운영 (출처: 학교 공지)"),
+        "music_intro": Material(track_id="cat_dummy_001",
+                                extra={"title": "Midnight Study", "artist": "onAIr Ensemble",
+                                       "mood": "calm"}),
+        "request_reply": Material(request=request),
+        "filler": Material(),
+    }
+    llm = DummyLlmClient(delay_sec=0, seed=0)
+    safety = SafetyChecker(RULES)
+    scripts = {}
+    for corner_type, material in materials.items():
+        prompt = corners[corner_type].build_prompt(material, PROFILE)
+        assert detect_corner(prompt.user) == corner_type, "코너 프롬프트 문구와 더미 마커 불일치"
+        text = asyncio.run(llm.generate(prompt)).text
+        assert "{" not in text and safety.check_l2(text) is None
+        scripts[corner_type] = text
+
+    assert "테스트" in scripts["opening"]  # DJ 이름
+    assert "Midnight Study" in scripts["music_intro"]
+    assert "잠이 안 와요" in scripts["request_reply"]
+    assert "도서관 야간 개방 연장" in scripts["briefing"]
 
 
 def test_l0_blocks_contact_info():

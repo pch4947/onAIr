@@ -3,10 +3,12 @@ name = "onair-engine"
 version = "0.1.0"
 description = "onAIr 대본 엔진 — 편성 관리자, LLM/TTS 생성 파이프라인, 안전 계층"
 requires-python = ">=3.12"
-dependencies = ["PyYAML>=6.0"]
+dependencies = ["PyYAML>=6.0", "mutagen>=1.47"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = ["pytest>=8", "ruff>=0.6", "fakeredis>=2.26"]
+tts = ["edge-tts>=7.2"]  # pipeline.tts: edge (실제 발화 청취 테스트용). google은 추가 의존성 없음
+redis = ["redis>=5"]  # transport.kind: redis
 
 [project.scripts]
 onair-engine = "onair_engine.main:cli"

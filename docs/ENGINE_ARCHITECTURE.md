@@ -235,6 +235,8 @@ L_ack는 실험의 핵심 측정값인데, ack를 매번 LLM+TTS로 생성하면
 
 HTTP API 방식(백엔드 FastAPI에 POST)도 가능하나, 백엔드→엔진 방향의 이벤트 푸시가 어쨌든 필요하므로 채널을 Redis 하나로 통일하는 편이 단순하다. **1주차 계약 회의의 결정 사항.**
 
+> Redis 스트림·envelope·전달 보장·오디오 파일 규칙의 구체안은 [ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md)에 정리했다 (엔진 쪽 구현 완료, 백엔드 합의 전 초안).
+
 ---
 
 ## 7. 계측 (실험 데이터의 원천)

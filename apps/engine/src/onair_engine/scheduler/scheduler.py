@@ -5,6 +5,7 @@ LLM은 무엇을 말할지 결정하지 않는다. 여기서 칸을 정하고 LL
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 
 from ..ack import AckCache
@@ -27,6 +28,8 @@ from .policies.base import SchedulingPolicy
 from .running_order import RunningOrder
 
 _IDLE_SLEEP_SEC = 0.5
+
+logger = logging.getLogger(__name__)
 
 
 class Scheduler:
@@ -127,6 +130,10 @@ class Scheduler:
                 if req is not None:
                     await self._transition(req, RequestState.GENERATED)
                 await self._publish(sub)
+        except Exception:
+            # 생성 태스크는 아무도 await하지 않으므로 여기서 기록하지 않으면 실패가 사라진다
+            # (실 TTS API의 403·타임아웃 등). TODO(M2): 1회 재시도 후 filler 대체, 요청 상태 복구.
+            logger.exception("GENERATION_FAILED %s %s", job.job_id, job.corner_type)
         finally:
             self._inflight -= 1
 
