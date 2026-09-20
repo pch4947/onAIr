@@ -68,8 +68,6 @@ export const PLAYLIST: Track[] = [
   },
 ]
 
-export const SYNC_OFFSET_SEC = 0.3
-
 export const MY_REQUEST_STATUSES: RequestStatusItem[] = [
   { id: '1', text: '사연 · GENERATING', variant: 'generating', visibleToSelfOnly: false },
   { id: '2', text: '신청곡 · QUEUED', variant: 'queued', visibleToSelfOnly: false },
