@@ -1,20 +1,17 @@
 // 01_Listen_스트리밍 방송 화면
 
 import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Sidebar } from '@/app/Sidebar'
 import { usePlaybackController } from '@/player/usePlaybackController'
 import { useRealtimeConnection } from '@/realtime/useRealtimeConnection'
 import { useRealtimeStore } from '@/realtime/store'
+import { getBroadcastState } from '@/shared/api'
 import { ExperimentSurveyModal } from '@/routes/listen/ExperimentSurveyModal'
-import {
-  CHAT_MESSAGES,
-  MY_REQUEST_STATUSES,
-  PLAYLIST,
-  STATION_INFO,
-  SYNC_OFFSET_SEC,
-} from '@/routes/listen/mock'
+import { CHAT_MESSAGES, MY_REQUEST_STATUSES, PLAYLIST, STATION_INFO } from '@/routes/listen/mock'
 import type { RequestStatusVariant } from '@/routes/listen/mock'
 import type { ConnectionStatus } from '@/realtime/client'
+import type { StreamStatus } from '@/shared/types'
 
 const STATUS_VARIANT_CLASS: Record<RequestStatusVariant, string> = {
   generating: 'bg-status-generating',
@@ -30,6 +27,14 @@ const CONNECTION_STATUS_LABEL: Record<ConnectionStatus, string> = {
   disconnected: '연결 끊김',
 }
 
+const STREAM_STATUS_LABEL: Record<StreamStatus, string> = {
+  bootstrapping: '부팅 중',
+  ready: '준비됨',
+  planning: '편성 중',
+}
+
+const BROADCAST_STATE_POLL_INTERVAL_MS = 3000
+
 function formatTime(sec: number): string {
   const minutes = Math.floor(sec / 60)
   const seconds = Math.floor(sec % 60)
@@ -43,6 +48,11 @@ export function ListenPage() {
     usePlaybackController(PLAYLIST)
   useRealtimeConnection()
   const connectionStatus = useRealtimeStore((state) => state.connectionStatus)
+  const broadcastStateQuery = useQuery({
+    queryKey: ['broadcast-state'],
+    queryFn: getBroadcastState,
+    refetchInterval: BROADCAST_STATE_POLL_INTERVAL_MS,
+  })
 
   const handleSendChat = (event: React.FormEvent) => {
     event.preventDefault()
@@ -110,7 +120,11 @@ export function ListenPage() {
                 </span>
               </div>
               <p className="text-[11px] text-nav-inactive">
-                동기화 오차(E_sync): {SYNC_OFFSET_SEC}s
+                {broadcastStateQuery.isLoading
+                  ? '방송 상태 불러오는 중...'
+                  : broadcastStateQuery.isError || !broadcastStateQuery.data
+                    ? '방송 상태를 불러오지 못했습니다'
+                    : `방송 상태: ${STREAM_STATUS_LABEL[broadcastStateQuery.data.stream.status]} · 버퍼 ${broadcastStateQuery.data.stream.bufferSeconds}초`}
               </p>
             </div>
           </div>
