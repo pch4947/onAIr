@@ -3,6 +3,8 @@
 import { useState } from 'react'
 import { Sidebar } from '@/app/Sidebar'
 import { usePlaybackController } from '@/player/usePlaybackController'
+import { useRealtimeConnection } from '@/realtime/useRealtimeConnection'
+import { useRealtimeStore } from '@/realtime/store'
 import { ExperimentSurveyModal } from '@/routes/listen/ExperimentSurveyModal'
 import {
   CHAT_MESSAGES,
@@ -12,6 +14,7 @@ import {
   SYNC_OFFSET_SEC,
 } from '@/routes/listen/mock'
 import type { RequestStatusVariant } from '@/routes/listen/mock'
+import type { ConnectionStatus } from '@/realtime/client'
 
 const STATUS_VARIANT_CLASS: Record<RequestStatusVariant, string> = {
   generating: 'bg-status-generating',
@@ -19,6 +22,12 @@ const STATUS_VARIANT_CLASS: Record<RequestStatusVariant, string> = {
   played: 'bg-status-played',
   rejected: 'bg-status-rejected',
   muted: 'bg-status-muted',
+}
+
+const CONNECTION_STATUS_LABEL: Record<ConnectionStatus, string> = {
+  connecting: '연결 중',
+  connected: '연결됨',
+  disconnected: '연결 끊김',
 }
 
 function formatTime(sec: number): string {
@@ -32,6 +41,8 @@ export function ListenPage() {
   const [chatInput, setChatInput] = useState('')
   const { audioRef, currentTrack, isPlaying, positionSec, togglePlay } =
     usePlaybackController(PLAYLIST)
+  useRealtimeConnection()
+  const connectionStatus = useRealtimeStore((state) => state.connectionStatus)
 
   const handleSendChat = (event: React.FormEvent) => {
     event.preventDefault()
@@ -54,9 +65,10 @@ export function ListenPage() {
                 </span>
                 <span className="text-[13px] font-semibold text-white">{STATION_INFO.name}</span>
               </div>
-              <span className="text-[11px] text-nav-inactive">
-                👁 {STATION_INFO.viewerCount}명 시청 중
-              </span>
+              <div className="flex items-center gap-2 text-[11px] text-nav-inactive">
+                <span>{CONNECTION_STATUS_LABEL[connectionStatus]}</span>
+                <span>👁 {STATION_INFO.viewerCount}명 시청 중</span>
+              </div>
             </div>
 
             <button
