@@ -26,6 +26,7 @@ from onair_engine.pipeline.llm import (
     ClaudeLlmClient,
     GeminiLlmClient,
     LlmError,
+    OpenAiLlmClient,
     clean_script,
     make_llm,
 )
@@ -244,3 +245,72 @@ def test_failed_request_is_requeued_once_then_rejected(tmp_path):
     assert [s.kind for s in transport.segments].count(SegmentKind.ACK) == 1
     assert all(s.corner_type == "filler" for s in transport.segments
                if s.kind != SegmentKind.ACK), "장애 중에도 filler로 방송은 이어진다"
+
+
+def _openai_reply(content, finish_reason="stop", refusal=None):
+    return {"choices": [{"message": {"role": "assistant", "content": content,
+                                     "refusal": refusal},
+                         "finish_reason": finish_reason}]}
+
+
+def test_openai_compatible_server_gets_max_tokens_and_no_auth():
+    base, received, server = _serve(200, _openai_reply("오늘 밤도 함께해요."))
+    try:
+        client = OpenAiLlmClient("qwen3:8b", base_url=base + "/v1", temperature=0.7)
+        text = _call(client)
+    finally:
+        server.shutdown()
+
+    assert text == "오늘 밤도 함께해요."
+    req = received[0]
+    assert req["path"] == "/v1/chat/completions"
+    assert req["headers"]["Authorization"] is None  # Ollama 같은 호환 서버는 키 없이
+    assert req["json"]["messages"] == [{"role": "system", "content": PROMPT.system},
+                                       {"role": "user", "content": PROMPT.user}]
+    assert req["json"]["max_tokens"] == 400 and req["json"]["temperature"] == 0.7
+    assert "reasoning_effort" not in req["json"]
+
+
+def test_openai_official_uses_max_completion_tokens(monkeypatch):
+    monkeypatch.setattr("onair_engine.pipeline.llm.DEFAULT_OPENAI_BASE_URL", "http://x/v1")
+    client = OpenAiLlmClient("m", base_url="http://x/v1", api_key="k", reasoning_effort="low")
+    captured = {}
+
+    def fake_post(url, body, headers, timeout, provider):
+        captured.update(url=url, body=body, headers=headers)
+        return _openai_reply("안녕하세요.")
+
+    monkeypatch.setattr("onair_engine.pipeline.llm._post_json", fake_post)
+    assert _call(client) == "안녕하세요."
+    assert captured["headers"] == {"Authorization": "Bearer k"}
+    assert captured["body"]["max_completion_tokens"] == 400
+    assert "max_tokens" not in captured["body"] and "temperature" not in captured["body"]
+    assert captured["body"]["reasoning_effort"] == "low"
+
+
+def test_openai_refusal_and_filter_become_reject():
+    for reply in (_openai_reply(None, refusal="I can't help with that."),
+                  _openai_reply("", finish_reason="content_filter")):
+        base, _, server = _serve(200, reply)
+        try:
+            assert _call(OpenAiLlmClient("m", base_url=base)) == REJECT
+        finally:
+            server.shutdown()
+
+
+def test_openai_reasoning_exhausting_limit_is_an_error():
+    base, _, server = _serve(200, _openai_reply("", finish_reason="length"))
+    try:
+        with pytest.raises(LlmError, match="reasoning_effort"):
+            _call(OpenAiLlmClient("m", base_url=base))
+    finally:
+        server.shutdown()
+
+
+def test_openai_requires_model_and_official_key(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="모델 ID"):
+        make_llm("openai")
+    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+        make_llm("openai", model="some-model")
+    make_llm("openai", model="qwen3:8b", base_url="http://localhost:11434/v1")  # 키 없이 OK

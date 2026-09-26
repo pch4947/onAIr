@@ -1,4 +1,5 @@
-"""LLM 어댑터 — dummy(고정 대본), claude(Anthropic Messages API), gemini(Gemini API).
+"""LLM 어댑터 — dummy(고정 대본), claude(Anthropic Messages API), gemini(Gemini API),
+openai(Chat Completions 호환 — OpenAI, Qwen(DashScope), Ollama 등).
 
 제공자는 아직 비교 실측 중이다(확인 3). 그래서 둘 다 같은 조건으로 붙여 두고 설정으로 고른다.
 GoogleTtsClient와 같이 표준 라이브러리 REST만 쓰고, 블로킹 urlopen은 to_thread로 감싼다.
@@ -19,6 +20,7 @@ from ..domain import Prompt, Script
 
 DEFAULT_CLAUDE_MODEL = "claude-haiku-4-5"  # 짧은 멘트는 지연이 우선이다. 품질 비교는 llm_model로
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 REJECT = "REJECT"
 
 
@@ -250,11 +252,75 @@ class GeminiLlmClient:
         return Script(text=clean_script(text, truncated=reason == "MAX_TOKENS"))
 
 
-def make_llm(kind: str, *, model: str | None = None) -> LlmClient:
+class OpenAiLlmClient:
+    """Chat Completions 호환 API. base_url만 바꾸면 OpenAI 외 호환 서버에도 붙는다.
+
+    - OpenAI: 기본 base_url, OPENAI_API_KEY 필수
+    - Qwen(DashScope): https://dashscope-intl.aliyuncs.com/compatible-mode/v1, 키는 OPENAI_API_KEY로
+    - Ollama: http://localhost:11434/v1, 키 불필요
+    모델 ID는 기본값을 두지 않는다 — 제공자마다 다르고 자주 바뀐다.
+
+    추론 모델은 temperature 변경을 거부하고 출력 한도를 추론 토큰으로 쓴다. 그래서
+    temperature는 지정했을 때만 보내고, 지연을 줄이려면 reasoning_effort를 낮춘다.
+    """
+
+    def __init__(self, model: str | None, *, base_url: str = DEFAULT_OPENAI_BASE_URL,
+                 api_key: str | None = None, max_tokens: int = 400,
+                 temperature: float | None = None, reasoning_effort: str | None = None,
+                 timeout: float = 20.0):
+        if not model:  # 방송 도중이 아니라 기동 시점에 실패시킨다
+            raise RuntimeError("openai LLM은 모델 ID가 필요합니다 (--llm-model 또는 pipeline.llm_model)")
+        self._official = base_url.rstrip("/") == DEFAULT_OPENAI_BASE_URL
+        api_key = api_key or os.environ.get("OPENAI_API_KEY")
+        if self._official:
+            api_key = _require_key(api_key, "OPENAI_API_KEY", "openai")
+        self._api_key = api_key  # 호환 서버(Ollama 등)는 키 없이도 된다
+        self.model = model
+        self.max_tokens = max_tokens
+        self.temperature = temperature
+        self.reasoning_effort = reasoning_effort
+        self._endpoint = base_url.rstrip("/") + "/chat/completions"
+        self._timeout = timeout
+
+    async def generate(self, prompt: Prompt) -> Script:
+        body: dict = {
+            "model": self.model,
+            "messages": [{"role": "system", "content": prompt.system},
+                         {"role": "user", "content": prompt.user}],
+        }
+        # OpenAI 본가는 max_tokens를 폐기했고, 호환 서버들은 아직 max_tokens만 아는 경우가 많다
+        body["max_completion_tokens" if self._official else "max_tokens"] = self.max_tokens
+        if self.temperature is not None:
+            body["temperature"] = self.temperature
+        if self.reasoning_effort:
+            body["reasoning_effort"] = self.reasoning_effort
+        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
+        data = await asyncio.to_thread(
+            _post_json, self._endpoint, body, headers, self._timeout, "openai")
+        try:
+            choice = data["choices"][0]
+            message = choice["message"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise LlmError(f"openai 응답 형식 오류: {str(data)[:200]}") from exc
+        reason = choice.get("finish_reason")
+        if reason == "content_filter" or message.get("refusal"):
+            return Script(text=REJECT)  # 제공자 필터·모델 거부 = L1 REJECT와 같게 다룬다
+        text = message.get("content") or ""
+        if reason == "length" and not text.strip():
+            raise LlmError("출력 한도를 추론 토큰이 다 썼습니다 — "
+                           "reasoning_effort를 낮추거나 max_tokens를 늘리세요")
+        return Script(text=clean_script(text, truncated=reason == "length"))
+
+
+def make_llm(kind: str, *, model: str | None = None, base_url: str | None = None,
+             reasoning_effort: str | None = None) -> LlmClient:
     if kind == "dummy":
         return DummyLlmClient()
     if kind == "claude":
         return ClaudeLlmClient(model or DEFAULT_CLAUDE_MODEL)
     if kind == "gemini":
         return GeminiLlmClient(model or DEFAULT_GEMINI_MODEL)
+    if kind == "openai":
+        return OpenAiLlmClient(model, base_url=base_url or DEFAULT_OPENAI_BASE_URL,
+                               reasoning_effort=reasoning_effort)
     raise ValueError(f"unknown llm adapter: {kind}")

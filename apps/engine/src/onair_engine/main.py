@@ -39,6 +39,8 @@ def load_config(path: Path) -> tuple[StationConfig, EngineSettings]:
         safety_rules_path=Path(pipe.get("safety_rules", "config/safety_rules.yaml")),
         llm=pipe.get("llm", "dummy"),
         llm_model=pipe.get("llm_model"),
+        llm_base_url=pipe.get("llm_base_url"),
+        llm_reasoning_effort=pipe.get("llm_reasoning_effort"),
         tts=pipe.get("tts", "dummy"),
         tts_voice=pipe.get("tts_voice"),
         tts_cache_dir=Path(pipe["tts_cache_dir"]) if pipe.get("tts_cache_dir") else None,
@@ -55,10 +57,12 @@ def cli(argv: list[str] | None = None) -> None:
                         help="N개 제출 후 종료 (관통 테스트용)")
     parser.add_argument("--demo-request", action="append", default=[], metavar="TEXT",
                         help="기동 2초 후 주입할 가짜 청취자 요청 (반복 지정 가능)")
-    parser.add_argument("--llm", choices=["dummy", "claude", "gemini"], default=None,
+    parser.add_argument("--llm", choices=["dummy", "claude", "gemini", "openai"], default=None,
                         help="설정 파일의 pipeline.llm을 덮어쓴다")
     parser.add_argument("--llm-model", default=None, metavar="MODEL",
                         help="설정 파일의 pipeline.llm_model을 덮어쓴다")
+    parser.add_argument("--llm-base-url", default=None, metavar="URL",
+                        help="openai 호환 서버 주소 (Qwen DashScope, Ollama 등)")
     parser.add_argument("--tts", choices=["dummy", "google", "edge"], default=None,
                         help="설정 파일의 pipeline.tts를 덮어쓴다")
     parser.add_argument("--transport", choices=["stdout", "http", "redis"], default=None,
@@ -75,6 +79,8 @@ def cli(argv: list[str] | None = None) -> None:
         settings.llm = args.llm
     if args.llm_model:
         settings.llm_model = args.llm_model
+    if args.llm_base_url:
+        settings.llm_base_url = args.llm_base_url
     if args.tts:
         settings.tts = args.tts
     if args.transport:

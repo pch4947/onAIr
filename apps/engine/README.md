@@ -61,6 +61,20 @@ onair-engine --tts google --max-segments 15 --demo-request "요즘 잠이 안 �
 |---|---|---|
 | `claude` | `ANTHROPIC_API_KEY` | `claude-haiku-4-5` |
 | `gemini` | `GEMINI_API_KEY` | `gemini-2.5-flash` (thinking 끔) |
+| `openai` | `OPENAI_API_KEY` (호환 서버는 선택) | 없음 — `--llm-model` 필수 |
+
+`openai`는 Chat Completions 호환이라 `--llm-base-url`만 바꾸면 다른 서버에도 붙습니다.
+
+```powershell
+# OpenAI — 모델 ID는 OpenAI 콘솔의 값을 그대로
+onair-engine --llm openai --llm-model <모델 ID> --max-segments 6
+# Qwen (알리바바 DashScope) — 키는 OPENAI_API_KEY에 DashScope 키를 넣는다
+onair-engine --llm openai --llm-base-url https://dashscope-intl.aliyuncs.com/compatible-mode/v1 --llm-model <qwen 모델>
+# Ollama (로컬, 키 불필요)
+onair-engine --llm openai --llm-base-url http://localhost:11434/v1 --llm-model qwen3:8b
+```
+
+- 추론 모델은 출력 한도를 추론 토큰에 먼저 씁니다. 지연이 길거나 빈 응답 오류가 나면 `pipeline.llm_reasoning_effort: low`(또는 모델이 지원하는 더 낮은 값)로 줄입니다.
 
 ```powershell
 $env:ANTHROPIC_API_KEY = "발급받은 키"

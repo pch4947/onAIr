@@ -13,7 +13,10 @@ policy:
 pipeline:
   llm: dummy                  # dummy(고정 대본) | claude(ANTHROPIC_API_KEY 필요)
                               # | gemini(GEMINI_API_KEY 필요) — 제공자 비교 실측 중(확인 3)
-  # llm_model: claude-haiku-4-5  # claude 기본값. gemini 기본값: gemini-2.5-flash
+                              # | openai(Chat Completions 호환, OPENAI_API_KEY)
+  # llm_model: claude-haiku-4-5  # claude 기본값. gemini 기본값: gemini-2.5-flash. openai는 필수
+  # llm_base_url: https://dashscope-intl.aliyuncs.com/compatible-mode/v1  # openai 호환 서버
+  # llm_reasoning_effort: low    # openai 추론 모델의 추론량 — 낮을수록 빠르다
   tts: dummy                  # dummy(무음 wav) | google(Cloud TTS, GOOGLE_TTS_API_KEY 필요)
                               # | edge(청취 테스트용, pip install -e ".[tts]")
   # tts_voice: ko-KR-Chirp3-HD-Aoede  # google 기본값. 남성: ko-KR-Chirp3-HD-Charon
