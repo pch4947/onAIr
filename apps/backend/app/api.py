@@ -4,13 +4,44 @@ from datetime import datetime, timezone
 from math import floor
 from typing import Annotated
 from uuid import uuid4
+import asyncio
+import json
 
-from fastapi import APIRouter, Body, Request
+from fastapi import APIRouter, Body, Request, HTTPException
+from redis.exceptions import RedisError
 from pydantic import BaseModel, Field
 
 from .scheduler import decide_next_segment
 
 router = APIRouter(prefix="/api")
+
+
+@router.get("/broadcast/queue")
+async def broadcast_queue(request: Request):
+    """Development visibility: queued source audio, not published/playable HLS."""
+    prefix = request.app.state.engine_consumer.prefix
+    try:
+        async with asyncio.timeout(3):
+            ids = await request.app.state.redis.lrange(prefix + ":queue", 0, 99)
+            items = await request.app.state.redis.hmget(prefix + ":segments", ids) if ids else []
+            count = await request.app.state.redis.llen(prefix + ":queue")
+    except (RedisError, TimeoutError):
+        raise HTTPException(503, "Redis unavailable") from None
+    return {"station_id": request.app.state.settings.station_id, "count": count,
+            "segments": [json.loads(item) for item in items if item]}
+
+
+@router.get("/requests/{request_id}/state")
+async def engine_request_state(request_id: str, request: Request):
+    try:
+        async with asyncio.timeout(3):
+            raw = await request.app.state.redis.hget(
+                request.app.state.engine_consumer.prefix + ":request-states", request_id)
+    except (RedisError, TimeoutError):
+        raise HTTPException(503, "Redis unavailable") from None
+    if raw is None:
+        raise HTTPException(404, "Request state not received")
+    return json.loads(raw)
 Seconds = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 PositiveSeconds = Annotated[float, Field(ge=1, allow_inf_nan=False)]
 
@@ -48,7 +79,14 @@ class BroadcastState:
 
 @router.get("/stream/state")
 async def stream_state(request: Request):
-    return request.app.state.broadcast.snapshot()
+    result = request.app.state.broadcast.snapshot()
+    hls = request.app.state.hls
+    if request.app.state.settings.hls_enabled:
+        result["stream"] = {**result["stream"], "status": "ready" if hls.ready else "bootstrapping",
+                            "currentSegment": None, "updatedAt": timestamp(),
+                            "hlsUrl": f"/hls/{request.app.state.settings.station_id}/index.m3u8",
+                            "error": hls.error}
+    return result
 
 
 @router.get("/requests")

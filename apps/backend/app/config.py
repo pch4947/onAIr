@@ -2,6 +2,7 @@
 
 import os
 import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,6 +15,12 @@ class Settings:
     port: int
     buffer_target_seconds: float = 45
     response_window_seconds: float = 90
+    redis_url: str = "redis://127.0.0.1:6379/0"
+    hls_enabled: bool = False
+    hls_dir: Path = Path(__file__).resolve().parents[1] / "var" / "hls"
+    ffmpeg: str = "ffmpeg"
+    station_id: str = "st_local_dev"
+    audio_dir: Path = Path(__file__).resolve().parents[2] / "engine" / "var" / "audio"
 
 
 def load_settings() -> Settings:
@@ -27,6 +34,17 @@ def load_settings() -> Settings:
             raise ValueError(f"{name} must be finite and at least 1")
         return value
 
+    station_id = os.environ.get("ONAIR_STATION_ID", "st_local_dev")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", station_id):
+        raise ValueError("ONAIR_STATION_ID is invalid")
+    audio_dir = Path(os.environ.get("ONAIR_AUDIO_DIR", str(Settings.audio_dir))).expanduser()
+    if not audio_dir.is_absolute():
+        raise ValueError("ONAIR_AUDIO_DIR must be an absolute path")
     return Settings(host=os.environ.get("HOST", "127.0.0.1"), port=port,
                     buffer_target_seconds=positive_seconds("STREAM_BUFFER_TARGET_SECONDS", "45"),
-                    response_window_seconds=positive_seconds("REQUEST_RESPONSE_WINDOW_SECONDS", "90"))
+                    response_window_seconds=positive_seconds("REQUEST_RESPONSE_WINDOW_SECONDS", "90"),
+                    redis_url=os.environ.get("ONAIR_REDIS_URL") or os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0"),
+                    station_id=station_id, audio_dir=audio_dir.resolve(),
+                    hls_enabled=os.environ.get("ONAIR_HLS_ENABLED", "1") == "1",
+                    hls_dir=Path(os.environ.get("ONAIR_HLS_DIR", str(Settings.hls_dir))).resolve(),
+                    ffmpeg=os.environ.get("ONAIR_FFMPEG", "ffmpeg"))

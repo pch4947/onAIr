@@ -3,12 +3,12 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Sidebar } from '@/app/Sidebar'
-import { usePlaybackController } from '@/player/usePlaybackController'
+import { useLivePlayback } from '@/player/useLivePlayback'
 import { useRealtimeConnection } from '@/realtime/useRealtimeConnection'
 import { useRealtimeStore } from '@/realtime/store'
 import { getBroadcastState } from '@/shared/api'
 import { ExperimentSurveyModal } from '@/routes/listen/ExperimentSurveyModal'
-import { CHAT_MESSAGES, MY_REQUEST_STATUSES, PLAYLIST, STATION_INFO } from '@/routes/listen/mock'
+import { CHAT_MESSAGES, MY_REQUEST_STATUSES, STATION_INFO } from '@/routes/listen/mock'
 import type { RequestStatusVariant } from '@/routes/listen/mock'
 import type { ConnectionStatus } from '@/realtime/client'
 import type { StreamStatus } from '@/shared/types'
@@ -35,17 +35,9 @@ const STREAM_STATUS_LABEL: Record<StreamStatus, string> = {
 
 const BROADCAST_STATE_POLL_INTERVAL_MS = 3000
 
-function formatTime(sec: number): string {
-  const minutes = Math.floor(sec / 60)
-  const seconds = Math.floor(sec % 60)
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`
-}
-
 export function ListenPage() {
   const [isSurveyOpen, setIsSurveyOpen] = useState(false)
   const [chatInput, setChatInput] = useState('')
-  const { audioRef, currentTrack, isPlaying, positionSec, togglePlay } =
-    usePlaybackController(PLAYLIST)
   useRealtimeConnection()
   const connectionStatus = useRealtimeStore((state) => state.connectionStatus)
   const broadcastStateQuery = useQuery({
@@ -54,12 +46,17 @@ export function ListenPage() {
     refetchInterval: BROADCAST_STATE_POLL_INTERVAL_MS,
   })
 
+  const stream = broadcastStateQuery.data?.stream
+  const apiBase = import.meta.env.VITE_API_BASE_URL || window.location.origin
+  const hlsPath = import.meta.env.VITE_HLS_URL || stream?.hlsUrl
+  const hlsUrl = stream?.status === 'ready' && hlsPath ? new URL(hlsPath, apiBase).href : null
+  const { audioRef, isPlaying, error: playbackError, togglePlay } = useLivePlayback(hlsUrl)
+
   const handleSendChat = (event: React.FormEvent) => {
     event.preventDefault()
     setChatInput('')
   }
 
-  const progressPercent = Math.min(100, (positionSec / currentTrack.durationSec) * 100)
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -95,16 +92,19 @@ export function ListenPage() {
             </div>
 
             <audio ref={audioRef} />
+            {playbackError && <p role="alert" className="absolute bottom-36 left-4 text-sm text-red-300">{playbackError}</p>}
 
             <div className="absolute inset-x-0 bottom-0 flex flex-col gap-1.5 bg-black/35 px-4 py-3.5">
-              <p className="text-[11px] text-nav-inactive">코너: {currentTrack.cornerName}</p>
+              <p className="text-[11px] text-nav-inactive">공유 라이브 라디오</p>
               <p className="text-base font-semibold text-white">
-                지금 재생 중 — {currentTrack.title} · {currentTrack.artist}
+                {isPlaying ? '라이브 방송 청취 중' : hlsUrl ? '재생 버튼을 눌러 방송에 참여하세요' : '방송 준비 중…'}
               </p>
               <div className="flex items-center gap-3">
                 <button
                   type="button"
                   onClick={togglePlay}
+                  disabled={!hlsUrl}
+                  aria-label={isPlaying ? "방송 일시정지" : "방송 재생"}
                   className="flex size-6.5 shrink-0 items-center justify-center rounded-full bg-[#e6e6e6] text-[10px] text-text"
                 >
                   {isPlaying ? '⏸' : '▶'}
@@ -112,11 +112,11 @@ export function ListenPage() {
                 <div className="h-[5px] flex-1 rounded-full bg-[#737380]">
                   <div
                     className="h-full rounded-full bg-primary"
-                    style={{ width: `${progressPercent}%` }}
+                    style={{ width: isPlaying ? '100%' : '0%' }}
                   />
                 </div>
                 <span className="shrink-0 text-[11px] text-nav-inactive">
-                  {formatTime(positionSec)} / {formatTime(currentTrack.durationSec)}
+                  LIVE
                 </span>
               </div>
               <p className="text-[11px] text-nav-inactive">
@@ -124,7 +124,7 @@ export function ListenPage() {
                   ? '방송 상태 불러오는 중...'
                   : broadcastStateQuery.isError || !broadcastStateQuery.data
                     ? '방송 상태를 불러오지 못했습니다'
-                    : `방송 상태: ${STREAM_STATUS_LABEL[broadcastStateQuery.data.stream.status]} · 버퍼 ${broadcastStateQuery.data.stream.bufferSeconds}초`}
+                    : `방송 상태: ${STREAM_STATUS_LABEL[broadcastStateQuery.data.stream.status]}`}
               </p>
             </div>
           </div>

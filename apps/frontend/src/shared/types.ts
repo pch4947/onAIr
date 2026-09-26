@@ -5,6 +5,8 @@ export interface StreamInfo {
   bufferSeconds: number
   currentSegment: unknown | null
   updatedAt: string
+  hlsUrl?: string
+  error?: string | null
 }
 
 export interface BroadcastStateResponse {
