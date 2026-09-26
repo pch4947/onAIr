@@ -11,7 +11,9 @@ policy:
   name: naive_fifo            # 정책 A/B/C는 기획서 8장 확정 후 추가 (설계 문서 4.2)
 
 pipeline:
-  llm: dummy                  # 제공자 확정(확인 3) 전까지 더미 — M1에서 실 어댑터 추가
+  llm: dummy                  # dummy(고정 대본) | claude(ANTHROPIC_API_KEY 필요)
+                              # | gemini(GEMINI_API_KEY 필요) — 제공자 비교 실측 중(확인 3)
+  # llm_model: claude-haiku-4-5  # claude 기본값. gemini 기본값: gemini-2.5-flash
   tts: dummy                  # dummy(무음 wav) | google(Cloud TTS, GOOGLE_TTS_API_KEY 필요)
                               # | edge(청취 테스트용, pip install -e ".[tts]")
   # tts_voice: ko-KR-Chirp3-HD-Aoede  # google 기본값. 남성: ko-KR-Chirp3-HD-Charon
