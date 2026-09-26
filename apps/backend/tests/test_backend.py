@@ -24,6 +24,8 @@ class BackendTests(unittest.TestCase):
         cls.server = subprocess.Popen(
             [sys.executable, "-m", "app"], cwd=Path(__file__).resolve().parents[1],
             env=dict(os.environ, HOST="127.0.0.1", PORT=str(port),
+                     ONAIR_STATION_ID="st_api_test", ONAIR_HLS_ENABLED="0",
+                     ONAIR_REDIS_URL="redis://127.0.0.1:1/0",
                      STREAM_BUFFER_TARGET_SECONDS="45", REQUEST_RESPONSE_WINDOW_SECONDS="90"),
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         cls.addClassCleanup(cls.stop_server)
@@ -87,7 +89,8 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(response.status, 200)
             self.assertEqual(response.headers["Access-Control-Allow-Origin"], "*")
         self.assertEqual(set(self.call("/openapi.json")[1]["paths"]),
-                         {"/health", "/api/requests", "/api/stream/state", "/api/scheduler/tick"})
+                         {"/health", "/health/redis", "/api/requests", "/api/stream/state", "/api/scheduler/tick",
+                          "/api/broadcast/queue", "/api/requests/{request_id}/state", "/hls/{station_id}/{filename}"})
 
     def test_urgent_request_and_unsafe_buffer(self):
         args = dict(buffer_seconds=40, estimated_generation_seconds=30,
