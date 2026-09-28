@@ -78,6 +78,15 @@ export function ListenPage() {
               </div>
             </div>
 
+            {stream?.error && (
+              <div
+                role="alert"
+                className="absolute inset-x-3.5 top-14 rounded-md bg-danger/90 px-3.5 py-2 text-xs font-semibold text-white"
+              >
+                ⚠ 방송 송출 문제: {stream.error}
+              </div>
+            )}
+
             <button
               type="button"
               className="absolute right-3.5 top-[60px] flex size-8 items-center justify-center rounded-2xl bg-black/45 text-[15px] text-white"
