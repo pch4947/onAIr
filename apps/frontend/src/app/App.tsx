@@ -4,6 +4,8 @@ import { ListenPage } from '@/routes/listen/ListenPage'
 import { AdminPage } from '@/routes/admin/AdminPage'
 import { BoardPage } from '@/routes/board/BoardPage'
 import { MyPagePage } from '@/routes/mypage/MyPagePage'
+import { LoginPage } from '@/routes/auth/LoginPage'
+import { SignupPage } from '@/routes/auth/SignupPage'
 
 export function App() {
   return (
@@ -14,6 +16,8 @@ export function App() {
         <Route path="/admin" element={<AdminPage />} />
         <Route path="/board" element={<BoardPage />} />
         <Route path="/mypage" element={<MyPagePage />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/signup" element={<SignupPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

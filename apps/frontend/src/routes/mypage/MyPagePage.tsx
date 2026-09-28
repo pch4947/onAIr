@@ -1,6 +1,7 @@
 // 05_MyPage_개인 페이지
 
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Sidebar } from '@/app/Sidebar'
 import {
   MY_BOARD_POSTS,
@@ -40,6 +41,7 @@ function ReplayList({ items, thumbnailClassName }: { items: ReplayItem[]; thumbn
 }
 
 export function MyPagePage() {
+  const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState<MyPageTab>('notifications')
   const activeTabConfig = MYPAGE_TABS.find((tab) => tab.id === activeTab) ?? MYPAGE_TABS[0]
 
@@ -48,9 +50,18 @@ export function MyPagePage() {
       <Sidebar />
 
       <main className="flex-1 bg-surface p-8">
-        <header className="mb-6 flex flex-col gap-1">
-          <h1 className="text-2xl font-semibold text-[#1a1a1f]">개인 페이지</h1>
-          <p className="text-[13px] text-text-muted">{activeTabConfig.subtitle}</p>
+        <header className="mb-6 flex items-start justify-between">
+          <div className="flex flex-col gap-1">
+            <h1 className="text-2xl font-semibold text-[#1a1a1f]">개인 페이지</h1>
+            <p className="text-[13px] text-text-muted">{activeTabConfig.subtitle}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => navigate('/login')}
+            className="rounded-md border border-field-border px-3.5 py-2 text-xs font-semibold text-text-muted"
+          >
+            로그아웃
+          </button>
         </header>
 
         <nav className="mb-6 flex gap-7 text-sm">
