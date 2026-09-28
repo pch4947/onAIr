@@ -9,9 +9,9 @@ export function AuthBrandPanel() {
       </div>
 
       <h1 className="text-[28px] font-bold leading-snug text-white">
-        AI DJ와 함께 만드는
+        내 취향의 방송을 열고,
         <br />
-        실시간 라이브 라디오
+        같은 취향인 사람들과 함께
       </h1>
 
       <ul className="flex flex-col gap-3">

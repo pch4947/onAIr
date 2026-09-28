@@ -4,9 +4,9 @@ export interface AuthFeature {
 }
 
 export const AUTH_FEATURES: AuthFeature[] = [
-  { icon: '🎙', text: '24시간 끊김 없는 AI DJ 방송' },
-  { icon: '💬', text: '내 사연과 신청곡이 실시간으로 반영' },
-  { icon: '🔖', text: '놓친 방송은 다시듣기로 언제든지' },
+  { icon: '🎙', text: '진행 부담 없이 AI DJ가 방송을 이어가요' },
+  { icon: '💬', text: '사연과 요청이 실시간으로 방송에 반영돼요' },
+  { icon: '👥', text: '같은 방송을 듣는 사람들과 취향을 나눠요' },
 ]
 
 export type SocialProvider = 'naver' | 'kakao' | 'google'
