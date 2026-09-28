@@ -15,10 +15,18 @@ L1_GUARD = (
 )
 
 
+# 출력은 그대로 TTS에 들어가 송출된다 — 읽을 수 없는 표기는 방송 사고다
+SPOKEN_RULES = (
+    "출력은 그대로 음성 합성되어 송출된다. 소리 내어 읽을 문장만 쓰고, "
+    "마크다운·이모지·괄호 속 지문(음악, 웃음 등)·화자 표기·따옴표로 감싸기를 쓰지 않는다. "
+    "영어 약어와 숫자는 한국어로 자연스럽게 읽히게 쓴다."
+)
+
+
 def system_prompt(profile: StationProfile) -> str:
     return (
         f"당신은 라디오 스테이션 [{profile.concept}]의 DJ {profile.dj_name}다. "
-        f"말투는 {profile.tone}. 대본 텍스트만 출력한다. {L1_GUARD}"
+        f"말투는 {profile.tone}. 대본 텍스트만 출력한다. {SPOKEN_RULES} {L1_GUARD}"
     )
 
 
