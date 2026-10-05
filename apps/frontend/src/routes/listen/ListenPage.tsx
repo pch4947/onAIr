@@ -1,15 +1,15 @@
 // 01_Listen_스트리밍 방송 화면
 
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { Sidebar } from '@/app/Sidebar'
 import { useLivePlayback } from '@/player/useLivePlayback'
 import { useRealtimeConnection } from '@/realtime/useRealtimeConnection'
 import { useRealtimeStore } from '@/realtime/store'
-import { getBroadcastState } from '@/shared/api'
+import { getBroadcastState, submitRequest } from '@/shared/api'
 import { ExperimentSurveyModal } from '@/routes/listen/ExperimentSurveyModal'
 import { CHAT_MESSAGES, MY_REQUEST_STATUSES, STATION_INFO } from '@/routes/listen/mock'
-import type { RequestStatusVariant } from '@/routes/listen/mock'
+import type { ChatMessage, RequestStatusVariant } from '@/routes/listen/mock'
 import type { ConnectionStatus } from '@/realtime/client'
 import type { StreamStatus } from '@/shared/types'
 
@@ -38,6 +38,7 @@ const BROADCAST_STATE_POLL_INTERVAL_MS = 3000
 export function ListenPage() {
   const [isSurveyOpen, setIsSurveyOpen] = useState(false)
   const [chatInput, setChatInput] = useState('')
+  const [sentMessages, setSentMessages] = useState<ChatMessage[]>([])
   useRealtimeConnection()
   const connectionStatus = useRealtimeStore((state) => state.connectionStatus)
   const broadcastStateQuery = useQuery({
@@ -51,9 +52,18 @@ export function ListenPage() {
   const hlsPath = import.meta.env.VITE_HLS_URL || stream?.hlsUrl
   const hlsUrl = stream?.status === 'ready' && hlsPath ? new URL(hlsPath, apiBase).href : null
   const { audioRef, isPlaying, error: playbackError, togglePlay } = useLivePlayback(hlsUrl)
+  const submitRequestMutation = useMutation({
+    mutationFn: submitRequest,
+    onSuccess: (_, prompt) => {
+      setSentMessages((prev) => [...prev, { id: crypto.randomUUID(), author: '나', text: prompt }])
+    },
+  })
 
   const handleSendChat = (event: React.FormEvent) => {
     event.preventDefault()
+    const trimmed = chatInput.trim()
+    if (!trimmed) return
+    submitRequestMutation.mutate(trimmed)
     setChatInput('')
   }
 
@@ -157,12 +167,21 @@ export function ListenPage() {
         <section className="flex h-full w-[360px] shrink-0 flex-col gap-3 rounded-md border border-border bg-surface p-4">
           <p className="text-sm font-semibold text-text">채팅 · 사연</p>
           <ul className="flex flex-1 flex-col gap-2.5 overflow-y-auto rounded-md bg-field-bg p-3 text-[11px] text-text">
-            {CHAT_MESSAGES.map((message) => (
+            {[...CHAT_MESSAGES, ...sentMessages].map((message) => (
               <li key={message.id}>
                 {message.author}: {message.text}
               </li>
             ))}
           </ul>
+          {submitRequestMutation.isPending && (
+            <p className="text-[11px] text-text-muted">전송 중...</p>
+          )}
+          {submitRequestMutation.isError && (
+            <p className="text-[11px] text-danger">전송에 실패했어요, 다시 시도해주세요</p>
+          )}
+          {submitRequestMutation.isSuccess && (
+            <p className="text-[11px] text-status-played">사연이 접수됐어요</p>
+          )}
           <form onSubmit={handleSendChat} className="flex items-center gap-2">
             <input
               type="text"
