@@ -17,6 +17,7 @@ import urllib.request
 from typing import Protocol
 
 from ..domain import Prompt, Script
+from ..prompt_data import STORY
 
 DEFAULT_CLAUDE_MODEL = "claude-haiku-4-5"  # 짧은 멘트는 지연이 우선이다. 품질 비교는 llm_model로
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
@@ -66,20 +67,23 @@ _CORNER_MARKERS = [
     ("오프닝", "opening"),
     ("브리핑", "briefing"),
     ("곡을 소개", "music_intro"),
-    ("사연:", "request_reply"),
+    ("사연에 답", "request_reply"),
     ("브릿지", "filler"),
 ]
 
 _PROFILE_RE = re.compile(r"\[(?P<concept>.+?)\]의 DJ (?P<dj>.+?)다\.")
 _TRACK_RE = re.compile(r"곡: (?P<title>.+?) — (?P<artist>.+?) \(무드: (?P<mood>.+?)\)")
-_STORY_RE = re.compile(r"사연: (?P<story>.+)", re.DOTALL)
+_STORY_RE = re.compile(rf'<data label="{STORY}">\n(?P<story>.*?)\n</data>', re.DOTALL)
+_DATA_RE = re.compile(r'<data label="[^"]*">\n.*?\n</data>', re.DOTALL)
 _HEADLINE_RE = re.compile(r"^- (?P<headline>.+?): ", re.MULTILINE)
 
 _MOOD_KO = {"calm": "차분한", "mellow": "포근한", "hopeful": "희망찬"}
 
 
 def detect_corner(user_prompt: str) -> str | None:
-    return next((corner for marker, corner in _CORNER_MARKERS if marker in user_prompt), None)
+    # 데이터 블록은 빼고 지시문만 본다 — "오프닝 멘트 해줘" 같은 사연으로 코너를 오판하지 않게
+    instructions = _DATA_RE.sub("", user_prompt)
+    return next((corner for marker, corner in _CORNER_MARKERS if marker in instructions), None)
 
 
 def _slots(prompt: Prompt) -> dict[str, str]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..domain import Material, Prompt, ScheduleContext, StationProfile
+from ..prompt_data import SOURCES, data_block
 from ..sources.rss import RssCollector
 from .base import system_prompt
 
@@ -26,6 +27,8 @@ class BriefingCorner:
             system=system_prompt(profile),
             user=(
                 "다음 수집 소재만 근거로 짧은 브리핑 멘트를 작성하라. "
-                "소재에 없는 사실은 언급하지 않고, 출처를 밝힌다.\n" + material.text
+                "소재에 없는 사실은 언급하지 않고, 출처를 밝힌다.\n"
+                # 피드 제목·요약은 외부 텍스트다 — 사연과 같이 데이터로 넣는다
+                + data_block(SOURCES, material.text)
             ),
         )

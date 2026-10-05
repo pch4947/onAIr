@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import ClassVar, Protocol
 
 from ..domain import Material, Prompt, ScheduleContext, StationProfile
+from ..prompt_data import DATA_RULES
 
 # L1 생성단 안전 지시 — 별도 LLM 호출 없이 대본 생성 프롬프트에 내장한다 (설계 문서 4.6)
 L1_GUARD = (
@@ -26,7 +27,7 @@ SPOKEN_RULES = (
 def system_prompt(profile: StationProfile) -> str:
     return (
         f"당신은 라디오 스테이션 [{profile.concept}]의 DJ {profile.dj_name}다. "
-        f"말투는 {profile.tone}. 대본 텍스트만 출력한다. {SPOKEN_RULES} {L1_GUARD}"
+        f"말투는 {profile.tone}. 대본 텍스트만 출력한다. {SPOKEN_RULES} {L1_GUARD} {DATA_RULES}"
     )
 
 

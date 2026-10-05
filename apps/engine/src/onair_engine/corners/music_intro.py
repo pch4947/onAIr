@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ..catalog import Catalog
 from ..domain import Material, Prompt, ScheduleContext, StationProfile
+from ..prompt_data import TRACK, data_block
 from .base import system_prompt
 
 
@@ -28,7 +29,8 @@ class MusicIntroCorner:
         return Prompt(
             system=system_prompt(profile),
             user=(
-                "다음 곡을 소개하는 멘트를 2문장 이내로 작성하라. "
-                f"곡: {info['title']} — {info['artist']} (무드: {info['mood']})"
+                "다음 곡을 소개하는 멘트를 2문장 이내로 작성하라.\n"
+                # 곡 제목·아티스트도 외부 텍스트가 될 수 있다 (YouTube 송출, F-34)
+                + data_block(TRACK, f"곡: {info['title']} — {info['artist']} (무드: {info['mood']})")
             ),
         )
