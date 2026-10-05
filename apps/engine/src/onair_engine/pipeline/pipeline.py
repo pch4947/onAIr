@@ -24,6 +24,7 @@ from ..domain import (
     new_id,
     to_audio_ref,
 )
+from ..prompt_data import RECENT, data_block
 from ..telemetry import Telemetry
 from .llm import REJECT, DummyLlmClient, LlmClient
 from .safety import SafetyChecker
@@ -151,11 +152,12 @@ class GenerationPipeline:
     def _with_context(self, prompt: Prompt) -> Prompt:
         if not self._recent:
             return prompt
-        # user가 아니라 system에 붙인다 — user는 코너 지시와 소재만 담는다
+        # user가 아니라 system에 붙인다 — user는 코너 지시와 소재만 담는다.
+        # 직전 대본은 사연을 인용할 수 있으므로 데이터 블록으로 넣는다 — 지연된 프롬프트 인젝션 대비
         recent = "\n".join(f"- {text}" for text in self._recent)
         return Prompt(
             system=(f"{prompt.system}\n\n직전에 송출한 멘트다. 흐름은 이어가되 같은 인사·표현을 "
-                    f"반복하지 않는다.\n{recent}"),
+                    f"반복하지 않는다.\n{data_block(RECENT, recent)}"),
             user=prompt.user,
         )
 
