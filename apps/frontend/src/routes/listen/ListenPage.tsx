@@ -8,6 +8,7 @@ import { useRealtimeConnection } from '@/realtime/useRealtimeConnection'
 import { useRealtimeStore } from '@/realtime/store'
 import { getBroadcastState, submitRequest } from '@/shared/api'
 import { ExperimentSurveyModal } from '@/routes/listen/ExperimentSurveyModal'
+import { SongRequestModal } from '@/routes/listen/SongRequestModal'
 import { CHAT_MESSAGES, MY_REQUEST_STATUSES, STATION_INFO } from '@/routes/listen/mock'
 import type { ChatMessage, RequestStatusVariant } from '@/routes/listen/mock'
 import type { ConnectionStatus } from '@/realtime/client'
@@ -37,6 +38,7 @@ const BROADCAST_STATE_POLL_INTERVAL_MS = 3000
 
 export function ListenPage() {
   const [isSurveyOpen, setIsSurveyOpen] = useState(false)
+  const [isSongRequestOpen, setIsSongRequestOpen] = useState(false)
   const [chatInput, setChatInput] = useState('')
   const [sentMessages, setSentMessages] = useState<ChatMessage[]>([])
   useRealtimeConnection()
@@ -165,7 +167,6 @@ export function ListenPage() {
         </section>
 
         <section className="flex h-full w-[360px] shrink-0 flex-col gap-3 rounded-md border border-border bg-surface p-4">
-          <p className="text-sm font-semibold text-text">채팅 · 사연</p>
           <ul className="flex flex-1 flex-col gap-2.5 overflow-y-auto rounded-md bg-field-bg p-3 text-[11px] text-text">
             {[...CHAT_MESSAGES, ...sentMessages].map((message) => (
               <li key={message.id}>
@@ -197,6 +198,8 @@ export function ListenPage() {
             </button>
             <button
               type="button"
+              onClick={() => setIsSongRequestOpen(true)}
+              aria-label="신청곡"
               className="flex size-9 shrink-0 items-center justify-center rounded-full bg-text-muted text-white"
             >
               🎙
@@ -214,6 +217,14 @@ export function ListenPage() {
       </button>
 
       {isSurveyOpen && <ExperimentSurveyModal onClose={() => setIsSurveyOpen(false)} />}
+      {isSongRequestOpen && (
+        <SongRequestModal
+          onClose={() => setIsSongRequestOpen(false)}
+          onSubmitted={(text) =>
+            setSentMessages((prev) => [...prev, { id: crypto.randomUUID(), author: '나', text }])
+          }
+        />
+      )}
     </div>
   )
 }
