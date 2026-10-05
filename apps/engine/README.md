@@ -74,7 +74,9 @@ onair-engine --llm openai --llm-base-url https://dashscope-intl.aliyuncs.com/com
 onair-engine --llm openai --llm-base-url http://localhost:11434/v1 --llm-model qwen3:8b
 ```
 
-- 추론 모델은 출력 한도를 추론 토큰에 먼저 씁니다. 지연이 길거나 빈 응답 오류가 나면 `pipeline.llm_reasoning_effort: low`(또는 모델이 지원하는 더 낮은 값)로 줄입니다.
+- 추론 모델은 출력 한도를 추론 토큰에 먼저 씁니다. 지연이 길거나 빈 응답 오류가 나면 `--llm-reasoning-effort low`(설정 파일은 `pipeline.llm_reasoning_effort`)로 줄입니다.
+- 쓸 수 있는 모델 ID는 제공자마다 다르고 자주 바뀝니다. 호환 서버는 `GET {base_url}/models`로 목록을 확인할 수 있습니다.
+- LLM API 연동 테스트 (2026-10-05): `openai` 어댑터로 코너 4종과 데모 요청 2건을 실제 LLM으로 생성해 Google TTS까지 확인했다.
 
 ```powershell
 $env:ANTHROPIC_API_KEY = "발급받은 키"

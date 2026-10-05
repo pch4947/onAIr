@@ -63,6 +63,8 @@ def cli(argv: list[str] | None = None) -> None:
                         help="설정 파일의 pipeline.llm_model을 덮어쓴다")
     parser.add_argument("--llm-base-url", default=None, metavar="URL",
                         help="openai 호환 서버 주소 (Qwen DashScope, Ollama 등)")
+    parser.add_argument("--llm-reasoning-effort", default=None, metavar="EFFORT",
+                        help="설정 파일의 pipeline.llm_reasoning_effort를 덮어쓴다 (추론 모델용, 예: low)")
     parser.add_argument("--tts", choices=["dummy", "google", "edge"], default=None,
                         help="설정 파일의 pipeline.tts를 덮어쓴다")
     parser.add_argument("--transport", choices=["stdout", "http", "redis"], default=None,
@@ -81,6 +83,8 @@ def cli(argv: list[str] | None = None) -> None:
         settings.llm_model = args.llm_model
     if args.llm_base_url:
         settings.llm_base_url = args.llm_base_url
+    if args.llm_reasoning_effort:
+        settings.llm_reasoning_effort = args.llm_reasoning_effort
     if args.tts:
         settings.tts = args.tts
     if args.transport:
