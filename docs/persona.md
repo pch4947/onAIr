@@ -11,6 +11,9 @@
 | 항목 | 상태 | 근거 (코드) |
 |---|---|---|
 | 스테이션별 DJ 스타일 (`StationProfile`: `dj_name`, `tone`, `concept`) | **부분 구현** | [domain.py](../apps/engine/src/onair_engine/domain.py) `StationProfile` — 표현 층의 일부(이름·말투·컨셉)만 있음 |
+| 스테이션별 엔진 분리 | **구현됨** | [manager.py](../apps/engine/src/onair_engine/manager.py) `EngineManager.start_station(config)`가 방마다 `StationEngine`을 따로 만든다. 프롬프트·방송 맥락·ack 캐시 폴더·계측(`station_id`)이 방 단위로 나뉜다 |
+| 스테이션별 TTS 보이스 | **미구현(설계)** | [engine.py](../apps/engine/src/onair_engine/engine.py) `EngineSettings.tts_voice`는 엔진 전체 설정이다 — 방이 여러 개여도 모두 같은 보이스. [ack.py](../apps/engine/src/onair_engine/ack.py) `AckCache`의 "스테이션마다 DJ 보이스가 다르다"는 전제와 어긋난다 (9.3절) |
+| 스테이션별 스타일 주입 경로 | **부분 구현** | 로컬 yaml의 방 하나만 읽는다([main.py](../apps/engine/src/onair_engine/main.py)). `station.created` 이벤트와 페이로드는 M3·합의 전 ([ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md) 미결 사항 2) |
 | 표현과 정책의 분리 | **부분 구현** | `StationConfig.profile`(표현)과 `StationConfig.policy_name`(정책)이 이미 별도 필드. 행동 층 파라미터 자체는 없음 |
 | 공통 시스템 프롬프트 | **부분 구현** | [corners/base.py](../apps/engine/src/onair_engine/corners/base.py) `system_prompt()` — 정체성·말투·출력 규칙(`SPOKEN_RULES`)·L1 지시(`L1_GUARD`). few-shot·금지 사항·시간 예산 블록 없음 |
 | 편성 관리자 / 정책 | **부분 구현** | [scheduler/scheduler.py](../apps/engine/src/onair_engine/scheduler/scheduler.py) `Scheduler`, [policies/naive_fifo.py](../apps/engine/src/onair_engine/scheduler/policies/naive_fifo.py) `NaiveFifoPolicy` 하나뿐. 정책 A/B/C는 TODO |
@@ -46,6 +49,7 @@
 | 설계 | 현재 코드 | 권장 변경 |
 |---|---|---|
 | 표현 층 | `StationConfig.profile: StationProfile(dj_name, tone, concept)` | `StationProfile`을 `expression` 스키마(2절)로 확장. `dj_name`→`name`, `tone`(문자열)→`tone`(구조체)로 바꿀지는 `[미정]` — 바꾸지 않으면 기존 필드를 유지하고 새 필드만 추가 |
+| 표현 층 — 목소리 | `EngineSettings.tts_voice` (엔진 전체 설정) | `expression.voice`로 옮기고, 스테이션 생성 시 그 값으로 TTS 어댑터를 만든다 (9.3절). `EngineSettings.tts_voice`는 persona에 값이 없을 때의 기본값으로만 남긴다 |
 | 행동 층 | `StationConfig.policy_name: str` (정책 이름 하나) | **권장 이름** `StationConfig.behavior: BehaviorSpec`. `policy_name`은 `behavior.ack_policy`로 흡수하거나 정책 구현 선택자로 남김 `[미정]` |
 | 기억 층 | `GenerationPipeline._recent` (최근 대본 N개, 메모리, feat/#28 브랜치) | [context-memory.md](context-memory.md) 참고 |
 
@@ -59,7 +63,7 @@
 
 ```yaml
 persona:
-  id: dj_moonlight                    # [예시]
+  persona_id: dj_moonlight            # [예시] station_id와 별개 — 여러 방이 같은 persona를 재사용할 수 있다 (9.1절)
   expression:                         # 표현 층 — 시스템 프롬프트로 들어간다
     name: "달빛"                       # [예시] 현재 코드의 StationProfile.dj_name
     concept: "잠 못 드는 사람들 곁에서 조용히 위로하는 심야 DJ"   # [예시] 현재 StationProfile.concept
@@ -72,7 +76,10 @@ persona:
     music_taste: [lo-fi, acoustic, ballad]       # [예시]
     examples: ["…", "…", "…"]          # 대표 멘트 3~5개 [예시]. 코너별로 둘 수 있음
     forbidden: ["정치적 견해 표명", "실존 인물 비방", "…"]   # [예시]
-  behavior:                           # 행동 층 — 편성 관리자가 읽는다. 프롬프트에 넣지 않는다
+    voice:                            # 목소리 — 프롬프트에는 넣지 않고 TTS 어댑터 생성에 쓴다 (9.3절)
+      voice_id: ko-KR-Chirp3-HD-Aoede # [예시] TTS 제공자별 보이스 ID. 제공자는 엔진 설정(tts)을 따른다
+      speaking_rate: 0.95             # [예시] 지원 여부는 제공자에 따라 다름 [미정]
+  behavior:                           # 행동 층의 기본값 — 편성 관리자가 읽는다. 프롬프트에 넣지 않는다
     ack_policy: boundary_wait         # boundary_wait | immediate | ack_then_defer
     max_reflections_per_min: 2        # [예시]
     read_during_music: false          # [예시]
@@ -85,6 +92,18 @@ persona:
     silence_after_sec: 90             # [예시]
     silence_topics: [track_intro, aired_callback, source_brief, todays_question]   # [예시]
     max_reflection_level: 4           # 1~4, 6절의 반영 단계
+```
+
+스테이션은 persona를 **참조**하고, 방송에 실제로 쓸 행동 층을 확정해 둔다 (9.1절).
+
+```yaml
+station:
+  station_id: st_8f2a                 # [예시] 방 하나 = 방송 하나
+  persona_id: dj_moonlight            # 어떤 persona를 쓰는가
+  persona_snapshot: { … }             # 방송 시작 시점의 persona 사본 — 이후 persona가 수정돼도 이 방송은 그대로 (9.4절)
+  behavior: { … }                     # 이 방송에서 쓸 행동 층. 기본은 persona.behavior, 실험용 방은 한 필드만 덮어쓴다
+  broadcast_minutes: 120              # [예시] F-25
+  experiment_condition: null          # 실험용 방이면 조건 이름 [미정]
 ```
 
 ### 2.2 `ack_policy`와 편성 정책 A/B/C
@@ -135,6 +154,7 @@ class BehaviorSpec(BaseModel):
     max_reflection_level: int = Field(ge=1, le=4)
 ```
 
+- `expression.voice.voice_id`는 엔진이 쓰는 TTS 제공자의 보이스 목록에 있는지 검증한다. 없는 보이스로 방송을 시작하면 ack 사전 렌더링(방송 시작 전)에서 바로 실패한다.
 - `expression`은 길이 상한(예: `examples` 3~5개, 각 멘트 길이 상한)과 필수 필드만 검증한다. 내용의 적절성은 스키마가 아니라 안전 계층(L0~L2)이 다룬다.
 
 ### 2.4 저장소 `[미정]`
@@ -147,7 +167,7 @@ class BehaviorSpec(BaseModel):
 | 백엔드 Redis (`station:{id}:persona` 해시 등) | 방 생성 주체인 백엔드가 바로 저장, 프론트 조회도 쉽다 | Redis 영속성 설정에 의존. 분석용 로그와 저장소가 갈린다 |
 | 백엔드 신규 DB | 사용자·방 관리가 커지면 어차피 필요할 수 있다 | 지금 범위에서 새 인프라 추가 비용 |
 
-어느 쪽이든 엔진은 방송 시작 시 persona를 **한 번 읽어 메모리에 고정**하고, 방송 중에는 저장소를 다시 읽지 않는다(3절).
+어느 쪽이든 persona는 `persona_id` 단위로, 방송에 쓴 사본은 `station_id` 단위로 저장한다(9.1·9.4절). 엔진은 방송 시작 시 persona를 **한 번 읽어 메모리에 고정**하고, 방송 중에는 저장소를 다시 읽지 않는다(3절).
 
 ---
 
@@ -165,6 +185,7 @@ class BehaviorSpec(BaseModel):
   - **말투 드리프트 방지** — 매번 자유 문장을 다시 해석하면 호출마다 해석이 조금씩 달라져 말투가 흔들린다. 고정된 구조값을 주입해야 일관성(7절)이 유지된다.
   - **호출 비용 절감** — 변환은 방 생성 시 한 번이고, 방송 중 프롬프트에는 이미 정리된 값만 들어간다.
 - **변환 결과의 행동 층** — 호스트 문장에서 행동 층까지 LLM이 추론하게 할지, 행동 층은 프리셋 몇 개 중에서 고르게 할지는 `[미정]`. 어느 쪽이든 결과는 2.3의 검증을 통과해야 한다.
+- **목소리**도 방 생성 시 확정한다. ack 캐시가 방송 시작 전에 그 목소리로 사전 렌더링되기 때문이다(9.3절).
 - **실험용 방**은 호스트 입력 대신 사전 정의 **프리셋**을 쓴다(8절).
 - **변환을 누가 실행하는가** `[미정]` — LLM 어댑터([pipeline/llm.py](../apps/engine/src/onair_engine/pipeline/llm.py))는 엔진에 있고, 방 생성 요청은 백엔드가 받는다. 엔진이 변환하려면 `engine:control` 스트림(`station.created`, [ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md) 미결 사항 2)에 변환 요청·결과 경로가 추가로 필요하다.
 
@@ -265,10 +286,65 @@ AI VTuber 팬덤 연구(Neuro-sama)에서 팬의 83%가 "일관된 성격"을 �
 
 | 층 | 실험용 방 | 일반 방 |
 |---|---|---|
-| 표현 층 | **프리셋 하나로 고정** (모든 조건 공통) | 호스트가 자유롭게 설정 |
-| 행동 층 | **필드 하나만** 조건 간에 다르게 둔다. 예: `ack_policy` | 호스트 설정 또는 기본 프리셋 `[미정]` |
+| 표현 층 | **프리셋 하나로 고정** — 모든 실험용 방이 같은 `persona_id`를 참조한다 (목소리 포함, 9.1절) | 호스트가 자유롭게 설정 |
+| 행동 층 | **필드 하나만** 조건 간에 다르게 둔다 — `station.behavior`에서 그 필드만 덮어쓴다. 예: `ack_policy` | 호스트 설정 또는 기본 프리셋 `[미정]` |
 | `flood_selection` | **모든 조건 공통** — (b) 집단이 어느 조건에서든 사후 분류로 생긴다 | 호스트 설정 또는 기본 프리셋 `[미정]` |
 
 - 근거: 기획서 8.1~8.2절 초안 (`[확정 전]`). 조작할 필드, 조건 수, 프리셋 내용은 8장 확정 시 정한다 `[미정]`.
 - 정책은 세션(방송) 단위로 고정하고 방송 중 바꾸지 않는다 ([policies/base.py](../apps/engine/src/onair_engine/scheduler/policies/base.py), ENGINE_ARCHITECTURE 확인 8). `BehaviorSpec`을 `frozen`으로 두는 이유다.
 - 실험용 방과 일반 방을 어떻게 구분할지(방 생성 시 플래그, 운영자 전용 생성 등)는 기획서 10장 "호스트 방 다수 생성" 리스크 대응과 함께 정한다 `[미정]`.
+
+---
+
+## 9. 스테이션별 스타일 관리
+
+스테이션(방)마다 DJ 스타일이 다르다. **스타일은 코드가 아니라 스테이션에 붙는 데이터**로 관리한다. 엔진 코드는 하나이고, 방마다 다른 persona 값을 넣어 돌린다.
+
+### 9.1 `persona_id`와 `station_id`를 분리한다 (권장)
+
+| 개념 | 단위 | 담는 것 |
+|---|---|---|
+| **persona** | `persona_id` | 표현 층(목소리 포함) + 행동 층 기본값. 여러 방이 재사용할 수 있는 "DJ 캐릭터" |
+| **station** | `station_id` | 어떤 persona를 쓰는지(`persona_id`), 이 방송의 행동 층(`behavior`), 방송 시간, 실험 조건 |
+
+- **표현 층은 persona 단위, 행동 층은 station 단위로 확정한다.** 실험용 방이 이 구분을 그대로 쓴다 — "실험 방 N개 = 같은 `persona_id`, `behavior`의 한 필드만 다름"(8절). 행동 층이 persona 안에만 있으면, 행동 한 필드만 다른 persona를 조건마다 복제해야 하고 표현 층이 정말 같은지 보장하기 어렵다.
+- 일반 방은 호스트가 새 persona를 만들거나(3절) 기본 템플릿 중에서 고른다. 기본 템플릿 목록은 `[미정]`.
+- 서로 다른 방이 같은 persona를 써도 된다. 같은 캐릭터라도 기억 층은 방마다 따로다([context-memory.md](context-memory.md) 3.4절).
+
+### 9.2 흐름
+
+```
+① 호스트가 방 생성 — 자유 문장 컨셉 + 방송 시간 (+ 목소리 선택 [미정])
+② persona 생성 또는 템플릿 선택 → 스키마 검증 (3절)
+③ 저장: persona는 persona_id로, 방은 station_id → persona_id로
+④ 백엔드 → 엔진: station.created { station_id, persona(또는 persona_id), behavior, broadcast_minutes }
+⑤ EngineManager.start_station() — 그 persona로 StationEngine 생성
+     · 프롬프트: persona.expression
+     · TTS 어댑터: persona.expression.voice
+     · 편성 관리자: station.behavior
+     · ack 캐시: 그 목소리로 사전 렌더링
+⑥ 방송 중에는 고정 (frozen) — 다음 방송부터 바뀐 persona가 적용된다
+```
+
+- **④의 페이로드 — 본문을 실을지, ID만 실을지** `[미정]`
+  - 본문을 실으면 엔진이 persona 저장소를 몰라도 된다. 이벤트 하나로 방송 시작에 필요한 것이 다 온다.
+  - ID만 실으면 이벤트는 가볍지만 엔진도 저장소를 읽어야 한다.
+  - 저장소 결정(2.4절)과 묶여 있다. `station.created` 페이로드는 이미 계약 미결 사항이다([ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md) 미결 사항 2).
+
+### 9.3 목소리
+
+- 청취자가 방 사이의 차이를 가장 먼저 느끼는 것은 목소리다. 그래서 목소리를 **표현 층의 일부**로 둔다. 다만 프롬프트에는 넣지 않고 TTS 어댑터를 만들 때만 쓴다.
+- **현재 코드와의 차이** — `EngineSettings.tts_voice`가 엔진 전체 설정이라, `StationEngine`마다 `make_tts(settings.tts, voice=settings.tts_voice)`로 같은 보이스를 쓴다. 권장 변경:
+  - `StationConfig`(또는 그 안의 persona)에 보이스를 두고, `StationEngine.__init__`에서 그 값으로 TTS 어댑터를 만든다.
+  - `EngineSettings.tts_voice`는 persona에 보이스가 없을 때의 기본값으로만 남긴다.
+- **TTS 제공자는 엔진 전체 설정으로 둔다.** 방마다 제공자가 다르면 비용·지연 비교가 흐려지고 실험 조건에 변수가 하나 더 생긴다. `voice_id`는 그 제공자의 보이스 목록 안에서만 고른다(2.3절 검증).
+- **선택 방식** `[미정]` — 호스트가 보이스 목록에서 직접 고를지, 컨셉 변환(3절) 때 LLM이 후보 중 하나를 고를지.
+- 목소리는 방 생성 시 확정돼 있어야 한다. ack 캐시([ack.py](../apps/engine/src/onair_engine/ack.py) `AckCache.prerender`)가 방송 시작 전에 그 목소리로 렌더링되기 때문이다.
+
+### 9.4 방송 시작 시점의 사본을 남긴다 (권장)
+
+- 방송을 시작할 때 쓴 persona 전체를 **`station.persona_snapshot`으로 복사**해 둔다.
+- 이유
+  - **재현성** — persona 템플릿이 나중에 수정돼도, 과거 방송이 어떤 설정으로 진행됐는지 정확히 남는다. 실험 분석(캐릭터 이탈률 등, 7절)은 이 사본을 기준으로 한다.
+  - **방송 중 고정** — 진행 중인 방송이 템플릿 수정의 영향을 받지 않는다(6단계 frozen과 같은 원칙).
+- 사본은 계측 기록(`station_id`로 조인)과 함께 보관한다. 보관 위치는 저장소 결정(2.4절)을 따른다.
