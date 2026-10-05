@@ -14,3 +14,15 @@ export interface BroadcastStateResponse {
   pendingRequestCount: number
   oldestRequestAgeSeconds: number
 }
+
+export interface RequestRecord {
+  id: string
+  listenerId: string
+  prompt: string
+  status: string
+  createdAt: string
+}
+
+export interface SubmitRequestResponse {
+  request: RequestRecord
+}
