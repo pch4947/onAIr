@@ -82,6 +82,8 @@ def test_claude_sends_messages_request_and_cleans_output():
     req = received[0]
     assert req["headers"]["x-api-key"] == "k"
     assert req["headers"]["anthropic-version"] == "2023-06-01"
+    # urllib 기본 UA는 Cloudflare를 앞에 둔 API가 403(error code 1010)으로 막는다
+    assert req["headers"]["User-Agent"].startswith("onair-engine/")
     assert req["json"]["model"] == "claude-test"
     assert req["json"]["system"] == PROMPT.system
     assert req["json"]["messages"] == [{"role": "user", "content": PROMPT.user}]
@@ -253,7 +255,9 @@ def _openai_reply(content, finish_reason="stop", refusal=None):
                          "finish_reason": finish_reason}]}
 
 
-def test_openai_compatible_server_gets_max_tokens_and_no_auth():
+def test_openai_compatible_server_gets_max_tokens_and_no_auth(monkeypatch):
+    # 개발 환경에 키가 있으면 호환 서버에도 실린다 — "키 없이"를 확인하려면 비워야 한다
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     base, received, server = _serve(200, _openai_reply("오늘 밤도 함께해요."))
     try:
         client = OpenAiLlmClient("qwen3:8b", base_url=base + "/v1", temperature=0.7)

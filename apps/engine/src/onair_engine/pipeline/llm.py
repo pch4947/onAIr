@@ -16,6 +16,7 @@ import urllib.error
 import urllib.request
 from typing import Protocol
 
+from .. import __version__
 from ..domain import Prompt, Script
 
 DEFAULT_CLAUDE_MODEL = "claude-haiku-4-5"  # 짧은 멘트는 지연이 우선이다. 품질 비교는 llm_model로
@@ -150,6 +151,8 @@ def _post_json(url: str, body: dict, headers: dict[str, str], timeout: float,
         url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"), method="POST",
     )
     req.add_header("Content-Type", "application/json; charset=utf-8")
+    # urllib 기본값(Python-urllib/3.x)은 Cloudflare를 앞에 둔 API가 403 "error code: 1010"으로 막는다
+    req.add_header("User-Agent", f"onair-engine/{__version__}")
     for k, v in headers.items():
         req.add_header(k, v)
     try:
