@@ -3,7 +3,7 @@
 편성 관리자가 코너 편성표에 따라 LLM 대본을 생성하고 TTS 오디오를 백엔드에 제출하는 파트입니다.
 
 - 설계 문서: [docs/ENGINE_ARCHITECTURE.md](../../docs/ENGINE_ARCHITECTURE.md)
-- 현재 상태: **M0 스켈레톤** — 더미 LLM/TTS로 파이프라인 종단 관통. 백엔드 미연동(stdout 더미 전송).
+- 현재 상태: **M1 진행 중** — 실 LLM(Claude/Gemini) → TTS(Google) → Redis 전송까지 종단 관통. 더미 어댑터는 키 없는 테스트·폴백용으로 유지.
 
 ## 시작하기
 
@@ -52,6 +52,48 @@ onair-engine --tts google --max-segments 15 --demo-request "요즘 잠이 안 �
 - 기본 보이스는 `ko-KR-Chirp3-HD-Aoede`(여성)입니다. `pipeline.tts_voice`로 바꿉니다 (남성: `ko-KR-Chirp3-HD-Charon`).
 - 추가 의존성은 없습니다 (표준 라이브러리 REST 호출).
 - 다른 제공자(유료 모델, 로컬 오픈소스 TTS)로 옮길 때는 `pipeline/tts.py`에 `TtsClient` 프로토콜(`file_ext`, `cache_namespace`, `synthesize`)을 지키는 어댑터를 추가하고 `make_tts`에 등록하면 됩니다.
+
+### 실제 LLM으로 대본 생성
+
+제공자는 비교 실측 중(확인 3)이라 두 어댑터를 같은 조건으로 붙여 두었습니다. 추가 의존성은 없습니다 (표준 라이브러리 REST 호출).
+
+| `--llm` | 키 환경변수 | 기본 모델 (`pipeline.llm_model` / `--llm-model`로 변경) |
+|---|---|---|
+| `claude` | `ANTHROPIC_API_KEY` | `claude-haiku-4-5` |
+| `gemini` | `GEMINI_API_KEY` | `gemini-2.5-flash` (thinking 끔) |
+| `openai` | `OPENAI_API_KEY` (호환 서버는 선택) | 없음 — `--llm-model` 필수 |
+
+`openai`는 Chat Completions 호환이라 `--llm-base-url`만 바꾸면 다른 서버에도 붙습니다.
+
+```powershell
+# OpenAI — 모델 ID는 OpenAI 콘솔의 값을 그대로
+onair-engine --llm openai --llm-model <모델 ID> --max-segments 6
+# Qwen (알리바바 DashScope) — 키는 OPENAI_API_KEY에 DashScope 키를 넣는다
+onair-engine --llm openai --llm-base-url https://dashscope-intl.aliyuncs.com/compatible-mode/v1 --llm-model <qwen 모델>
+# Ollama (로컬, 키 불필요)
+onair-engine --llm openai --llm-base-url http://localhost:11434/v1 --llm-model qwen3:8b
+```
+
+- 추론 모델은 출력 한도를 추론 토큰에 먼저 씁니다. 지연이 길거나 빈 응답 오류가 나면 `--llm-reasoning-effort low`(설정 파일은 `pipeline.llm_reasoning_effort`)로 줄입니다.
+- 쓸 수 있는 모델 ID는 제공자마다 다르고 자주 바뀝니다. 호환 서버는 `GET {base_url}/models`로 목록을 확인할 수 있습니다.
+- LLM API 연동 테스트 (2026-10-05): `openai` 어댑터로 코너 4종과 데모 요청 2건을 실제 LLM으로 생성해 Google TTS까지 확인했다.
+
+```powershell
+$env:ANTHROPIC_API_KEY = "발급받은 키"
+onair-engine --llm claude --max-segments 15 --demo-request "요즘 잠이 안 와요"
+```
+
+**LLM → TTS → 백엔드 전체 파이프라인** (Redis 서버 필요, 아래 Redis 전송 참고):
+
+```powershell
+$env:ANTHROPIC_API_KEY = "..."; $env:GOOGLE_TTS_API_KEY = "..."
+onair-engine --llm claude --tts google --transport redis --demo-request "요즘 잠이 안 와요"
+```
+
+- 대본은 그대로 TTS에 들어가므로 시스템 프롬프트가 마크다운·이모지·지문·화자 표기를 금지하고, 새어 나온 것은 `clean_script`가 지웁니다. 출력 한도에서 잘리면 마지막 완결 문장까지만 씁니다.
+- 부적합 판단(L1)은 `REJECT`로 통일합니다. 제공자 안전 필터 차단(Gemini `blockReason`, Claude `refusal`)도 같게 다룹니다.
+- 최근 N개 대본(`context.recent_segments`)을 시스템 프롬프트에 붙여 같은 인사·표현 반복을 막습니다.
+- **실패 처리**: LLM/TTS 호출은 1회 재시도하고, 재실패하면 더미의 고정 filler 대본으로 대체해 방송을 잇습니다. 요청 답변이 대체되면 요청을 `queued`로 한 번 되돌리고(ack는 다시 보내지 않음), 또 실패하면 `rejected`로 통보합니다. 계측 `generation_log`에 `error`/`fallback` 단계가 남습니다.
 
 ### 오디오 파일 관리
 
@@ -105,4 +147,4 @@ src/onair_engine/
 ## 다음 단계
 
 설계 문서 9장 단계별 구현 계획(M0~M4)과 10장 확인 필요 사항을 참고하세요.
-당장의 미결: 백엔드 통신 채널(확인 1, 1주차 계약), LLM/TTS 제공자 선정(확인 3).
+당장의 미결: LLM/TTS 제공자 선정(확인 3) — `generation_log`의 llm/tts 단계 지연으로 비교 실측.

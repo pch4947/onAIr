@@ -35,6 +35,9 @@ class EngineSettings:
     sqlite_path: Path = field(default_factory=lambda: Path("var/engine_metrics.sqlite"))
     safety_rules_path: Path = field(default_factory=lambda: Path("config/safety_rules.yaml"))
     llm: str = "dummy"
+    llm_model: str | None = None  # None이면 어댑터 기본 모델 (openai는 필수)
+    llm_base_url: str | None = None  # openai 호환 서버 주소. None이면 OpenAI 본가
+    llm_reasoning_effort: str | None = None  # openai 추론 모델의 추론량 (지연 조절)
     tts: str = "dummy"
     tts_voice: str | None = None  # None이면 어댑터 기본 보이스
     tts_cache_dir: Path | None = None  # None이면 캐시 없이 매번 합성. 공유 오디오 루트 밖에 둔다
@@ -58,8 +61,12 @@ class StationEngine:
         corners = build_corners(catalog=Catalog(), rss=RssCollector())
         pipeline = GenerationPipeline(
             station_id=config.station_id, profile=config.profile, corners=corners,
-            llm=make_llm(settings.llm), tts=tts, safety=safety,
+            llm=make_llm(settings.llm, model=settings.llm_model,
+                         base_url=settings.llm_base_url,
+                         reasoning_effort=settings.llm_reasoning_effort),
+            tts=tts, safety=safety,
             telemetry=self.telemetry, audio_root=audio_root,
+            recent_segments=config.recent_segments,
         )
         self.ack_cache = AckCache(tts=tts, audio_root=audio_root, station_id=config.station_id)
         self.scheduler = Scheduler(

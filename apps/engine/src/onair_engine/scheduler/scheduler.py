@@ -28,6 +28,7 @@ from .policies.base import SchedulingPolicy
 from .running_order import RunningOrder
 
 _IDLE_SLEEP_SEC = 0.5
+_MAX_REQUEST_FAILURES = 2  # 생성 실패한 요청은 한 번 다시 큐에 넣고, 또 실패하면 거절한다
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ class Scheduler:
         self._produced_ms = 0
         self._submitted = 0
         self._started_at: float | None = None
+        self._failures: dict[str, int] = {}  # request_id -> 생성 실패 횟수
 
     def enqueue_request(self, req: ListenerRequest) -> None:
         req.state = RequestState.QUEUED
@@ -93,7 +95,8 @@ class Scheduler:
     async def _build_job(self, ctx: ScheduleContext, decision: Decision) -> GenerationJob:
         if decision.request is not None:
             self._pending.remove(decision.request)
-            if decision.send_ack:
+            # 되돌아온 요청은 첫 차례에 이미 ack가 나갔다 — 같은 요청에 두 번 보내지 않는다
+            if decision.send_ack and decision.request.request_id not in self._failures:
                 await self._publish_ack(decision.request)
             return GenerationJob(
                 job_id=new_id("job"), corner_type="request_reply",
@@ -128,14 +131,29 @@ class Scheduler:
                         await self._transition(req, RequestState.REJECTED)  # F-15
                     return
                 if req is not None:
-                    await self._transition(req, RequestState.GENERATED)
+                    if sub.request_ref == req.request_id:
+                        await self._transition(req, RequestState.GENERATED)
+                    else:  # 제공자 장애로 filler 대체됨 — 답변이 나간 게 아니다
+                        await self._requeue_or_reject(req)
                 await self._publish(sub)
         except Exception:
-            # 생성 태스크는 아무도 await하지 않으므로 여기서 기록하지 않으면 실패가 사라진다
-            # (실 TTS API의 403·타임아웃 등). TODO(M2): 1회 재시도 후 filler 대체, 요청 상태 복구.
+            # 생성 태스크는 아무도 await하지 않으므로 여기서 기록하지 않으면 실패가 사라진다.
+            # 파이프라인이 재시도·filler 대체까지 했는데도 실패한 경우다 (TTS 전면 장애 등)
             logger.exception("GENERATION_FAILED %s %s", job.job_id, job.corner_type)
+            req = job.material.request
+            if req is not None and req.state == RequestState.GENERATING:
+                await self._requeue_or_reject(req)
         finally:
             self._inflight -= 1
+
+    async def _requeue_or_reject(self, req: ListenerRequest) -> None:
+        failures = self._failures.get(req.request_id, 0) + 1
+        self._failures[req.request_id] = failures
+        if failures >= _MAX_REQUEST_FAILURES:
+            await self._transition(req, RequestState.REJECTED)
+            return
+        await self._transition(req, RequestState.QUEUED)
+        self._pending.insert(0, req)  # 이미 기다린 요청이므로 맨 앞으로
 
     async def _transition(self, req: ListenerRequest, state: RequestState) -> None:
         req.state = state
