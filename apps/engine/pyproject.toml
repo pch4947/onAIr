@@ -12,6 +12,7 @@ redis = ["redis>=5"]  # transport.kind: redis
 
 [project.scripts]
 onair-engine = "onair_engine.main:cli"
+onair-eval = "onair_engine.eval.runner:cli"
 
 [build-system]
 requires = ["setuptools>=69"]

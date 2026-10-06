@@ -44,11 +44,20 @@ class RequestState(StrEnum):
 
 @dataclass
 class StationProfile:
-    """호스트가 방 생성 시 설정하는 AI DJ 스타일 (F-25)."""
+    """호스트가 방 생성 시 설정하는 AI DJ 스타일 (F-25) — persona의 표현 층 (docs/persona.md 2절).
+
+    뒤의 세 필드는 비어 있어도 된다. 비어 있으면 시스템 프롬프트에서 그 블록이 빠진다.
+    """
 
     dj_name: str
     tone: str
     concept: str
+    # 대표 멘트 3~5개. 형용사(tone)보다 말투를 강하게 고정한다 (persona.md 4절 2번)
+    examples: list[str] = field(default_factory=list)
+    # 캐릭터 차원의 금지 사항. 안전 계층(L0~L2)을 대체하지 않는다 (persona.md 5.1절)
+    forbidden: list[str] = field(default_factory=list)
+    # 가끔 쓰는 입버릇 — 매번 쓰면 반복이 되므로 프롬프트에서 빈도를 제한한다
+    signature_phrases: list[str] = field(default_factory=list)
 
 
 @dataclass

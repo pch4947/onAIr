@@ -1,10 +1,9 @@
 # 로컬 개발용 스테이션 설정 — 실제 운영에서는 station.created 이벤트가 이 역할을 대체한다 (M3)
 station:
   id: st_local_dev
-  profile:
-    dj_name: "새벽"
-    tone: "차분하고 따뜻한 존댓말"
-    concept: "심야 스터디 라디오"
+  # persona 파일 경로 또는 필드 직접 기입 (dj_name, tone, concept + 선택: examples, forbidden,
+  # signature_phrases). 프리셋: config/personas/ — 실행 시 --persona로 바꿔 끼울 수 있다
+  profile: config/personas/saebyeok.yaml
   broadcast_minutes: 60
 
 policy:

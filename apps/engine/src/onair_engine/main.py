@@ -13,13 +13,23 @@ from .domain import StationConfig, StationProfile
 from .engine import EngineSettings
 from .manager import EngineManager
 
+# persona 파일에서 프로필 필드가 아닌 메타데이터 — 읽고 버린다
+_PERSONA_META = {"persona_id", "description"}
+
+
+def load_profile(spec: dict | str | Path) -> StationProfile:
+    """station.profile — 필드를 직접 쓰거나 persona 파일(config/personas/*.yaml) 경로를 준다."""
+    if not isinstance(spec, dict):
+        spec = yaml.safe_load(Path(spec).read_text(encoding="utf-8"))
+    return StationProfile(**{k: v for k, v in spec.items() if k not in _PERSONA_META})
+
 
 def load_config(path: Path) -> tuple[StationConfig, EngineSettings]:
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     st = raw["station"]
     config = StationConfig(
         station_id=st["id"],
-        profile=StationProfile(**st["profile"]),
+        profile=load_profile(st["profile"]),
         broadcast_minutes=int(st.get("broadcast_minutes", 60)),
         policy_name=raw.get("policy", {}).get("name", "naive_fifo"),
         recent_segments=int(raw.get("context", {}).get("recent_segments", 8)),
@@ -50,13 +60,8 @@ def load_config(path: Path) -> tuple[StationConfig, EngineSettings]:
     return config, settings
 
 
-def cli(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="onair-engine", description="onAIr 대본 엔진")
-    parser.add_argument("--config", type=Path, default=Path("config/station.example.yaml"))
-    parser.add_argument("--max-segments", type=int, default=None,
-                        help="N개 제출 후 종료 (관통 테스트용)")
-    parser.add_argument("--demo-request", action="append", default=[], metavar="TEXT",
-                        help="기동 2초 후 주입할 가짜 청취자 요청 (반복 지정 가능)")
+def add_llm_args(parser: argparse.ArgumentParser) -> None:
+    """LLM 선택 옵션 — onair-engine과 onair-eval이 같이 쓴다."""
     parser.add_argument("--llm", choices=["dummy", "claude", "gemini", "openai"], default=None,
                         help="설정 파일의 pipeline.llm을 덮어쓴다")
     parser.add_argument("--llm-model", default=None, metavar="MODEL",
@@ -65,6 +70,29 @@ def cli(argv: list[str] | None = None) -> None:
                         help="openai 호환 서버 주소 (Qwen DashScope, Ollama 등)")
     parser.add_argument("--llm-reasoning-effort", default=None, metavar="EFFORT",
                         help="설정 파일의 pipeline.llm_reasoning_effort를 덮어쓴다 (추론 모델용, 예: low)")
+
+
+def apply_llm_args(settings: EngineSettings, args: argparse.Namespace) -> None:
+    if args.llm:
+        settings.llm = args.llm
+    if args.llm_model:
+        settings.llm_model = args.llm_model
+    if args.llm_base_url:
+        settings.llm_base_url = args.llm_base_url
+    if args.llm_reasoning_effort:
+        settings.llm_reasoning_effort = args.llm_reasoning_effort
+
+
+def cli(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="onair-engine", description="onAIr 대본 엔진")
+    parser.add_argument("--config", type=Path, default=Path("config/station.example.yaml"))
+    parser.add_argument("--max-segments", type=int, default=None,
+                        help="N개 제출 후 종료 (관통 테스트용)")
+    parser.add_argument("--demo-request", action="append", default=[], metavar="TEXT",
+                        help="기동 2초 후 주입할 가짜 청취자 요청 (반복 지정 가능)")
+    parser.add_argument("--persona", type=Path, default=None, metavar="FILE",
+                        help="설정 파일의 station.profile을 persona 파일로 덮어쓴다")
+    add_llm_args(parser)
     parser.add_argument("--tts", choices=["dummy", "google", "edge"], default=None,
                         help="설정 파일의 pipeline.tts를 덮어쓴다")
     parser.add_argument("--transport", choices=["stdout", "http", "redis"], default=None,
@@ -77,14 +105,9 @@ def cli(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     config, settings = load_config(args.config)
-    if args.llm:
-        settings.llm = args.llm
-    if args.llm_model:
-        settings.llm_model = args.llm_model
-    if args.llm_base_url:
-        settings.llm_base_url = args.llm_base_url
-    if args.llm_reasoning_effort:
-        settings.llm_reasoning_effort = args.llm_reasoning_effort
+    if args.persona:
+        config.profile = load_profile(args.persona)
+    apply_llm_args(settings, args)
     if args.tts:
         settings.tts = args.tts
     if args.transport:

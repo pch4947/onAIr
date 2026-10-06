@@ -10,19 +10,20 @@
 
 | 항목 | 상태 | 근거 (코드) |
 |---|---|---|
-| 스테이션별 DJ 스타일 (`StationProfile`: `dj_name`, `tone`, `concept`) | **부분 구현** | [domain.py](../apps/engine/src/onair_engine/domain.py) `StationProfile` — 표현 층의 일부(이름·말투·컨셉)만 있음 |
+| 스테이션별 DJ 스타일 (`StationProfile`) | **부분 구현** | [domain.py](../apps/engine/src/onair_engine/domain.py) `StationProfile` — `dj_name`·`tone`·`concept` + `examples`·`forbidden`·`signature_phrases`. persona 파일([config/personas/](../apps/engine/config/personas/))로 분리. `voice`·`music_taste`·`persona_id` 스키마는 아직 없음 |
 | 스테이션별 엔진 분리 | **구현됨** | [manager.py](../apps/engine/src/onair_engine/manager.py) `EngineManager.start_station(config)`가 방마다 `StationEngine`을 따로 만든다. 프롬프트·방송 맥락·ack 캐시 폴더·계측(`station_id`)이 방 단위로 나뉜다 |
 | 스테이션별 TTS 보이스 | **미구현(설계)** | [engine.py](../apps/engine/src/onair_engine/engine.py) `EngineSettings.tts_voice`는 엔진 전체 설정이다 — 방이 여러 개여도 모두 같은 보이스. [ack.py](../apps/engine/src/onair_engine/ack.py) `AckCache`의 "스테이션마다 DJ 보이스가 다르다"는 전제와 어긋난다 (9.3절) |
 | 스테이션별 스타일 주입 경로 | **부분 구현** | 로컬 yaml의 방 하나만 읽는다([main.py](../apps/engine/src/onair_engine/main.py)). `station.created` 이벤트와 페이로드는 M3·합의 전 ([ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md) 미결 사항 2) |
 | 표현과 정책의 분리 | **부분 구현** | `StationConfig.profile`(표현)과 `StationConfig.policy_name`(정책)이 이미 별도 필드. 행동 층 파라미터 자체는 없음 |
-| 공통 시스템 프롬프트 | **부분 구현** | [corners/base.py](../apps/engine/src/onair_engine/corners/base.py) `system_prompt()` — 정체성·말투·출력 규칙(`SPOKEN_RULES`)·L1 지시(`L1_GUARD`). few-shot·금지 사항·시간 예산 블록 없음 |
+| 공통 시스템 프롬프트 | **부분 구현** | [corners/base.py](../apps/engine/src/onair_engine/corners/base.py) `system_prompt()` — 4절 순서로 정체성·말투·입버릇·금지 사항·말하기 원칙(`RADIO_CRAFT`)·출력 규칙·L1 지시 + few-shot 예시(데이터 블록). 시간 예산 블록 없음 |
 | 편성 관리자 / 정책 | **부분 구현** | [scheduler/scheduler.py](../apps/engine/src/onair_engine/scheduler/scheduler.py) `Scheduler`, [policies/naive_fifo.py](../apps/engine/src/onair_engine/scheduler/policies/naive_fifo.py) `NaiveFifoPolicy` 하나뿐. 정책 A/B/C는 TODO |
 | 행동 층 스키마 (`behavior`) | **미구현(설계)** | — |
 | 페르소나 생성 흐름 (자유 문장 → 스키마 변환) | **미구현(설계)** | 현재는 [config/station.example.yaml](../apps/engine/config/station.example.yaml)의 `profile`을 직접 읽는다. `station.created` 이벤트는 M3 예정 |
 | 페르소나 저장소 | **미구현(설계)** | 저장소 없음 — `[미정]` (2.4절) |
 | 스키마 검증 | **미구현(설계)** | 엔진 의존성은 `PyYAML`, `mutagen`뿐 (Pydantic 없음) |
-| 청취자 채팅의 데이터 블록 분리 | **미구현(설계)** | [corners/request_reply.py](../apps/engine/src/onair_engine/corners/request_reply.py)가 요청 본문을 user 프롬프트에 그대로 이어붙임 |
-| 실험용 프리셋 | **미구현(설계)** | — |
+| 청취자 채팅의 데이터 블록 분리 | **구현됨** | [prompt_data.py](../apps/engine/src/onair_engine/prompt_data.py) `data_block()` — 사연·RSS·곡 정보·직전 멘트·persona 예시 (#38) |
+| 실험용 프리셋 | **부분 구현** | 비교용 persona 프리셋 3종([config/personas/](../apps/engine/config/personas/)). 실험 조건(행동 층)을 고정하는 프리셋은 없음 |
+| 품질 평가 도구 (7절) | **구현됨** | `python -m onair_engine.eval` ([eval/](../apps/engine/src/onair_engine/eval/)) — 자동 지표 + LLM-judge 캐릭터 이탈률. 사용법은 [엔진 README](../apps/engine/README.md) |
 
 ---
 
@@ -196,13 +197,13 @@ class BehaviorSpec(BaseModel):
 | 순서 | 블록 | 주입 주체 | 현재 코드 |
 |---|---|---|---|
 | 1 | 정체성·컨셉 | persona | `system_prompt()`의 "당신은 … DJ {dj_name}다" — **있음** |
-| 2 | 말투 규칙 + few-shot 예시 | persona | 말투 한 줄(`말투는 {tone}`)만 있음. few-shot **없음** |
-| 3 | 금지 사항 | persona | **없음** (`forbidden`) |
+| 2 | 말투 규칙 + few-shot 예시 | persona | `말투는 {tone}` + 입버릇(빈도 제한) + `examples` 데이터 블록 — **있음** |
+| 3 | 금지 사항 | persona | `forbidden` — **있음** |
 | 4 | 출력 형식 + 이번 세그먼트의 시간 예산 | 편성 관리자 / 코너 | 출력 형식은 `SPOKEN_RULES` — **있음**. 시간 예산은 코너 user 프롬프트의 "N문장 이내"로만 표현 — **부분** |
 | 5 | 부적합 요청이면 대본 대신 `REJECT` 출력 (안전 계층 L1) | 엔진 공통 | `L1_GUARD` — **있음** |
 | 6 | 기억 층 요약 | 기억 층 ([context-memory.md](context-memory.md)) | `GenerationPipeline._with_context`가 최근 대본 원문을 system 끝에 붙임 — **부분** (feat/#28) |
 | 7 | 이번 코너가 요구하는 것 | 코너 모듈 | 각 코너의 `build_prompt()` user 프롬프트 — **있음** |
-| 8 | 청취자 채팅 (데이터 블록) | 요청 큐 | 요청 본문을 7번 지시문에 그대로 이어붙임 — **분리 안 됨** |
+| 8 | 청취자 채팅 (데이터 블록) | 요청 큐 | `data_block(STORY, …)` — **있음** (#38) |
 
 - **persona 블록(1~5)은 모든 코너에 동일하게 붙는다.** 코너마다 바뀌는 것은 7번뿐이다(6·8번은 방송 상황에 따라 바뀌지만 코너 종류와는 무관하다).
 - **2번은 형용사보다 예시가 강하다.** "차분하고 따뜻하게" 같은 설명보다 실제 멘트 3~5개가 말투를 훨씬 강하게 고정한다.
@@ -278,6 +279,7 @@ AI VTuber 팬덤 연구(Neuro-sama)에서 팬의 83%가 "일관된 성격"을 �
 
 - 각 지표의 목표치는 `[미정]`이다 (기획서 7.3절 Q-01~Q-03도 목표치 미정).
 - 루브릭과 LLM-judge 중 무엇을 쓸지, LLM-judge라면 사람 평가와의 일치도를 어떻게 확인할지는 `[미정]`.
+  - 현재 도구(`python -m onair_engine.eval`)는 둘 다 낸다: 규칙 기반 자동 지표(말투 종결 어미, 길이, 반복 등)와 `--judge` 1~5점 채점(캐릭터 2점 이하 = 이탈). judge 점수를 지표로 쓰기 전에 같은 대본 일부를 사람이 채점해 일치도를 확인해야 한다.
 - **큐레이션된 예측 불가능성** — 정체성과 행동은 고정하고, **문장 표면**(비유, 화제 선택)은 금지 사항 안에서 열어둔다 (AI VTuber 선행 조사). 매번 같은 문장이 나오는 것은 일관성이 아니라 반복이다. 반복은 기억 층이 막는다([context-memory.md](context-memory.md)).
 
 ---

@@ -17,6 +17,7 @@ import urllib.request
 from typing import Protocol
 
 from .. import __version__
+from ..catalog import mood_ko
 from ..domain import Prompt, Script
 from ..prompt_data import STORY
 
@@ -78,9 +79,6 @@ _STORY_RE = re.compile(rf'<data label="{STORY}">\n(?P<story>.*?)\n</data>', re.D
 _DATA_RE = re.compile(r'<data label="[^"]*">\n.*?\n</data>', re.DOTALL)
 _HEADLINE_RE = re.compile(r"^- (?P<headline>.+?): ", re.MULTILINE)
 
-_MOOD_KO = {"calm": "차분한", "mellow": "포근한", "hopeful": "희망찬"}
-
-
 def detect_corner(user_prompt: str) -> str | None:
     # 데이터 블록은 빼고 지시문만 본다 — "오프닝 멘트 해줘" 같은 사연으로 코너를 오판하지 않게
     instructions = _DATA_RE.sub("", user_prompt)
@@ -97,7 +95,7 @@ def _slots(prompt: Prompt) -> dict[str, str]:
                         (_STORY_RE, prompt.user), (_HEADLINE_RE, prompt.user)]:
         if m := regex.search(text):
             slots.update({k: v.strip() for k, v in m.groupdict().items()})
-    slots["mood"] = _MOOD_KO.get(slots["mood"], slots["mood"])
+    slots["mood"] = mood_ko(slots["mood"])
     slots["story"] = slots["story"][:60]
     return slots
 
