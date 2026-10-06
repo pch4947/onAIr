@@ -38,7 +38,25 @@ if old then
   if a > b or (a == b and tonumber(string.sub(old,p+1)) >= tonumber(string.sub(ARGV[2],q+1))) then return 0 end
 end
 redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+local previous = redis.call('HGET', KEYS[2], ARGV[1])
+local oldstate = previous and cjson.decode(previous).state or 'requested'
+local newstate = cjson.decode(ARGV[3]).state
+local allowed = {
+ requested={screened=1,queued=1,generating=1,generated=1,rejected=1},
+ screened={queued=1,generating=1,generated=1,rejected=1},
+ queued={generating=1,generated=1,rejected=1},
+ generating={queued=1,generated=1,rejected=1},
+ generated={rejected=1}
+}
+if oldstate == newstate then return 0 end
+if not allowed[oldstate] or not allowed[oldstate][newstate] then
+ redis.call('RPUSH', KEYS[3], cjson.encode({state=newstate, previous=oldstate,
+   at=ARGV[4], event_id=ARGV[5], source='engine', accepted=false, reason='invalid_transition'}))
+ return 0
+end
 redis.call('HSET', KEYS[2], ARGV[1], ARGV[3])
+redis.call('RPUSH', KEYS[3], cjson.encode({state=newstate, previous=oldstate,
+   at=ARGV[4], event_id=ARGV[5], source='engine', accepted=true}))
 return 1
 """
 
@@ -98,9 +116,9 @@ class EngineConsumer:
                 return
         else:
             # Source stream ID prevents older pending events overwriting newer states.
-            await self.redis.eval(STATE, 2, self.prefix + ":request-versions",
-                                  self.prefix + ":request-states", event.request_id, entry_id,
-                                  json.dumps(event.model_dump()))
+            await self.redis.eval(STATE, 3, self.prefix + ":request-versions",
+                                  self.prefix + ":request-states", self.prefix + ":request-history:" + event.request_id,
+                                  event.request_id, entry_id, json.dumps(event.model_dump()), fields['at'], fields['event_id'])
         await self.ack(entry_id)
 
     async def run(self):

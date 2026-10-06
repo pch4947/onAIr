@@ -52,9 +52,29 @@ Node 서버와 package.json은 제거했습니다. 실행은 `python -m app`입�
 CORS는 개발용 모든 origin을 허용하며 인증 쿠키는 허용하지 않습니다.
 CORS preflight는 middleware가 200으로 처리합니다.
 
-기존 요청 목록은 메모리에 있고, 엔진 세그먼트 큐는 Redis에 저장됩니다. 반드시 worker 1개로 실행합니다.
+요청 목록과 엔진 세그먼트 큐는 Redis에 저장됩니다. 반드시 worker 1개로 실행합니다.
 tick은 정책 판단만 수행하며 요청을 소비하거나 오디오를 생성하지 않습니다.
 엔진은 --transport redis로 실행합니다. 프론트엔드 오디오는 HLS를 사용하며 POST /api/segments는 없습니다.
+
+## 요청 접수와 엔진 전달
+
+`POST /api/requests`는 요청을 Redis에 저장하면서 엔진의 `request.arrived` 이벤트를 발행합니다.
+기존 prompt/listenerId는 유지하고 kind는 story(기본) 또는 mood입니다. 초기 상태는 queued에서 requested로 변경했습니다.
+엔진이 먼저 응답하면 POST에도 최신 상태가 반환될 수 있으며, 202 자체는 엔진 처리 완료를 뜻하지 않습니다.
+
+```powershell
+$body = @{ prompt = "차분한 분위기로 부탁해요"; kind = "mood" } | ConvertTo-Json
+$key = [guid]::NewGuid().ToString() # 새 요청에만 새 키 생성. 재시도는 이 값을 재사용
+$result = Invoke-RestMethod http://127.0.0.1:3000/api/requests -Method Post -ContentType 'application/json; charset=utf-8' -Headers @{ 'Idempotency-Key' = $key } -Body ([Text.Encoding]::UTF8.GetBytes($body))
+Invoke-RestMethod ("http://127.0.0.1:3000/api/requests/" + $result.request.id + "/state")
+```
+
+같은 키·같은 입력은 기존 요청을 반환하고 재발행하지 않습니다. 같은 키·다른 입력은 409, 잘못된 입력은 422, Redis 장애는 503입니다.
+응답 유실·시간 초과 시에도 같은 키로 재시도합니다. 헤더를 생략하면 매번 새 요청입니다.
+목록과 개별 상태는 동일한 엔진 최신 상태를 반영하며 백엔드 재시작 후에도 유지됩니다.
+방송 상태의 요청 통계는 rejected/failed/played를 제외하며, Redis 장애 시 null 및 requestStatsAvailable=false가 됩니다.
+상태 이력 및 MIXING/PUBLISHED/PLAYED 전이는 구현했습니다. 조회 목록·재시도 키의 자동 만료, 페이지네이션, 인증·본인 확인은 후속 작업입니다.
+현재 엔진의 QUEUED 이벤트 발행 누락은 엔진 담당자와 조율해야 합니다. 프론트엔드는 요청 통계의 null과 새 초기 상태를 처리하도록 연동이 필요합니다.
 
 ## 회귀 검증
 
@@ -194,8 +214,31 @@ Redis 중복 기록은 자동 만료하지 않아 장기 운영 전 보존 정�
 ### 검증
 
 ONAIR_INTEGRATION_TEST=1과 ONAIR_FFMPEG를 설정하고 unittest를 실행하면
-실제 엔진/Redis, WAV·MP3 인코딩, HLS 디코딩 및 목록 갱신을 포함한 12개 테스트를 실행합니다.
+실제 엔진/Redis, WAV·MP3 인코딩, HLS 디코딩, 요청 전달·재시작·중복 방지를 포함한 17개 테스트를 실행합니다.
 프론트엔드는 `npm.cmd run build`, `npm.cmd run lint`로 확인합니다.
+
+#### 4주차 백엔드 통합 검증 (2026-09-29)
+
+기존 테스트 14개와 추가한 `test_broadcast_e2e.py` 1개가 실제 로컬 Redis·FFmpeg 환경에서 모두 통과했습니다.
+추가 테스트는 로컬 테스트 음원을 엔진의 RedisTransport로 전달한 뒤 별도 포트의 실제 백엔드 프로세스를 실행합니다.
+
+- WAV → MP3 원본 세그먼트가 FIFO 순서로 공개되는지 확인합니다.
+- 준비된 방송에 중간 접속하여 HTTP HLS를 FFmpeg로 디코딩하고, 출력 PCM이 무음이 아닌지 확인합니다.
+- 각 TS의 HTTP 다운로드와 metadata 조회를 확인합니다.
+- 원본 큐가 소진되면 무음이 공급되고 MEDIA-SEQUENCE가 증가하는지 확인합니다.
+- Redis 대기 큐와 미확인 이벤트(pending)가 모두 비었는지 확인합니다.
+
+백엔드 폴더에서 다음과 같이 단독 실행할 수 있습니다. Docker Redis가 실행 중이고 엔진 패키지가 설치되어 있어야 합니다.
+
+```powershell
+$env:ONAIR_INTEGRATION_TEST = "1"
+$env:ONAIR_FFMPEG = (Get-Command ffmpeg).Source # PATH에 없으면 ffmpeg.exe 절대 경로 지정
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p test_broadcast_e2e.py -v
+Remove-Item Env:ONAIR_INTEGRATION_TEST
+```
+
+약 30초가 소요되며 임시 백엔드와 UUID 테스트 방송 데이터는 종료 시 정리합니다. 기존 방송 데이터와 Redis 컨테이너는 유지합니다.
+이 검증은 백엔드 송출 경로를 대상으로 하며 외부 LLM/TTS 호출, 브라우저 음질 청취, 장시간 무중단·장애 복구를 보장하지 않습니다.
 
 ## Windows에서 실제 음성 테스트 (처음부터 실행)
 
@@ -257,7 +300,7 @@ npm.cmd run dev -- --host 127.0.0.1 --port 18080 --strictPort
 ```
 
 http://127.0.0.1:18080/listen 을 열고 방송 상태가 준비됨으로 바뀌면 재생 버튼을 누릅니다.
-초기 준비에는 약 15초가 걸립니다. 엔진 음원이 아직 없으면 무음이 정상입니다.
+초기 준비에는 약 15초가 걸립니다. 엔진 음원이 아직 없으면 기본 폴백 멜로디가 재생됩니다. ONAIR_FALLBACK_MODE=silence이면 무음입니다.
 
 ### 4. 터미널 3: 실제 음성 생성
 
@@ -271,7 +314,7 @@ $env:ONAIR_REDIS_URL = "redis://127.0.0.1:6379/0"
 
 `edge`는 인터넷으로 실제 음성을 합성하고, `dummy`는 무음을 만듭니다.
 현재 예시 설정의 대본 생성은 dummy이므로 정해진 예시 문장을 실제 목소리로 읽습니다.
-생성이 끝나도 방송 버퍼만큼 늦게 들립니다. 모든 음원을 소비하면 다시 무음이 됩니다.
+생성이 끝나도 방송 버퍼만큼 늦게 들립니다. 모든 음원을 소비하면 폴백으로 돌아갑니다.
 생성 수 제한 없이 실행하려면 `--max-segments 10`을 생략하고 종료할 때 Ctrl+C를 누릅니다.
 
 ### 자주 발생하는 오류
@@ -288,6 +331,13 @@ $env:ONAIR_REDIS_URL = "redis://127.0.0.1:6379/0"
 방송 상태 URL: http://127.0.0.1:3001/api/stream/state
 정상 준비 상태는 `status: ready`, `error: null`입니다. 준비됨 자체가 음성 존재를 뜻하지는 않습니다.
 화면 위 WebSocket 연결 끊김 표시는 현재 HLS 재생 여부와 별개입니다.
+
+### 재생 metadata API 확인 (백엔드)
+
+- HLS 목록에 있는 TS 파일명으로 `GET /api/stream/state?fragment={TS 파일명}`을 호출합니다. 서버의 최신 인코딩 대상이 아닌 해당 조각의 원본 metadata를 반환합니다.
+- 원본 음원은 `segment`, 빈 큐의 음악은 `fallback`, 무음 설정은 `silence`, 미등록·만료된 조각은 `unavailable` 상태인지 확인합니다.
+- 화면 표시와 재생 위치에 따른 API 호출은 프론트엔드 담당자의 연동 작업으로 남겨 둡니다. 방송 클럭·실제 잔여 버퍼 계산은 백엔드에서 제공합니다.
+- 세부 응답 및 오류는 [방송 처리 및 복구](../../docs/BACKEND_BROADCAST_RUNTIME.md)를 참고합니다. 선택 쿼리의 형식은 Swagger `/docs`에도 반영됩니다.
 같은 방송의 백엔드를 다른 포트로 중복 실행하지 않습니다.
 
 ### 종료와 다음 실행
@@ -297,3 +347,29 @@ $env:ONAIR_REDIS_URL = "redis://127.0.0.1:6379/0"
 Redis에 남은 큐는 다음 실행 때 처리될 수 있습니다.
 다음 테스트에서는 패키지 설치를 반복하지 않고 1~4번을 진행합니다.
 `$env:...` 설정은 해당 터미널에만 적용되므로 새 터미널에서는 다시 입력합니다.
+
+
+## 방송 상태·복구와 통합 테스트
+
+설정, 버퍼 계산, 서버 시간 기준 PLAYED, 폴백과 재시작 정책은
+[방송 처리 및 복구](../../docs/BACKEND_BROADCAST_RUNTIME.md)를 참고합니다.
+
+저장소 루트 PowerShell에서 Docker Desktop을 실행한 후:
+
+```powershell
+docker compose up -d redis
+./apps/backend/scripts/test.ps1 -Integration -FFmpeg "ffmpeg"
+```
+
+FFmpeg가 PATH에 없으면 `-FFmpeg`에 ffmpeg.exe 절대 경로를 넣습니다.
+스크립트 실행 정책으로 차단되면 아래 명령을 사용합니다. 시스템 정책을 변경하지 않습니다.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./apps/backend/scripts/test.ps1 -Integration -FFmpeg "ffmpeg"
+```
+
+최초 통합 테스트 전에는 `.\apps\backend\.venv\Scripts\python.exe -m pip install -e "apps/engine[redis]"`를
+저장소 루트에서 실행해야 합니다. 실제 TTS 청취 테스트는 위의 `tts` 설치 절차를 따릅니다.
+테스트는 고유 스테이션과 임시 서버·파일을 사용하며 해당 테스트 데이터만 정리합니다.
+실행 중인 Redis는 종료하지 않습니다. 외부 LLM·TTS API는 호출하지 않습니다.
+HTTP 스트림을 실제 FFmpeg로 디코딩하지만 스피커에서 들리는지는 사용자가 별도로 확인합니다.

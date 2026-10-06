@@ -35,7 +35,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.broadcast = BroadcastState()
     application.add_middleware(CORSMiddleware, allow_origins=["*"],
                                allow_methods=["GET", "POST", "OPTIONS"],
-                               allow_headers=["Content-Type"])
+                               allow_headers=["Content-Type", "Idempotency-Key"])
     application.include_router(router)
     application.add_api_route("/hls/{station_id}/{filename}", hls_file, methods=["GET"])
     application.add_api_route("/health", health, methods=["GET"])
