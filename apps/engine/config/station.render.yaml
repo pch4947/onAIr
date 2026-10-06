@@ -1,0 +1,32 @@
+# Render 테스트 배포용 스테이션 설정 — apps/engine/deploy/render-start.sh가 읽는다
+# 엔진과 백엔드가 한 서비스(한 디스크)에서 돈다. 설정값은 README "Render 테스트 배포" 참고
+station:
+  id: st_local_dev            # 백엔드 ONAIR_STATION_ID(기본 st_local_dev)와 같아야 한다
+  profile:
+    dj_name: "새벽"
+    tone: "차분하고 따뜻한 존댓말"
+    concept: "심야 스터디 라디오"
+  broadcast_minutes: 720      # 끝나면 시작 스크립트가 엔진을 다시 띄운다 (오프닝부터 새로 시작)
+
+policy:
+  name: naive_fifo
+
+pipeline:
+  # 키 없이도 실제 음성이 들리는 기본값. 실 LLM/TTS는 ONAIR_ENGINE_ARGS로 덮어쓴다
+  # 예: --llm openai --llm-model <모델 ID> --tts google
+  llm: dummy
+  tts: edge                   # 청취 테스트용 비공식 엔드포인트 — 테스트 환경에서만 쓴다
+  tts_cache_dir: var/tts_cache
+  max_concurrent_generations: 2
+  target_buffer_sec: 30
+  safety_rules: config/safety_rules.yaml
+
+transport:
+  kind: redis                 # URL은 ONAIR_REDIS_URL 환경변수로 주입 (시작 스크립트가 REDIS_URL에서 채운다)
+  audio_dir: var/audio        # 시작 스크립트가 백엔드 ONAIR_AUDIO_DIR을 이 경로의 절대 경로로 맞춘다
+
+telemetry:
+  sqlite_path: var/engine_metrics.sqlite  # Render 디스크는 재배포 시 지워진다 — 실험 데이터용 아님
+
+context:
+  recent_segments: 8

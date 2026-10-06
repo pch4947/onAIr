@@ -119,6 +119,32 @@ wsl redis-cli XRANGE engine:st_local_dev:out - + COUNT 5
 - 백엔드가 `engine:{station_id}:in`에 넣은 `request.arrived`는 요청 큐로, `station.closed`는 방송 정지로 처리됩니다.
 - 테스트는 fakeredis를 쓰므로 Redis 서버 없이 `pytest`로 돌아갑니다.
 
+## Render 테스트 배포
+
+백엔드는 엔진이 쓴 오디오 파일을 같은 디스크에서 읽습니다. Render는 서비스끼리 디스크를 공유하지 않으므로 **엔진과 백엔드를 Web Service 하나에서 같이 실행**합니다. 최종 시연(VM 한 대)과 같은 구조이며, Render는 테스트 용도입니다.
+
+1. **Key Value**(Redis)를 Web Service와 같은 리전에 만들고, Internal URL을 복사합니다.
+2. **Web Service**를 다음과 같이 설정합니다.
+
+| 항목 | 값 |
+|---|---|
+| Root Directory | (비움 — 저장소 루트) |
+| Build Command | `pip install ./apps/backend "./apps/engine[redis,tts]"` |
+| Start Command | `bash apps/engine/deploy/render-start.sh` |
+| Health Check Path | `/health` |
+
+| 환경변수 | 값 |
+|---|---|
+| `PYTHON_VERSION` | `3.12.7` |
+| `REDIS_URL` | Key Value의 Internal URL |
+| `ONAIR_ENGINE_ARGS` | (선택) 실 LLM/TTS 전환. 예: `--llm openai --llm-model <모델 ID> --tts google` |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `GOOGLE_TTS_API_KEY` | `ONAIR_ENGINE_ARGS`로 고른 제공자의 키 |
+
+- 기본 설정 [config/station.render.yaml](config/station.render.yaml)은 더미 대본 + edge TTS라 키 없이도 실제 음성이 나옵니다.
+- [deploy/render-start.sh](deploy/render-start.sh)는 백엔드를 띄우고 `/health` 응답을 기다린 뒤 엔진을 실행합니다. 엔진이 종료되면 5초 뒤 다시 시작하고, 백엔드가 죽으면 서비스 전체가 재시작됩니다. 오디오·HLS 경로(`ONAIR_AUDIO_DIR`, `ONAIR_HLS_DIR`)와 `ONAIR_REDIS_URL`은 스크립트가 채웁니다.
+- 확인: `/api/stream/state`의 `currentSegment`가 채워지고 `error`가 없으면 엔진 → Redis → 백엔드 → HLS가 관통한 것입니다.
+- 제약: Free 플랜은 15분간 요청이 없으면 슬립하고 엔진도 함께 멈춥니다(깨어나면 오프닝부터 다시 시작). 디스크는 재배포 시 지워지므로 `engine_metrics.sqlite`는 실험 데이터로 쓰지 않습니다.
+
 ## 테스트 / 린트
 
 ```bash
