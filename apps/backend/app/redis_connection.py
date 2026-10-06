@@ -9,6 +9,7 @@ from redis.asyncio import Redis
 from redis.exceptions import RedisError
 from .messaging.consumer import EngineConsumer, stop_consumer
 from .streaming.hls import HlsPublisher
+from .requests import RequestStore
 
 
 @asynccontextmanager
@@ -17,6 +18,7 @@ async def redis_lifespan(app):
     client = Redis.from_url(app.state.settings.redis_url, decode_responses=True,
                             socket_connect_timeout=2, socket_timeout=2)
     app.state.redis = client
+    app.state.requests = RequestStore(client, app.state.settings.station_id)
     app.state.engine_consumer = EngineConsumer(client, app.state.settings)
     task = asyncio.create_task(app.state.engine_consumer.run(), name="engine-consumer")
     publisher = HlsPublisher(client, app.state.settings)
