@@ -12,7 +12,19 @@ cd apps/engine
 python -m venv .venv
 .venv\Scripts\activate        # Windows (bash: source .venv/Scripts/activate)
 pip install -e ".[dev]"
+Copy-Item .env.example .env   # bash: cp .env.example .env
 ```
+
+### API 키 (`.env`)
+
+LLM·TTS 키는 `apps/engine/.env`에 넣습니다. 엔진이 시작할 때 읽고, 이미 설정된 OS 환경변수가 우선합니다(백엔드 `apps/backend/.env`와 같은 방식). `.env`는 커밋되지 않습니다. 키 목록은 [.env.example](.env.example)에 있습니다.
+
+```ini
+OPENAI_API_KEY=sk-...
+GOOGLE_TTS_API_KEY=...
+```
+
+더미 LLM·TTS만 쓸 때는 키가 필요 없습니다.
 
 ## 실행
 
@@ -42,10 +54,9 @@ onair-engine --tts edge --max-segments 15 --demo-request "요즘 잠이 안 와�
 ### Google Cloud TTS
 
 1. Google Cloud 콘솔에서 **Cloud Text-to-Speech API**를 사용 설정하고, API 키를 만들어 이 API로만 제한합니다.
-2. 키를 환경변수로 넣고 실행합니다 (키는 설정 파일·커밋에 넣지 않습니다).
+2. 키를 `.env`의 `GOOGLE_TTS_API_KEY`에 넣고 실행합니다 (키는 설정 파일·커밋에 넣지 않습니다).
 
 ```powershell
-$env:GOOGLE_TTS_API_KEY = "발급받은 키"
 onair-engine --tts google --max-segments 15 --demo-request "요즘 잠이 안 와요"
 ```
 
@@ -57,7 +68,7 @@ onair-engine --tts google --max-segments 15 --demo-request "요즘 잠이 안 �
 
 제공자는 비교 실측 중(확인 3)이라 두 어댑터를 같은 조건으로 붙여 두었습니다. 추가 의존성은 없습니다 (표준 라이브러리 REST 호출).
 
-| `--llm` | 키 환경변수 | 기본 모델 (`pipeline.llm_model` / `--llm-model`로 변경) |
+| `--llm` | 키 (`.env`) | 기본 모델 (`pipeline.llm_model` / `--llm-model`로 변경) |
 |---|---|---|
 | `claude` | `ANTHROPIC_API_KEY` | `claude-haiku-4-5` |
 | `gemini` | `GEMINI_API_KEY` | `gemini-2.5-flash` (thinking 끔) |
@@ -79,14 +90,14 @@ onair-engine --llm openai --llm-base-url http://localhost:11434/v1 --llm-model q
 - LLM API 연동 테스트 (2026-10-05): `openai` 어댑터로 코너 4종과 데모 요청 2건을 실제 LLM으로 생성해 Google TTS까지 확인했다.
 
 ```powershell
-$env:ANTHROPIC_API_KEY = "발급받은 키"
+# .env에 ANTHROPIC_API_KEY를 넣은 뒤
 onair-engine --llm claude --max-segments 15 --demo-request "요즘 잠이 안 와요"
 ```
 
 **LLM → TTS → 백엔드 전체 파이프라인** (Redis 서버 필요, 아래 Redis 전송 참고):
 
 ```powershell
-$env:ANTHROPIC_API_KEY = "..."; $env:GOOGLE_TTS_API_KEY = "..."
+# .env에 ANTHROPIC_API_KEY, GOOGLE_TTS_API_KEY를 넣은 뒤
 onair-engine --llm claude --tts google --transport redis --demo-request "요즘 잠이 안 와요"
 ```
 
