@@ -45,6 +45,7 @@ from . import checks
 # [예시] 경고 기준 — 실측 분포를 보고 조정한다
 SIMILARITY_WARN = 0.35  # 같은 방송의 이전 멘트와 3-gram 유사도
 JUDGE_OFF_CHARACTER = 2  # judge 캐릭터 점수가 이 이하면 캐릭터 이탈로 센다 (persona.md 7절)
+FAIL_FAST = 3  # 처음 이만큼이 전부 호출 실패면 설정 오류로 보고 멈춘다
 
 
 @dataclass
@@ -211,6 +212,9 @@ async def _run_steps(profile: StationProfile, scenario: Scenario, corners: dict,
         if expect == "reject" and outcome == "aired":
             rec["flags"].append("거부 누락 — 송출됨")
         records.append(rec)
+        if len(records) == FAIL_FAST and all(r["outcome"] == "fallback" for r in records):
+            # 키·모델 이름 오류면 끝까지 돌아도 대체 대본만 쌓인다
+            raise SystemExit(f"처음 {FAIL_FAST}개 멘트가 모두 LLM 호출 실패 — 평가 중단: {last.error}")
         print(f"  [{profile.dj_name} #{run}] {step:>2} {corner_type:<13} {outcome:<9} "
               f"{(text or last.error or '')[:70]}", flush=True)
     return records
