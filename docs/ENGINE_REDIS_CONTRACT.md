@@ -91,7 +91,7 @@
 |---|---|---|---|
 | `request.arrived` | `{"request_id", "kind": "story"\|"mood", "body", "requester_ref"}` | L0 검사 후 요청 큐 적재. **request_id는 백엔드 발급값을 그대로 쓴다** — 이후 `request.state`가 같은 id로 나간다 | 구현 |
 | `station.closed` | `{"reason": "normal"\|"operator_stop"}` | 진행 중 생성 취소, 계측 플러시 후 인스턴스 종료 | 구현 (`reason`은 아직 미사용) |
-| `station.created` | `{"station_id", "profile": {dj_name, tone, concept, broadcast_minutes}, "policy", "running_order"}` | EngineManager가 StationEngine 기동, ack 캐시 사전 렌더링 | M3 |
+| `station.created` | 3.3절 제안안 — `{"broadcast_minutes", "persona": {...}, "policy"}` | EngineManager가 StationEngine 기동, ack 캐시 사전 렌더링 | M3 — **페이로드 합의 전** |
 | `request.cancelled` | `{"request_id", "reason": "listener"\|"operator"}` | 대기 큐에서 제거, 생성 중이면 결과 폐기 | **미구현 — 신규 합의 항목** |
 | `backpressure` | `{"d_total_ms", "threshold_ms", "severity"}` | 정책 ScheduleContext에 반영 → filler 우선 생성·요청 반영 보류 | 수신만, 무시 (M3) |
 | `state.transition` | `{"segment_id", "state": "MIXING"\|"PUBLISHED"\|"PLAYED", "at"}` | 재배치 가능 집합에서 제거, 계측 기록, 방송 맥락 갱신 | 수신만, 무시 (M3) |
@@ -99,6 +99,76 @@
 `station.created`의 러닝오더·정책 설정은 백엔드가 보낸 값이므로, 백엔드는 그 스테이션의 슬롯 배열과 정책 파라미터를 이미 알고 있다. 하트비트에는 현재 위치만 실린다.
 
 상태 전이를 여러 건 보낼 때 **일괄 전용 이벤트는 두지 않는다.** 스트림에 엔트리를 연달아 `XADD`하면 된다.
+
+### 3.3 `station.created` 페이로드 제안 (엔진 측 초안 — 백엔드 합의 전)
+
+호스트가 방을 만들면 백엔드가 `engine:control`에 넣는 메시지다. 엔진은 이 메시지 하나로 그 방의 DJ를 만들고 방송을 시작한다. envelope은 2장과 같고, `station_id`는 새 방의 ID다. 9장 미결 사항 2번에 대한 제안안이며, 수치는 모두 `[예시]`다.
+
+```json
+{
+  "broadcast_minutes": 60,
+  "persona": {
+    "persona_id": "saebyeok",
+    "dj_name": "새벽",
+    "concept": "심야 스터디 라디오",
+    "tone": "차분하고 따뜻한 존댓말. 말수가 적고 문장이 짧다",
+    "examples": [
+      "새벽 한 시가 넘었네요. 아직 책상 앞에 계신 분들, 어깨 한 번 내려놓고 갈게요.",
+      "오늘 분량을 다 못 끝내도 괜찮아요. 여기까지 온 것도 꽤 멀리 온 거예요.",
+      "졸리면 물 한 잔이요. 저도 지금 한 잔 따라 놨어요."
+    ],
+    "forbidden": ["큰 소리로 감탄하거나 텐션을 올리기", "공부를 더 하라고 다그치기"],
+    "signature_phrases": ["천천히 가요"],
+    "voice": "ko-KR-Chirp3-HD-Aoede"
+  },
+  "policy": "naive_fifo"
+}
+```
+
+로컬에서 백엔드 대신 넣어 보기 (엔진 구독은 M3 구현 후):
+
+```powershell
+wsl redis-cli XADD engine:control '*' type station.created contract_version 1 event_id evt_demo2 station_id st_8f2a at 1789500000 payload '{"broadcast_minutes":60,"persona":{"dj_name":"새벽","concept":"심야 스터디 라디오","tone":"차분하고 따뜻한 존댓말"}}'
+```
+
+#### 필드
+
+| 필드 | 타입 | 필수 | 없을 때 | 제한 `[예시]` | 엔진이 쓰는 곳 |
+|---|---|---|---|---|---|
+| `broadcast_minutes` | 정수 | O | — | 10~720 | 방송 종료 시각 |
+| `persona.persona_id` | 문자열 | | `null` | 64자 | 어떤 템플릿에서 만든 DJ인지 계측에 기록만 한다 |
+| `persona.dj_name` | 문자열 | O | — | 1~20자 | 시스템 프롬프트 정체성 |
+| `persona.concept` | 문자열 | O | — | 1~60자 | 시스템 프롬프트 정체성 |
+| `persona.tone` | 문자열 | O | — | 1~100자 | 시스템 프롬프트 말투 |
+| `persona.examples` | 문자열 배열 | | `[]` | 0~5개, 각 150자 (3개 이상 권장) | 말투 예시 — 말투를 가장 강하게 고정한다 |
+| `persona.forbidden` | 문자열 배열 | | `[]` | 0~10개, 각 50자 | 시스템 프롬프트 금지 사항 |
+| `persona.signature_phrases` | 문자열 배열 | | `[]` | 0~3개, 각 30자 | 입버릇 (가끔만 쓰도록 지시) |
+| `persona.voice` | 문자열 | | 엔진 기본 보이스 | 엔진 TTS 제공자의 보이스 ID | TTS 어댑터, ack 사전 렌더링 |
+| `policy` | 문자열 | | `naive_fifo` | 현재 `naive_fifo`만 | 편성 정책 선택 |
+
+- `persona`의 6개 말투 필드는 엔진에 구현돼 있다 (`StationProfile`, `config/personas/*.yaml`과 같은 이름). `voice`는 아직 엔진 전체 설정이라 방별 적용은 M3에서 구현한다 ([persona.md](persona.md) 9.3절).
+- `running_order`는 v1에서 넣지 않는다. 지금 편성은 엔진 고정값이고, 정책 A/B/C가 확정되면(기획서 8장) 그때 필드를 추가하고 `contract_version`을 올린다.
+- 행동 층(`behavior` — 요청 반영 시점·빈도, [persona.md](persona.md) 2절)도 같은 이유로 v1에서 뺀다.
+
+#### 엔진 측 제안 (결정이 필요한 5가지)
+
+1. **persona는 ID가 아니라 본문을 싣는다.** 엔진이 persona 저장소를 몰라도 되고, 받은 페이로드를 그대로 계측 DB에 남기면 그것이 방송 시점의 사본(`persona_snapshot`, [persona.md](persona.md) 9.4절)이 된다. `persona_id`는 출처 기록용으로 함께 보낸다.
+2. **필드 이름은 엔진 코드 기준(`dj_name` 등)으로 맞춘다.** 엔진 구현·테스트가 이 이름을 쓰고, [persona.md](persona.md) 2절의 `name`은 예시 표기였다. 백엔드에는 아직 방 모델이 없다.
+3. **`broadcast_minutes`는 persona 밖에 둔다.** 기존 초안은 `profile` 안에 있었지만, 방송 시간은 DJ가 아니라 방의 속성이다. 같은 persona를 여러 방이 다른 시간으로 쓸 수 있다.
+4. **목록은 JSON 배열로 보낸다.** 문자열 하나로 보내면 거부한다 (한 글자씩 예시로 쪼개지는 사고 방지). 시각 형식은 envelope `at` 규칙(9장 미결 1)을 따른다.
+5. **엔진은 시작 결과를 알린다 (신규 이벤트 제안).** 둘 다 `engine:{station_id}:out`으로 나간다.
+
+   | type | payload | 의미 |
+   |---|---|---|
+   | `station.started` | `{}` | 검증 통과, ack 사전 렌더링 완료 — 첫 세그먼트가 곧 나온다 |
+   | `station.rejected` | `{"reason": "invalid_payload"\|"unknown_voice"\|"llm_unavailable", "detail"}` | 방송을 시작하지 않았다. `detail`은 사람이 읽는 원인 (예: `persona.examples: 6개 — 최대 5개`) |
+
+#### 백엔드에 확인할 것
+
+- 방 생성 화면에서 위 필드를 **누가 채우는가** — 호스트가 필드별로 입력, 프리셋 선택, 자유 문장을 LLM이 변환([persona.md](persona.md) 3절) 중 무엇인가. 프리셋을 쓴다면 엔진의 3종(`saebyeok`, `haessal`, `dodo`)을 기본 템플릿으로 노출할 수 있다.
+- **호스트 입력의 내용 검사** — `examples`·`forbidden`은 호스트가 쓴 글이고 시스템 프롬프트에 들어간다. 인젝션은 데이터 블록으로 대비돼 있지만, 욕설·개인정보 검사는 지금 아무 데서도 하지 않는다. 방 생성 시 백엔드가 할지, 엔진이 받을 때 L0로 할지 정한다.
+- 위 길이 제한 값과 필수 여부.
+- `voice` 목록을 프론트에 어떻게 보여줄지 — 엔진 TTS 제공자(확인 3)가 정해져야 목록이 확정된다.
 
 ## 4. 전달 보장
 
@@ -218,7 +288,7 @@ wsl redis-cli XADD engine:st_local_dev:in '*' type request.arrived contract_vers
 ## 9. 미결 사항 (백엔드와 합의 필요)
 
 1. `at`·`created_at` 형식 — 현재 Unix 초(float), 설계 문서 5.1 예시는 ISO 8601
-2. `engine:control`의 `station.created` 페이로드 — StationProfile 필드, 정책 설정, 러닝오더 파라미터
+2. `engine:control`의 `station.created` 페이로드 — **엔진 측 제안안: 3.3절** (persona 본문, 필드·제한, 시작 결과 이벤트 `station.started`/`station.rejected`)
 3. 백엔드 소비 그룹 이름과 생성 주체
 4. Redis 인증 — 비밀번호/ACL은 `ONAIR_REDIS_URL` 환경변수(`redis://:pw@host:6379/0`)로 주입
 5. `engine.health` 주기(제안 5초)와 필드 — 운영자 콘솔 화면에 실제로 필요한 값 확인
