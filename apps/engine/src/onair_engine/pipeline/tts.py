@@ -102,7 +102,7 @@ class GoogleTtsClient:
                  speaking_rate: float = 1.0, endpoint: str = ENDPOINT, timeout: float = 15.0):
         api_key = api_key or os.environ.get("GOOGLE_TTS_API_KEY")
         if not api_key:  # 방송 도중이 아니라 기동 시점에 실패시킨다
-            raise RuntimeError("google TTS를 쓰려면 GOOGLE_TTS_API_KEY 환경변수가 필요합니다")
+            raise RuntimeError("google TTS를 쓰려면 GOOGLE_TTS_API_KEY가 필요합니다 (apps/engine/.env 또는 환경변수)")
         self._api_key = api_key
         self.voice = voice
         self.language_code = "-".join(voice.split("-")[:2])  # ko-KR-Chirp3-HD-Aoede -> ko-KR

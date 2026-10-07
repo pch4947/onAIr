@@ -173,7 +173,7 @@ def _post_json(url: str, body: dict, headers: dict[str, str], timeout: float,
 def _require_key(api_key: str | None, env: str, kind: str) -> str:
     api_key = api_key or os.environ.get(env)
     if not api_key:  # 방송 도중이 아니라 기동 시점에 실패시킨다
-        raise RuntimeError(f"{kind} LLM을 쓰려면 {env} 환경변수가 필요합니다")
+        raise RuntimeError(f"{kind} LLM을 쓰려면 {env}가 필요합니다 (apps/engine/.env 또는 환경변수)")
     return api_key
 
 
