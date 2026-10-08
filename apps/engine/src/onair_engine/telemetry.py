@@ -32,6 +32,52 @@ def _dump(obj) -> str:
     return json.dumps(dataclasses.asdict(obj), ensure_ascii=False, default=str)
 
 
+def _read(path: Path, sql: str, params: tuple) -> list[tuple]:
+    """읽기 전용 연결로 조회. 아직 아무 방송도 기록하지 않아 테이블이 없으면 빈 결과다."""
+    try:
+        db = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+    except sqlite3.OperationalError:
+        return []
+    try:
+        return db.execute(sql, params).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc):
+            return []
+        raise
+    finally:
+        db.close()
+
+
+def read_decisions(sqlite_path: str | Path, station_id: str, after: int = 0,
+                   limit: int = 100) -> list[dict]:
+    """결정 로그 페이지 — rowid가 커서다 (계약 6.1절). 쓰기 연결과 별도로 읽는다."""
+    path = Path(sqlite_path)
+    if not path.exists():
+        return []
+    rows = _read(path, "SELECT rowid, at, context_json, decision_json FROM decision_log "
+                       "WHERE station_id = ? AND rowid > ? ORDER BY rowid LIMIT ?",
+                 (station_id, after, limit))
+    return [{"id": rowid, "at": at, "context": json.loads(ctx), "decision": json.loads(dec)}
+            for rowid, at, ctx, dec in rows]
+
+
+def recent_latency_p95_ms(sqlite_path: str | Path, window_sec: float = 600.0) -> int | None:
+    """최근 window_sec 동안 끝난 생성 작업의 LLM→L2→TTS 합계 지연 P95. 기록이 없으면 None."""
+    path = Path(sqlite_path)
+    if not path.exists():
+        return None
+    since = time.time() - window_sec
+    rows = _read(path, "SELECT SUM(finished_at - started_at) FROM generation_log "
+                       "WHERE stage IN ('llm', 'l2', 'tts') AND result = 'ok' "
+                       "GROUP BY job_id HAVING MAX(finished_at) >= ?",
+                 (since,))
+    totals = sorted(r[0] for r in rows if r[0] is not None)
+    if not totals:
+        return None
+    rank = max(0, -(-95 * len(totals) // 100) - 1)  # nearest-rank
+    return round(totals[rank] * 1000)
+
+
 class Telemetry:
     def __init__(self, sqlite_path: str | Path, station_id: str):
         path = Path(sqlite_path)

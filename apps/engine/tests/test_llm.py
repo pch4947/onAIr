@@ -321,3 +321,26 @@ def test_openai_requires_model_and_official_key(monkeypatch):
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
         make_llm("openai", model="some-model")
     make_llm("openai", model="qwen3:8b", base_url="http://localhost:11434/v1")  # 키 없이 OK
+
+
+def test_complete_returns_raw_text_without_cleaning():
+    raw = '```json\n{"drafts": [{"dj_name": "새벽", "examples": ["\\"따옴표\\" 그대로"]}]}\n```'
+    base, received, server = _serve(200, _openai_reply(raw))
+    try:
+        client = OpenAiLlmClient("m", base_url=base + "/v1")
+        text = asyncio.run(client.complete(PROMPT, max_tokens=4000))
+    finally:
+        server.shutdown()
+    assert text == raw  # 대본 정리(clean_script)를 거치지 않는다
+    assert received[0]["json"]["max_tokens"] == 4000
+
+
+def test_complete_rejects_truncated_or_refused_output():
+    for reply, match in ((_openai_reply('{"drafts": [', finish_reason="length"), "잘렸"),
+                         (_openai_reply(None, refusal="no"), "거부")):
+        base, _, server = _serve(200, reply)
+        try:
+            with pytest.raises(LlmError, match=match):
+                asyncio.run(OpenAiLlmClient("m", base_url=base).complete(PROMPT, max_tokens=100))
+        finally:
+            server.shutdown()

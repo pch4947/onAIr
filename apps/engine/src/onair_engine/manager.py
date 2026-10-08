@@ -74,6 +74,11 @@ class EngineManager:
     def stations(self) -> dict[str, StationEngine]:
         return dict(self._stations)
 
+    @property
+    def checks_voice(self) -> bool:
+        """보이스 목록을 검사하는가 — cartesia면 예, 로컬 테스트용 제공자면 아니오."""
+        return self._voice_catalog is not None
+
     def _make_transport(self, station_id: str) -> Transport:
         return make_transport(
             self.settings.transport_kind,
@@ -162,7 +167,7 @@ class EngineManager:
         raw = event.get("payload") or {}
         try:
             created = StationCreated.model_validate(raw)
-            if not await self._voice_known(created.persona.voice):
+            if not await self.voice_known(created.persona.voice):
                 raise StationRejected(
                     "unknown_voice",
                     f"persona.voice: {created.persona.voice} — {self.settings.tts} 보이스 목록에 없음")
@@ -174,7 +179,7 @@ class EngineManager:
         else:
             logger.info("STATION_STARTING %s persona=%s", station_id, created.persona.persona_id)
 
-    async def _voice_known(self, voice: str) -> bool:
+    async def voice_known(self, voice: str) -> bool:
         """보이스 목록은 한 번 받아 두고, 모르는 ID가 오면 한 번만 다시 받는다 (새로 추가된 보이스)."""
         if self._voice_catalog is None:
             return True

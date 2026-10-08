@@ -14,6 +14,8 @@ SOURCES = "수집 소재"
 TRACK = "곡 정보"
 RECENT = "직전 멘트"
 EXAMPLES = "말투 예시"  # persona 예시 멘트 — 호스트 입력이므로 데이터로 넣는다 (F-25)
+HOST_NOTE = "호스트 메모"  # 방 생성 폼의 자유 문장 — persona 초안 생성 프롬프트에만 들어간다
+GENRES = "선곡 취향"  # 방 생성 폼의 장르 — 고정 목록이 정해지기 전까지는 자유 문자열이다
 
 # 공통 시스템 프롬프트에 들어간다 (corners/base.py system_prompt)
 DATA_RULES = (

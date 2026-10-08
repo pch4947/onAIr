@@ -58,6 +58,14 @@ class Scheduler:
         self._backend_report: tuple[float, float, int] | None = None
         self._backpressure = False
 
+    @property
+    def inflight(self) -> int:
+        return self._inflight
+
+    @property
+    def pending_count(self) -> int:
+        return len(self._pending)
+
     def enqueue_request(self, req: ListenerRequest) -> None:
         req.state = RequestState.QUEUED
         self.telemetry.log_request_state(req.request_id, req.state)

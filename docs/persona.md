@@ -19,7 +19,7 @@
 | 공통 시스템 프롬프트 | **부분 구현** | [corners/base.py](../apps/engine/src/onair_engine/corners/base.py) `system_prompt()` — 4절 순서로 정체성·말투·입버릇·금지 사항·말하기 원칙(`RADIO_CRAFT`)·출력 규칙·L1 지시 + few-shot 예시(데이터 블록). 시간 예산 블록 없음 |
 | 편성 관리자 / 정책 | **부분 구현** | [scheduler/scheduler.py](../apps/engine/src/onair_engine/scheduler/scheduler.py) `Scheduler`, [policies/naive_fifo.py](../apps/engine/src/onair_engine/scheduler/policies/naive_fifo.py) `NaiveFifoPolicy` 하나뿐. 정책 A/B/C는 TODO |
 | 행동 층 스키마 (`behavior`) | **미구현(설계)** | — |
-| 페르소나 생성 흐름 (폼 → LLM 초안) | **미구현(설계 확정)** | 3절. 엔진 REST `POST /v1/personas/drafts`·`check` ([ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md) 6.2절) |
+| 페르소나 생성 흐름 (폼 → LLM 초안) | **구현됨** | 3절. [personas.py](../apps/engine/src/onair_engine/personas.py) `PersonaDrafter` — `style` → 기본 말투(규칙) + LLM 초안(JSON, `LlmClient.complete`) → 스키마·L2·말투 이탈 검사, 실패 초안만 최대 2회 재생성. 엔진 REST `POST /v1/personas/drafts`·`check` ([ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md) 6.2절, #64) |
 | 페르소나 저장소 | **백엔드 담당 (결정)** | 백엔드 신규 DB (2.4절). 엔진은 저장소를 갖지 않는다 |
 | 스키마 검증 | **구현됨** | [packages/onair_schema](../packages/onair_schema/) — `Persona`·`Style`·`Track`·`StationCreated` (2.3절, #55). `BehaviorSpec`은 정책 A/B/C 확정 후. 고정 장르 목록은 미정이라 `music_taste`는 길이만 검사 |
 | 청취자 채팅의 데이터 블록 분리 | **구현됨** | [prompt_data.py](../apps/engine/src/onair_engine/prompt_data.py) `data_block()` — 사연·RSS·곡 정보·직전 멘트·persona 예시 (#38) |

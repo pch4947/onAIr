@@ -21,6 +21,7 @@ Tone = text(100)
 Example = text(150)
 Signature = text(30)
 Forbidden = text(50)
+HostNote = text(100)
 
 
 class Style(BaseModel):
@@ -52,3 +53,25 @@ class Persona(BaseModel):
     examples: list[Example] = Field(min_length=3, max_length=5)
     signature_phrases: list[Signature] = Field(default_factory=list, max_length=3)
     forbidden: list[Forbidden] = Field(default_factory=list, max_length=10)
+
+
+class PersonaForm(BaseModel):
+    """방 생성 폼 — 호스트가 고르는 제한된 선택지 (persona.md 3절, 계약 6.2절).
+
+    자유 문장은 host_note 하나뿐이다. 엔진은 이 폼으로 persona 초안을 만든다.
+    첫 노래·방송 시간·주제는 방 정보라 여기 넣지 않는다 (station.created에 직접).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    formality: Literal["polite", "casual"]
+    energy: Literal["low", "mid", "high"]
+    humor: Literal["rare", "some", "often"]
+    music_taste: list[Genre] = Field(default_factory=list, max_length=3)
+    voice: Id64
+    dj_name: DjName | None = None  # 비우면 엔진이 초안마다 이름을 제안한다
+    host_note: HostNote | None = None  # 원하는 DJ를 적는 한두 줄 — 엔진은 L0 검사 후 데이터로만 쓴다
+
+    @property
+    def style(self) -> Style:
+        return Style(formality=self.formality, energy=self.energy, humor=self.humor)

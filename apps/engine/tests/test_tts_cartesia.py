@@ -125,9 +125,13 @@ def test_missing_voice_fails_at_startup(monkeypatch):
 
 
 def test_list_voices_follows_pages():
-    page1 = {"data": [{"id": "v1", "name": "지수", "gender": "feminine", "description": "차분함"}],
+    page1 = {"data": [{"id": "v1", "name": "지수", "gender": "feminine", "description": "차분함",
+                       "accents": [{"locale": "ko-KR", "is_native": True}]}],
              "has_more": True, "next_page": "v1"}
-    page2 = {"data": [{"id": "v2", "name": "민호"}], "has_more": False, "next_page": None}
+    # 영어 원어민이 한국어도 말하는 다국어 보이스 — native가 아니다
+    page2 = {"data": [{"id": "v2", "name": "Daniel", "accents": [
+        {"locale": "en-US", "is_native": True}, {"locale": "ko-KR", "is_native": False}]}],
+             "has_more": False, "next_page": None}
     base_url, received, server = _serve([(200, json.dumps(page1).encode()),
                                          (200, json.dumps(page2).encode())])
     try:
@@ -136,8 +140,8 @@ def test_list_voices_follows_pages():
         server.shutdown()
 
     assert voices == [
-        {"id": "v1", "name": "지수", "gender": "feminine", "description": "차분함"},
-        {"id": "v2", "name": "민호", "gender": None, "description": ""},
+        {"id": "v1", "name": "지수", "gender": "feminine", "description": "차분함", "native": True},
+        {"id": "v2", "name": "Daniel", "gender": None, "description": "", "native": False},
     ]
     first, second = (parse_qs(urlparse(r["path"]).query) for r in received)
     assert first == {"language": ["ko"], "limit": ["100"]}

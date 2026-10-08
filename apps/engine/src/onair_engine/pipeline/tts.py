@@ -220,11 +220,21 @@ class CartesiaTtsClient:
         return duration_ms
 
 
+def _speaks_natively(voice: dict, language: str) -> bool:
+    accents = voice.get("accents") or []
+    if accents:
+        return any(a.get("is_native") and str(a.get("locale", "")).lower().startswith(language)
+                   for a in accents)
+    return voice.get("language") == language  # accents가 없는 응답 — 폐기 예정 필드로 대신 판단
+
+
 def list_cartesia_voices(language: str = "ko", *, api_key: str | None = None,
                          base_url: str = CARTESIA_API, timeout: float = 15.0) -> list[dict]:
-    """해당 언어를 말하는 보이스 전체 — [{"id", "name", "gender", "description"}].
+    """해당 언어를 말하는 보이스 전체 — [{"id", "name", "gender", "description", "native"}].
 
     방 생성 폼의 보이스 목록과 persona voice 검증의 원천이다. 페이지를 끝까지 넘긴다.
+    language 필터는 그 언어를 "말할 수 있는" 다국어 보이스(영어 원어민 등)까지 돌려준다.
+    native는 그 언어가 원어민 억양인지다 — accents에 (ko-KR, is_native=True)가 있는 보이스.
     """
     api_key = _cartesia_key(api_key)
     voices: list[dict] = []
@@ -236,7 +246,8 @@ def list_cartesia_voices(language: str = "ko", *, api_key: str | None = None,
         url = f"{base_url.rstrip('/')}/voices?{urllib.parse.urlencode(query)}"
         page = json.loads(_cartesia_request(url, api_key, timeout))
         voices += [{"id": v["id"], "name": v["name"], "gender": v.get("gender"),
-                    "description": v.get("description", "")} for v in page["data"]]
+                    "description": v.get("description", ""),
+                    "native": _speaks_natively(v, language)} for v in page["data"]]
         cursor = page.get("next_page")
         if not page.get("has_more") or not cursor:
             return voices
