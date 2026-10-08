@@ -340,6 +340,7 @@ DJ가 실제 곡의 끝부분·인트로 위에 겹쳐 말하고 그동안 곡 �
 |---|---|---|---|
 | `GET /health` | 프로세스 생존 | 하트비트가 끊긴 것이 "엔진 다운"인지 "Redis 문제"인지 가름 | 구현 — `{"ok": true, "stations": n}` |
 | `GET /v1/engine/status` | 전역 상태 — 기동 스테이션 수, 동시 생성 여유, 지연 P95 | 하트비트는 스테이션 단위라 전역 합계가 없음 | 구현 — 스테이션별 진행 중 생성·대기 요청 수, 최근 10분 생성 지연(LLM+L2+TTS) P95. **전역** 동시 생성 상한은 아직 없어 방당 상한(`max_concurrent_per_station`)을 보낸다 |
+| `GET /v1/voices?native_only=true` | 방 생성 폼의 보이스 선택지 — `{"provider", "voices": [{"id", "name", "gender", "description", "native"}]}`. 기본은 한국어 원어민 보이스만, `false`면 한국어를 말하는 다국어 보이스도 | 보이스 목록은 TTS 제공자에 달려 있고 엔진만 키를 가진다 | 구현 (#64) — 10분 캐시, 더미 TTS면 개발용 보이스 2개 |
 | `GET /v1/stations/{stationId}/decisions` | 결정 로그 (생략 결정 포함) | 초당 1.5건 규모라 스트림에 실을 수 없음. 정책 비교 실험의 핵심 데이터 | 구현 — `?after={id}&limit={1~500}` → `{"decisions": [{"id", "at", "context", "decision"}], "next"}`. `next`가 `null`이면 끝. 끝난 방송도 조회된다 |
 
 ### 6.2 persona 초안 생성 (POST — 결정 2026-10-08로 추가)

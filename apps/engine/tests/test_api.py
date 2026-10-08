@@ -224,3 +224,47 @@ def test_status_counts_running_stations(tmp_path):
     # 결정 로그 DB는 TestClient와 같은 파일을 본다 — 쓰기 연결이 열려 있어도 읽기 전용 연결로 읽는다
     sqlite3.connect(settings.sqlite_path).close()
     assert client.get("/v1/engine/status", headers=AUTH).json()["stations"] == []
+
+
+VOICE_LIST = [
+    {"id": "v-ko", "name": "Yeji", "gender": "feminine", "description": "", "native": True},
+    {"id": "v-en", "name": "Daniel", "gender": "masculine", "description": "", "native": False},
+]
+
+
+def _voice_client(tmp_path, lister):
+    settings = EngineSettings(sqlite_path=tmp_path / "m.sqlite", safety_rules_path=RULES,
+                              tts="cartesia")
+    manager = EngineManager(settings, voice_catalog=lambda: [VOICE])
+    drafter = PersonaDrafter(lambda: DummyLlmClient(delay_sec=0), SafetyChecker(RULES))
+    return TestClient(create_app(manager, drafter, settings, TOKEN, voice_lister=lister))
+
+
+def test_voices_are_native_korean_by_default_and_cached(tmp_path):
+    calls = []
+
+    def lister():
+        calls.append(1)
+        return VOICE_LIST
+
+    client = _voice_client(tmp_path, lister)
+    native = client.get("/v1/voices", headers=AUTH).json()
+    assert native == {"provider": "cartesia", "voices": [VOICE_LIST[0]]}
+    every = client.get("/v1/voices?native_only=false", headers=AUTH).json()
+    assert [v["name"] for v in every["voices"]] == ["Yeji", "Daniel"]
+    assert len(calls) == 1  # 폼을 열 때마다 제공자를 부르지 않는다
+    assert client.get("/v1/voices").status_code == 401
+
+
+def test_voice_list_failure_is_503(tmp_path):
+    def lister():
+        raise RuntimeError("cartesia TTS를 쓰려면 CARTESIA_API_KEY가 필요합니다")
+
+    res = _voice_client(tmp_path, lister).get("/v1/voices", headers=AUTH)
+    assert res.status_code == 503 and "CARTESIA_API_KEY" in res.json()["detail"]
+
+
+def test_dummy_tts_offers_dev_voices(tmp_path):
+    client, _ = _client(tmp_path)  # tts 기본값 dummy
+    body = client.get("/v1/voices", headers=AUTH).json()
+    assert body["provider"] == "dummy" and len(body["voices"]) == 2

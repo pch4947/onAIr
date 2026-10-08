@@ -143,7 +143,8 @@ def cli(argv: list[str] | None = None) -> None:
     parser.add_argument("--tts", choices=["dummy", "google", "edge", "cartesia"], default=None,
                         help="설정 파일의 pipeline.tts를 덮어쓴다")
     parser.add_argument("--list-voices", action="store_true",
-                        help="Cartesia 한국어 보이스 목록(ID·이름·성별)을 출력하고 종료 — pipeline.tts_voice에 쓸 ID")
+                        help="Cartesia 한국어 보이스 목록(ID·이름·성별·원어민 여부)을 출력하고 종료 — "
+                             "pipeline.tts_voice에 쓸 ID")
     parser.add_argument("--transport", choices=["stdout", "http", "redis"], default=None,
                         help="설정 파일의 transport.kind 덮어쓰기 (관통 테스트용)")
     parser.add_argument("--backend-url", default=None, metavar="URL",
@@ -158,7 +159,8 @@ def cli(argv: list[str] | None = None) -> None:
     load_env()
     if args.list_voices:
         for v in list_cartesia_voices():
-            print(f"{v['id']}\t{v['name']}\t{v['gender'] or '-'}")
+            native = "native" if v["native"] else "multilingual"
+            print(f"{v['id']}\t{v['name']}\t{v['gender'] or '-'}\t{native}")
         return
 
     # 생성된 대본을 SCRIPT 라인으로 보여준다 (SUBMIT 페이로드에는 대본 텍스트가 없다)

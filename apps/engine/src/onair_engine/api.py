@@ -8,6 +8,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
+import time
+from collections.abc import Callable
 from typing import Annotated
 
 try:
@@ -22,6 +24,7 @@ from .engine import EngineSettings, StationRejected
 from .manager import EngineManager
 from .personas import DraftsFailed, FormRejected, PersonaDrafter
 from .pipeline.llm import LlmError
+from .pipeline.tts import list_cartesia_voices
 from .telemetry import read_decisions, recent_latency_p95_ms
 
 logger = logging.getLogger(__name__)
@@ -36,12 +39,32 @@ class CheckRequest(BaseModel):
     persona: dict  # 스키마 검증은 직접 해서 계약 형식({"errors": [{"field", "reason"}]})으로 돌려준다
 
 
+# 더미 TTS(무음)일 때의 보이스 목록 — 방 생성 화면을 API 키 없이 개발할 수 있게. 보이스 검사도 하지 않는다
+DUMMY_VOICES = [
+    {"id": "dummy-feminine", "name": "더미 여성", "gender": "feminine",
+     "description": "개발용 — 무음", "native": True},
+    {"id": "dummy-masculine", "name": "더미 남성", "gender": "masculine",
+     "description": "개발용 — 무음", "native": True},
+]
+VOICE_CACHE_SEC = 600.0  # 보이스 목록은 거의 안 바뀐다 — 폼을 열 때마다 제공자를 부르지 않는다
+
+
+def default_voice_lister(tts: str) -> Callable[[], list[dict]]:
+    if tts == "cartesia":
+        return list_cartesia_voices
+    if tts == "dummy":
+        return lambda: DUMMY_VOICES
+    return list  # 빈 목록 — google·edge는 청취 테스트용이라 폼에서 고르지 않는다
+
+
 def _errors(status: int, errors: list[dict]) -> JSONResponse:
     return JSONResponse(status_code=status, content={"errors": errors})
 
 
 def create_app(manager: EngineManager, drafter: PersonaDrafter, settings: EngineSettings,
-               token: str | None) -> FastAPI:
+               token: str | None, voice_lister: Callable[[], list[dict]] | None = None) -> FastAPI:
+    voice_lister = voice_lister or default_voice_lister(settings.tts)
+    voice_cache: dict = {}  # {"at": 받은 시각, "voices": 목록}
     app = FastAPI(title="onAIr engine", version="v1", docs_url="/v1/docs",
                   openapi_url="/v1/openapi.json")
 
@@ -62,6 +85,25 @@ def create_app(manager: EngineManager, drafter: PersonaDrafter, settings: Engine
     @app.get("/health")
     async def health():
         return {"ok": True, "stations": len(manager.stations)}
+
+    @app.get("/v1/voices", dependencies=v1)
+    async def voices(native_only: bool = True):
+        """방 생성 폼의 보이스 선택지 — 엔진 TTS 제공자의 한국어 보이스.
+
+        native_only(기본): 한국어 원어민 보이스만. false면 한국어를 말할 수 있는 다국어 보이스도.
+        """
+        if not voice_cache or time.monotonic() - voice_cache["at"] > VOICE_CACHE_SEC:
+            try:
+                listed = await asyncio.to_thread(voice_lister)
+            # RuntimeError: 키 누락·제공자 HTTP 오류, OSError: 연결 실패, ValueError: 응답 해석 불가
+            except (RuntimeError, OSError, ValueError) as exc:
+                logger.warning("VOICE_LIST_FAILED %s", exc)
+                raise HTTPException(503, f"보이스 목록 조회 실패: {exc}"[:300]) from None
+            voice_cache.update(at=time.monotonic(), voices=listed)
+        listed = voice_cache["voices"]
+        if native_only:
+            listed = [v for v in listed if v.get("native", True)]
+        return {"provider": settings.tts, "voices": listed}
 
     @app.get("/v1/engine/status", dependencies=v1)
     async def status():

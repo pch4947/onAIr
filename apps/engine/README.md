@@ -195,6 +195,7 @@ onair-engine --api --llm openai --llm-model gpt-6-luna   # 실제 LLM으로 초�
 |---|---|
 | `POST /v1/personas/drafts` | 폼(`PersonaForm`) → persona 초안 N개. 기본 말투는 폼 선택지에서 규칙으로, 이름·컨셉·예시 멘트 등은 LLM이 만든다. 스키마·안전(L2)·말투 이탈 검사에서 떨어진 초안만 최대 2회 다시 만든다 |
 | `POST /v1/personas/check` | 호스트가 고친 persona — 스키마·L0·보이스 검사. 실패하면 `422 {"errors": [{"field", "reason"}]}` |
+| `GET /v1/voices` | 폼의 보이스 선택지 — Cartesia 한국어 원어민 보이스(실측 16개). `?native_only=false`면 다국어 보이스 포함 |
 | `GET /v1/engine/status` | 떠 있는 방, 진행 중 생성 수, 최근 10분 생성 지연 P95 |
 | `GET /v1/stations/{id}/decisions?after=&limit=` | 결정 로그 페이지 (`next`를 다음 `after`로) |
 | `GET /health` | 프로세스 생존 (인증 없음) |
