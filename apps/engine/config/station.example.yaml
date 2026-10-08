@@ -17,10 +17,10 @@ pipeline:
                                 # gemini 기본값: gemini-2.5-flash. openai는 필수
   # llm_base_url: https://dashscope-intl.aliyuncs.com/compatible-mode/v1  # openai 호환 서버
   # llm_reasoning_effort: low    # openai 추론 모델의 추론량 — 낮을수록 빠르다
-  tts: dummy                  # dummy(무음 wav) | google(Cloud TTS, GOOGLE_TTS_API_KEY 필요)
-                              # | edge(청취 테스트용, pip install -e ".[tts]")
-  # tts_voice: ko-KR-Chirp3-HD-Aoede  # google 기본값. 남성: ko-KR-Chirp3-HD-Charon
-                                      # edge 기본값: ko-KR-SunHiNeural
+  tts: dummy                  # dummy(무음 wav) | cartesia(팀 결정 운영 TTS, CARTESIA_API_KEY 필요)
+                              # | google(Cloud TTS, GOOGLE_TTS_API_KEY) | edge(청취 테스트용, pip install -e ".[tts]")
+  # tts_voice: <Cartesia 보이스 ID>   # cartesia는 필수 — 목록: onair-engine --list-voices
+                                      # google 기본값: ko-KR-Chirp3-HD-Aoede, edge 기본값: ko-KR-SunHiNeural
   tts_cache_dir: var/tts_cache  # 같은 문장 재합성 방지 캐시 — 엔진 전용, audio_dir 밖에 둔다
   max_concurrent_generations: 2
   target_buffer_sec: 30
