@@ -3,14 +3,12 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AuthBrandPanel } from '@/routes/auth/AuthBrandPanel'
+import { signup } from '@/shared/api'
 
 const fieldLabelClass = 'text-[13px] font-medium text-label'
 const textInputClass =
   'h-10 w-full rounded-lg border border-field-border bg-field-bg px-3.5 text-[13px] text-text placeholder:text-field-placeholder'
 const errorTextClass = 'block text-xs text-danger'
-
-// 실제 서버 DB가 없어서 이름 중복은 이 목록으로만 시뮬레이션합니다.
-const MOCK_TAKEN_NAMES = ['사용자', 'admin', 'onAIr', '관리자']
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const PASSWORD_PATTERN = /^(?=.*[A-Za-z])(?=.*\d).{8,}$/
@@ -36,8 +34,6 @@ function validateSignup(
     errors.name = '이름을 입력해주세요'
   } else if (trimmedName.length < 2) {
     errors.name = '이름은 2자 이상이어야 합니다'
-  } else if (MOCK_TAKEN_NAMES.includes(trimmedName)) {
-    errors.name = '이미 사용 중인 이름입니다'
   }
 
   if (!trimmedEmail) {
@@ -68,13 +64,30 @@ export function SignupPage() {
   const [password, setPassword] = useState('')
   const [passwordConfirm, setPasswordConfirm] = useState('')
   const [errors, setErrors] = useState<SignupErrors>({})
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState('')
 
-  const handleSubmit = (event: React.FormEvent) => {
+  const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
     const nextErrors = validateSignup(name, email, password, passwordConfirm)
     setErrors(nextErrors)
-    if (Object.keys(nextErrors).length === 0) {
-      navigate('/')
+    if (Object.keys(nextErrors).length > 0) return
+
+    setSubmitError('')
+    setIsSubmitting(true)
+    try {
+      await signup(email.trim(), password, name.trim())
+      navigate('/login', { state: { signupEmail: email.trim() } })
+    } catch (error) {
+      if (error instanceof Error && error.message === 'EMAIL_TAKEN') {
+        setErrors((prev) => ({ ...prev, email: '이미 가입된 이메일입니다' }))
+      } else if (error instanceof Error && error.message === 'NAME_TAKEN') {
+        setErrors((prev) => ({ ...prev, name: '이미 사용 중인 이름입니다' }))
+      } else {
+        setSubmitError('회원가입에 실패했어요, 잠시 후 다시 시도해주세요')
+      }
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
@@ -95,7 +108,7 @@ export function SignupPage() {
               placeholder="공백 제외 2글자 이상"
               className={textInputClass}
             />
-            <span className={errorTextClass}>{errors.name || ' '}</span>
+            <span className={errorTextClass}>{errors.name || ' '}</span>
           </label>
 
           <label className="flex flex-col gap-1.5">
@@ -107,7 +120,7 @@ export function SignupPage() {
               placeholder="you@example.com"
               className={textInputClass}
             />
-            <span className={errorTextClass}>{errors.email || ' '}</span>
+            <span className={errorTextClass}>{errors.email || ' '}</span>
           </label>
 
           <label className="flex flex-col gap-1.5">
@@ -119,7 +132,7 @@ export function SignupPage() {
               placeholder="8자 이상 입력하세요"
               className={textInputClass}
             />
-            <span className={errorTextClass}>{errors.password || ' '}</span>
+            <span className={errorTextClass}>{errors.password || ' '}</span>
           </label>
 
           <label className="flex flex-col gap-1.5">
@@ -131,14 +144,17 @@ export function SignupPage() {
               placeholder="비밀번호를 다시 입력하세요"
               className={textInputClass}
             />
-            <span className={errorTextClass}>{errors.passwordConfirm || ' '}</span>
+            <span className={errorTextClass}>{errors.passwordConfirm || ' '}</span>
           </label>
+
+          {submitError && <p className="text-xs text-danger">{submitError}</p>}
 
           <button
             type="submit"
-            className="mt-3 rounded-md bg-primary py-3 text-sm font-semibold text-white"
+            disabled={isSubmitting}
+            className="mt-3 rounded-md bg-primary py-3 text-sm font-semibold text-white disabled:opacity-60"
           >
-            회원가입
+            {isSubmitting ? '가입 중...' : '회원가입'}
           </button>
 
           <p className="text-center text-[13px] text-text-muted">
