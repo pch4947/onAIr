@@ -25,6 +25,7 @@ class Settings:
     broadcast_delay_seconds: float = 12
     station_id: str = "st_local_dev"
     audio_dir: Path = Path(__file__).resolve().parents[2] / "engine" / "var" / "audio"
+    jwt_secret: str = "dev-insecure-secret-change-me"
 
 
 def load_settings() -> Settings:
@@ -58,4 +59,5 @@ def load_settings() -> Settings:
                     station_id=station_id, audio_dir=audio_dir.resolve(),
                     hls_enabled=os.environ.get("ONAIR_HLS_ENABLED", "1") == "1",
                     hls_dir=Path(os.environ.get("ONAIR_HLS_DIR", str(Settings.hls_dir))).resolve(),
-                    ffmpeg=os.environ.get("ONAIR_FFMPEG", "ffmpeg"))
+                    ffmpeg=os.environ.get("ONAIR_FFMPEG", "ffmpeg"),
+                    jwt_secret=os.environ.get("ONAIR_JWT_SECRET", Settings.jwt_secret))

@@ -94,7 +94,8 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(set(self.call("/openapi.json")[1]["paths"]),
                          {"/health", "/health/redis", "/api/requests", "/api/stream/state", "/api/scheduler/tick",
                           "/api/requests/{request_id}/history", "/api/broadcast/segments/{segment_id}/state",
-                          "/api/broadcast/queue", "/api/requests/{request_id}/state", "/hls/{station_id}/{filename}"})
+                          "/api/broadcast/queue", "/api/requests/{request_id}/state", "/hls/{station_id}/{filename}",
+                          "/api/auth/signup", "/api/auth/login", "/api/auth/me"})
 
     def test_urgent_request_and_unsafe_buffer(self):
         args = dict(buffer_seconds=40, estimated_generation_seconds=30,
