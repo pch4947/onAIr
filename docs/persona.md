@@ -135,7 +135,7 @@ station:
 ### 2.3 검증 방식 (결정 2026-10-08 — Pydantic)
 
 - **Pydantic v2 모델 하나를 백엔드와 엔진이 같이 쓴다.** 백엔드(FastAPI)가 이미 Pydantic을 쓰므로, 방 생성 API(F-25)·백엔드 DB·엔진이 같은 정의로 검증한다. 엔진에는 Pydantic 의존성을 새로 추가한다.
-- **둘 곳** `[제안]` — 저장소 루트의 `packages/`(현재 비어 있음)에 공용 Python 패키지(예: `packages/onair_schema`)를 두고 백엔드와 엔진이 각각 설치한다. 관리 주체는 백엔드 파트와 정한다.
+- **둘 곳** (결정 2026-10-08) — 저장소 루트의 `packages/onair_schema`에 공용 Python 패키지를 두고 백엔드와 엔진이 각각 설치한다.
 - **폼 입력은 선택지만 받는다.** `formality`·`energy`·`humor`·`voice`·`music_taste`는 enum 또는 고정 목록이고, 자유 문장은 선택 입력 `host_note`(100자) 하나뿐이다. 폼이 값을 통제하므로 엔진이 받는 입력의 범위가 좁다.
 
 ```python
@@ -311,7 +311,7 @@ class BehaviorSpec(BaseModel):
 
 - **"반영됨"은 ② 이상으로 정의한다.** ①만 된 요청은 접수 확인으로 분류한다.
 - `max_reflection_level`은 이 표의 단계 번호다. 예: `2`면 ③(흐름 변경)·④(재언급)를 시도하지 않는다.
-- 현재 코드의 ack([ack.py](../apps/engine/src/onair_engine/ack.py) `ACK_TEMPLATES`)는 사전 렌더 템플릿("사연 하나 들어왔네요…")이며 **채팅을 낭독하지 않는다.** ①을 "낭독"으로 둘지 "접수 언급"으로 넓힐지는 기획서 쪽 결정이 필요하다 `[미정]`.
+- **①은 "낭독"이다** (결정 2026-10-08) — 접수 확인은 채팅 본문을 소리 내어 읽는다. 현재 코드의 ack([ack.py](../apps/engine/src/onair_engine/ack.py) `ACK_TEMPLATES`)는 채팅을 읽지 않는 사전 렌더 템플릿이라 바꿔야 한다 — 고정 문구는 사전 렌더, 채팅 본문만 즉시 TTS ([ENGINE_ARCHITECTURE.md](ENGINE_ARCHITECTURE.md) 4.5절).
 
 ---
 
@@ -388,7 +388,7 @@ AI VTuber 팬덤 연구(Neuro-sama)에서 팬의 83%가 "일관된 성격"을 �
 | **station** | `station_id` | 어떤 persona를 쓰는지(`persona_id`), 이 방송의 행동 층(`behavior`), 방송 시간, 실험 조건 |
 
 - **표현 층은 persona 단위, 행동 층은 station 단위로 확정한다.** 실험용 방이 이 구분을 그대로 쓴다 — "실험 방 N개 = 같은 `persona_id`, `behavior`의 한 필드만 다름"(8절). 행동 층이 persona 안에만 있으면, 행동 한 필드만 다른 persona를 조건마다 복제해야 하고 표현 층이 정말 같은지 보장하기 어렵다.
-- 일반 방은 호스트가 폼으로 새 persona를 만든다(3절). 이전에 만든 persona를 다시 쓸지는 백엔드 DB 설계에 따른다 `[미정]`.
+- 일반 방은 호스트가 폼으로 새 persona를 만들거나, **이전에 만든 persona를 다시 쓸 수 있다** (결정 2026-10-08). 다시 쓰더라도 방송마다 사본을 따로 남긴다(9.4절).
 - 서로 다른 방이 같은 persona를 써도 된다. 같은 캐릭터라도 기억 층은 방마다 따로다([context-memory.md](context-memory.md) 3.4절).
 
 ### 9.2 흐름
@@ -417,7 +417,7 @@ AI VTuber 팬덤 연구(Neuro-sama)에서 팬의 83%가 "일관된 성격"을 �
   - `StationConfig`(또는 그 안의 persona)에 보이스를 두고, `StationEngine.__init__`에서 그 값으로 TTS 어댑터를 만든다.
   - `EngineSettings.tts_voice`는 persona에 보이스가 없을 때의 기본값으로만 남긴다.
 - **TTS 제공자는 엔진 전체 설정으로 둔다.** 방마다 제공자가 다르면 비용·지연 비교가 흐려지고 실험 조건에 변수가 하나 더 생긴다. `voice_id`는 그 제공자의 보이스 목록 안에서만 고른다(2.3절 검증).
-- **선택 방식** (결정 2026-10-08) — 호스트가 폼에서 보이스 목록 중 직접 고른다. 목록은 TTS 제공자(ENGINE_ARCHITECTURE 확인 3)가 정해지면 확정된다.
+- **선택 방식** (결정 2026-10-08) — 호스트가 폼에서 보이스 목록 중 직접 고른다. 목록은 TTS 제공자가 정해지면 확정된다 — Cartesia 검토 중 (ENGINE_ARCHITECTURE 확인 3).
 - 목소리는 방 생성 시 확정돼 있어야 한다. ack 캐시([ack.py](../apps/engine/src/onair_engine/ack.py) `AckCache.prerender`)가 방송 시작 전에 그 목소리로 렌더링되기 때문이다.
 
 ### 9.4 방송 시작 시점의 사본을 남긴다 (권장)
