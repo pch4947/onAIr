@@ -106,6 +106,30 @@ onair-engine --llm claude --tts google --transport redis --demo-request "요즘 
 - 최근 N개 대본(`context.recent_segments`)을 시스템 프롬프트에 붙여 같은 인사·표현 반복을 막습니다.
 - **실패 처리**: LLM/TTS 호출은 1회 재시도하고, 재실패하면 더미의 고정 filler 대본으로 대체해 방송을 잇습니다. 요청 답변이 대체되면 요청을 `queued`로 한 번 되돌리고(ack는 다시 보내지 않음), 또 실패하면 `rejected`로 통보합니다. 계측 `generation_log`에 `error`/`fallback` 단계가 남습니다.
 
+### DJ persona
+
+- persona 파일: `config/personas/*.yaml` — 프리셋 `saebyeok`(심야·차분한 존댓말, 기본), `haessal`(아침·경쾌한 존댓말), `dodo`(주말·반말).
+- 필드: `dj_name`, `tone`, `concept` (필수) + `examples`(대표 멘트 3~5개), `forbidden`, `signature_phrases` (선택). 설계: [docs/persona.md](../../docs/persona.md)
+- 말투를 바꾸고 싶으면 `tone` 형용사보다 `examples`를 고칩니다. 예시는 데이터 블록으로 들어가며, LLM은 말투·호흡만 따르고 문장은 베끼지 않도록 지시받습니다.
+- 실행 시 바꿔 끼우기: `onair-engine --persona config/personas/dodo.yaml ...`
+
+### 대본 품질 평가 (`onair-eval`)
+
+persona × 고정 시나리오(`config/eval_cases.yaml` — 오프닝·곡 소개·브리핑·사연 답변·브릿지, 인젝션·개인정보·비방 사연 포함)로 엔진과 같은 생성 파이프라인을 돌리고 지표를 냅니다. TTS는 쓰지 않습니다.
+
+```powershell
+# persona 3종 전부, 시나리오 2회 반복
+python -m onair_engine.eval --llm openai --llm-base-url https://api.groq.com/openai/v1 `
+  --llm-model openai/gpt-oss-120b --llm-reasoning-effort low --repeat 2
+# 특정 persona만 + LLM-judge 채점 (judge 모델을 생성 모델과 다르게 두는 편이 낫다)
+python -m onair_engine.eval --persona config/personas/dodo.yaml --llm claude --judge --judge-model claude-sonnet-5-5
+```
+
+- 결과: `var/eval/<시각>/report.md` (요약표, 코너별 발화 시간, 경고 붙은 멘트, 전체 대본), `results.jsonl` (멘트 단위 원자료)
+- 자동 지표: L1 거부·L2 차단·대체 횟수, 사연 판정 오류(과잉 거부/거부 누락), 금지 문자열 노출(인젝션 성공·개인정보), 말투 이탈 문장(존댓말/반말 종결 어미), 길이·문장 수 초과, 기호·영어·숫자 누출, 상투어, 입버릇·이름 언급 빈도, 직전 멘트 유사도·첫마디 중복, 지연
+- `--judge`: 캐릭터(설정·예시와 같은 사람인가)·자연스러움·과제 수행을 1~5점으로 매기고, 캐릭터 2점 이하 비율을 **캐릭터 이탈률**(persona.md 7절)로 냅니다.
+- 자동 지표는 의심 신호입니다. 경고가 붙은 멘트와 전체 대본을 직접 읽고 판단하세요. 청취자 입력단 L0는 거치지 않습니다(L1·L2를 직접 시험하기 위해).
+
 ### 오디오 파일 관리
 
 - 모든 TTS 출력은 `audio.CachedTts`를 거칩니다.

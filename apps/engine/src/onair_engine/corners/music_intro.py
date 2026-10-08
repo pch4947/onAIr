@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..catalog import Catalog
+from ..catalog import Catalog, mood_ko
 from ..domain import Material, Prompt, ScheduleContext, StationProfile
 from ..prompt_data import TRACK, data_block
 from .base import system_prompt
@@ -21,7 +21,7 @@ class MusicIntroCorner:
             return None
         return Material(
             track_id=track.track_id,
-            extra={"title": track.title, "artist": track.artist, "mood": track.mood},
+            extra={"title": track.title, "artist": track.artist, "mood": mood_ko(track.mood)},
         )
 
     def build_prompt(self, material: Material, profile: StationProfile) -> Prompt:

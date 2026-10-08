@@ -7,6 +7,13 @@ from __future__ import annotations
 import itertools
 from dataclasses import dataclass
 
+# 무드 태그는 영어 enum이다 — 프롬프트에 그대로 넣으면 LLM이 영어로 읽어 TTS 발음이 어색해진다
+MOOD_KO = {"calm": "차분한", "mellow": "포근한", "hopeful": "희망찬"}
+
+
+def mood_ko(mood: str) -> str:
+    return MOOD_KO.get(mood, mood)
+
 
 @dataclass
 class Track:

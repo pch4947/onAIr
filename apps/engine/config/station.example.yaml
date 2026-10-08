@@ -1,10 +1,9 @@
 # 로컬 개발용 스테이션 설정 — 실제 운영에서는 station.created 이벤트가 이 역할을 대체한다 (M3)
 station:
   id: st_local_dev
-  profile:
-    dj_name: "새벽"
-    tone: "차분하고 따뜻한 존댓말"
-    concept: "심야 스터디 라디오"
+  # persona 파일 경로 또는 필드 직접 기입 (dj_name, tone, concept + 선택: examples, forbidden,
+  # signature_phrases). 프리셋: config/personas/ — 실행 시 --persona로 바꿔 끼울 수 있다
+  profile: config/personas/saebyeok.yaml
   broadcast_minutes: 60
 
 policy:
@@ -14,7 +13,8 @@ pipeline:
   llm: dummy                  # dummy(고정 대본) | claude(ANTHROPIC_API_KEY 필요)
                               # | gemini(GEMINI_API_KEY 필요) — 제공자 비교 실측 중(확인 3)
                               # | openai(Chat Completions 호환, OPENAI_API_KEY)
-  # llm_model: claude-haiku-4-5  # claude 기본값. gemini 기본값: gemini-2.5-flash. openai는 필수
+  # llm_model: gpt-6-luna       # 팀 결정 LLM (llm: openai, 2026-10-08). claude 기본값: claude-haiku-4-5,
+                                # gemini 기본값: gemini-2.5-flash. openai는 필수
   # llm_base_url: https://dashscope-intl.aliyuncs.com/compatible-mode/v1  # openai 호환 서버
   # llm_reasoning_effort: low    # openai 추론 모델의 추론량 — 낮을수록 빠르다
   tts: dummy                  # dummy(무음 wav) | google(Cloud TTS, GOOGLE_TTS_API_KEY 필요)
