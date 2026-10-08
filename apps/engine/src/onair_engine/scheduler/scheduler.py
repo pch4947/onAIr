@@ -29,6 +29,8 @@ from .running_order import RunningOrder
 
 _IDLE_SLEEP_SEC = 0.5
 _MAX_REQUEST_FAILURES = 2  # 생성 실패한 요청은 한 번 다시 큐에 넣고, 또 실패하면 거절한다
+# 백엔드는 backpressure를 약 10초마다 보낸다. 세 번 연속 못 받으면 백엔드가 멈춘 것으로 보고 자체 추정으로 돌아간다
+_BACKEND_REPORT_TTL_SEC = 30.0
 
 logger = logging.getLogger(__name__)
 
@@ -52,25 +54,49 @@ class Scheduler:
         self._submitted = 0
         self._started_at: float | None = None
         self._failures: dict[str, int] = {}  # request_id -> 생성 실패 횟수
+        # 백엔드의 마지막 backpressure 보고: (D_total 초, 측정 시각, 그때까지 엔진이 제출한 ms)
+        self._backend_report: tuple[float, float, int] | None = None
+        self._backpressure = False
 
     def enqueue_request(self, req: ListenerRequest) -> None:
         req.state = RequestState.QUEUED
         self.telemetry.log_request_state(req.request_id, req.state)
         self._pending.append(req)
 
+    def report_backpressure(self, d_total_ms: float, severity: str, at: float | None = None) -> None:
+        """백엔드가 잰 실제 남은 방송 분량(계약 3.2절 backpressure).
+
+        백엔드 송출이 실시간보다 느려지면(멘트 사이 폴백 등) 엔진 자체 추정은 큐가 쌓이는 것을
+        모른다 — 그대로 두면 큐가 시간에 비례해 불어나 요청 반영이 몇 분씩 밀린다.
+        """
+        now = time.time()
+        measured_at = min(at, now) if at else now  # 시계가 같은 머신 전제. 미래 시각은 지금으로
+        self._backend_report = (max(0.0, d_total_ms / 1000), measured_at, self._produced_ms)
+        self._backpressure = severity in ("low", "critical")
+
+    def _buffer_sec(self, now: float) -> tuple[float, str]:
+        if self._backend_report is not None:
+            d_total, measured_at, produced_then = self._backend_report
+            if now - measured_at <= _BACKEND_REPORT_TTL_SEC:
+                # 보고 이후 흐른 시간만큼 줄고, 보고 이후 엔진이 낸 분량만큼 는다
+                buffer = d_total - (now - measured_at) + (self._produced_ms - produced_then) / 1000
+                return max(0.0, buffer), "backend"
+        # 보고가 없거나 오래됐으면(백엔드 미연결·로컬 실행) 제출한 오디오 총 길이 - 경과 시간
+        elapsed = now - (self._started_at or now)
+        return max(0.0, self._produced_ms / 1000 - elapsed), "engine"
+
     def _snapshot(self) -> ScheduleContext:
         now = time.time()
-        elapsed = now - (self._started_at or now)
-        # 제출한 오디오 총 길이 - 경과 시간 = 방송이 앞서 있는 정도 (엔진 쪽 근사치)
-        buffer_sec = max(0.0, self._produced_ms / 1000 - elapsed)
+        buffer_sec, source = self._buffer_sec(now)
         return ScheduleContext(
             now=now,
             pending_requests=list(self._pending),
             generated_buffer_sec=buffer_sec,
             inflight_generations=self._inflight,
-            backpressure=False,  # TODO(M2): 백엔드 backpressure 이벤트 반영
+            backpressure=self._backpressure,
             order_position=self.order.position,
             next_slot=self.order.peek(),
+            buffer_source=source,
         )
 
     async def run(self, stop: asyncio.Event, max_segments: int | None = None) -> None:

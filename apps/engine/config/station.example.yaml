@@ -23,7 +23,8 @@ pipeline:
                                       # google 기본값: ko-KR-Chirp3-HD-Aoede, edge 기본값: ko-KR-SunHiNeural
   tts_cache_dir: var/tts_cache  # 같은 문장 재합성 방지 캐시 — 엔진 전용, audio_dir 밖에 둔다
   max_concurrent_generations: 2
-  target_buffer_sec: 30
+  target_buffer_sec: 30        # 백엔드 backpressure의 d_total(실제 남은 방송 분량)이 이만큼이면 생성을 쉰다
+  request_max_age_sec: 600     # 이보다 오래된 request.arrived는 답하지 않고 rejected로 종결 [예시]
   safety_rules: config/safety_rules.yaml
 
 transport:

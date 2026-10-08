@@ -43,6 +43,9 @@ class EngineSettings:
     tts_cache_dir: Path | None = None  # None이면 캐시 없이 매번 합성. 공유 오디오 루트 밖에 둔다
     max_concurrent_generations: int = 2
     target_buffer_sec: float = 30.0
+    # 이보다 오래된 request.arrived는 답하지 않는다. 입력 스트림을 처음부터 읽으므로
+    # 엔진이 꺼져 있던 사이의 예전 요청이 재기동 때 몰려온다 [예시]
+    request_max_age_sec: float = 600.0
 
 
 class StationRejected(Exception):
@@ -130,6 +133,18 @@ class StationEngine:
 
     def stop(self) -> None:
         self._stop.set()
+
+    def report_backpressure(self, payload: dict, at: float | None = None) -> None:
+        """백엔드의 실제 남은 방송 분량 — 편성 관리자가 생성량을 정하는 기준이 된다 (계약 3.2절)."""
+        d_total_ms = payload.get("d_total_ms")
+        if not isinstance(d_total_ms, (int, float)):  # 백엔드가 큐를 못 읽은 주기 — 이전 보고를 유지
+            return
+        self.scheduler.report_backpressure(d_total_ms, str(payload.get("severity", "")), at)
+
+    async def reject_stale_request(self, request_id: str) -> None:
+        """너무 늦게 받은 요청 — 답하지 않고 종결한다. 백엔드 상태가 requested로 남지 않게 rejected로 알린다."""
+        self.telemetry.log_request_state(request_id, RequestState.REJECTED)
+        await self.transport.notify_request_state(request_id, RequestState.REJECTED)
 
     async def submit_request(self, kind: str, body: str, requester_ref: str,
                              request_id: str | None = None) -> ListenerRequest:

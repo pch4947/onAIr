@@ -239,7 +239,7 @@ L_ack는 실험의 핵심 측정값인데, ack를 매번 LLM+TTS로 생성하면
 | 이벤트 | 페이로드 요지 | 엔진의 반응 |
 |---|---|---|
 | `request.arrived` | 요청 id, 유형(사연/무드/신청곡), 본문, 요청자 ref, 신청곡이면 곡 정보 | L0 검사 → 요청 큐 적재(SCREENED) 또는 REJECTED 통보 |
-| `backpressure` | D_total 현재값, 임계값, 심각도 | 정책 컨텍스트에 반영 → filler 우선 생성 / 요청 반영 보류 |
+| `backpressure` | D_total 현재값, 임계값, 심각도 | 버퍼 계산의 기준을 백엔드 실측 D_total로 바꾼다(#61 구현). 정책 컨텍스트에 반영 → filler 우선 생성 / 요청 반영 보류는 정책 A/B/C에서 |
 | `state.transition` | 세그먼트 id, 새 상태(MIXING/PUBLISHED/PLAYED), 시각 | 재배치 가능 집합에서 제거, 계측 기록, 방송 맥락 갱신 |
 | `station.created` | 방송 시간, 첫 곡, 오늘의 주제, persona 본문, 정책 | EngineManager가 StationEngine 기동, ack 캐시 사전 렌더링 → `station.started`/`station.rejected` |
 | `track.queued` / `track.started` | 다음에 틀 곡 정보 / 곡 재생 시작 시각 | 곡 소개 멘트 생성 / 곡 종료 시각을 버퍼 계산에 반영 (4.8절) |

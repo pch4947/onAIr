@@ -147,6 +147,8 @@ class ScheduleContext:
     order_position: int
     next_slot: str
     recent_arrival_rate: float = 0.0  # TODO(M4): 최근 창 기반 요청 도착률 실측
+    # generated_buffer_sec의 근거 — "backend"(backpressure 보고 기준) | "engine"(자체 추정)
+    buffer_source: str = "engine"
 
 
 @dataclass
