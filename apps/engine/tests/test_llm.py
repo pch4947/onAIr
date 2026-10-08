@@ -230,6 +230,9 @@ def test_failed_request_is_requeued_once_then_rejected(tmp_path):
         async def notify_request_state(self, request_id, state):
             self.states.append((request_id, state))
 
+        async def notify_station(self, event_type, payload):
+            pass
+
     transport = Capture()
     engine = StationEngine(config, settings, transport)
     engine.scheduler.pipeline.llm = FlakyLlm(fail_times=99)  # 제공자 전면 장애

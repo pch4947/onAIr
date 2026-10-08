@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS request_log (
 CREATE TABLE IF NOT EXISTS decision_log (
     station_id TEXT, at REAL, context_json TEXT, decision_json TEXT
 );
+CREATE TABLE IF NOT EXISTS station_log (
+    station_id TEXT, at REAL, event TEXT, payload_json TEXT
+);
 """
 
 
@@ -58,6 +61,14 @@ class Telemetry:
         self._db.execute(
             "INSERT INTO decision_log VALUES (?,?,?,?)",
             (self.station_id, time.time(), _dump(ctx), _dump(decision)),
+        )
+        self._db.commit()
+
+    def log_station(self, event: str, payload: dict) -> None:
+        # station.created 원문 = 방송 시점의 persona 사본 (persona.md 9.4절). 분석은 이 사본을 기준으로 한다
+        self._db.execute(
+            "INSERT INTO station_log VALUES (?,?,?,?)",
+            (self.station_id, time.time(), event, json.dumps(payload, ensure_ascii=False)),
         )
         self._db.commit()
 

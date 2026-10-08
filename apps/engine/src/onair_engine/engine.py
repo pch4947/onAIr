@@ -45,26 +45,46 @@ class EngineSettings:
     target_buffer_sec: float = 30.0
 
 
+class StationRejected(Exception):
+    """방송을 시작할 수 없다 — station.rejected로 백엔드에 돌려보낸다 (계약 3.1절)."""
+
+    def __init__(self, reason: str, detail: str):
+        super().__init__(f"{reason}: {detail}")
+        self.reason = reason
+        self.detail = detail
+
+
 class StationEngine:
     def __init__(self, config: StationConfig, settings: EngineSettings, transport: Transport):
         self.config = config
         self.settings = settings
         self.transport = transport
-        self.telemetry = Telemetry(settings.sqlite_path, config.station_id)
 
+        # 키·보이스 누락은 방송 도중이 아니라 여기서 실패한다 — 계측 DB를 열기 전에 확인한다
+        try:
+            # 보이스는 방마다 다르다 (persona.md 9.3절). 엔진 설정 값은 로컬 실행용 기본값이다
+            tts_client = make_tts(settings.tts, voice=config.voice or settings.tts_voice)
+        except RuntimeError as exc:
+            raise StationRejected("tts_unavailable", str(exc)) from exc
+        try:
+            llm = make_llm(settings.llm, model=settings.llm_model,
+                           base_url=settings.llm_base_url,
+                           reasoning_effort=settings.llm_reasoning_effort)
+        except RuntimeError as exc:
+            raise StationRejected("llm_unavailable", str(exc)) from exc
+
+        self.telemetry = Telemetry(settings.sqlite_path, config.station_id)
+        if config.snapshot is not None:
+            self.telemetry.log_station("station.created", config.snapshot)
         # 제출 페이로드의 audio_ref는 이 루트 기준 상대 경로로 나간다 (설계 문서 5.1)
         audio_root = Path(settings.audio_dir)
         # 파이프라인과 ack 모두 원자적 쓰기·캐시·길이 실측을 거친다
-        tts = CachedTts(make_tts(settings.tts, voice=settings.tts_voice),
-                        cache_dir=settings.tts_cache_dir)
+        tts = CachedTts(tts_client, cache_dir=settings.tts_cache_dir)
         safety = SafetyChecker(settings.safety_rules_path)
         corners = build_corners(catalog=Catalog(), rss=RssCollector())
         pipeline = GenerationPipeline(
             station_id=config.station_id, profile=config.profile, corners=corners,
-            llm=make_llm(settings.llm, model=settings.llm_model,
-                         base_url=settings.llm_base_url,
-                         reasoning_effort=settings.llm_reasoning_effort),
-            tts=tts, safety=safety,
+            llm=llm, tts=tts, safety=safety,
             telemetry=self.telemetry, audio_root=audio_root,
             recent_segments=config.recent_segments,
         )
@@ -84,11 +104,29 @@ class StationEngine:
         self._safety = safety
         self._stop = asyncio.Event()
 
+    @property
+    def topic(self) -> str:
+        """이 방송의 확정된 주제 — station.started로 백엔드에 알린다 (백엔드는 이 주제로 사연 후보를 고른다).
+
+        TODO(오프닝 코너): 호스트가 비웠으면 컨셉에서 LLM으로 만든다. 지금은 컨셉을 그대로 쓴다.
+        """
+        return self.config.topic or self.config.profile.concept
+
     async def run(self, max_segments: int | None = None) -> None:
-        # ack 캐시는 방송 시작 전에 이 스테이션의 보이스로 사전 렌더링한다 (설계 문서 4.5)
-        await self.ack_cache.prerender()
-        await self.scheduler.run(self._stop, max_segments=max_segments)
-        self.telemetry.close()
+        try:
+            # ack 캐시는 방송 시작 전에 이 스테이션의 보이스로 사전 렌더링한다 (설계 문서 4.5)
+            try:
+                await self.ack_cache.prerender()
+            except Exception as exc:  # 보이스 ID 오류·TTS 장애 — 첫 합성에서 드러난다
+                await self.transport.notify_station("station.rejected", {
+                    "reason": "tts_unavailable", "detail": f"ack 사전 렌더링 실패: {exc}"[:300],
+                })
+                raise StationRejected("tts_unavailable", str(exc)) from exc
+            await self.transport.notify_station("station.started", {"topic": self.topic})
+            self.telemetry.log_station("station.started", {"topic": self.topic})
+            await self.scheduler.run(self._stop, max_segments=max_segments)
+        finally:
+            self.telemetry.close()
 
     def stop(self) -> None:
         self._stop.set()

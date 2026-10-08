@@ -108,6 +108,9 @@ class _EventTransport:
     async def notify_request_state(self, request_id, state):
         self.states.append((request_id, state))
 
+    async def notify_station(self, event_type, payload):
+        pass
+
     async def events(self):
         yield {"type": "request.arrived", "payload": {
             "request_id": "req_backend1", "kind": "story",

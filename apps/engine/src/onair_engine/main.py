@@ -14,6 +14,7 @@ from .domain import StationConfig, StationProfile
 from .engine import EngineSettings
 from .manager import EngineManager
 from .pipeline.tts import list_cartesia_voices
+from .transport import RedisControlChannel
 
 # apps/engine/.env — 백엔드(apps/backend/.env)와 같은 방식. 키는 설정 파일이 아니라 여기에 둔다
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
@@ -112,12 +113,15 @@ def cli(argv: list[str] | None = None) -> None:
                         help="설정 파일의 transport.kind 덮어쓰기 (관통 테스트용)")
     parser.add_argument("--backend-url", default=None, metavar="URL",
                         help="설정 파일의 transport.base_url 덮어쓰기")
+    parser.add_argument("--serve", action="store_true",
+                        help="운영 모드 — engine:control의 station.created마다 방을 띄운다 "
+                             "(transport.kind=redis 필요, 설정 파일의 station은 쓰지 않음)")
     args = parser.parse_args(argv)
     # load_config가 ONAIR_REDIS_URL 등을 읽으므로 그보다 먼저 불러온다
     load_env()
     if args.list_voices:
         for v in list_cartesia_voices():
-            print(f"{v['id']}	{v['name']}	{v['gender'] or '-'}")
+            print(f"{v['id']}\t{v['name']}\t{v['gender'] or '-'}")
         return
 
     # 생성된 대본을 SCRIPT 라인으로 보여준다 (SUBMIT 페이로드에는 대본 텍스트가 없다)
@@ -134,9 +138,16 @@ def cli(argv: list[str] | None = None) -> None:
     if args.backend_url:
         settings.transport_base_url = args.backend_url
     manager = EngineManager(settings)
-    try:
-        asyncio.run(manager.run_local(
+    if args.serve:
+        if settings.transport_kind != "redis":
+            parser.error("--serve는 transport.kind=redis가 필요합니다 (--transport redis)")
+        control = RedisControlChannel(settings.transport_redis_url)
+        main = manager.serve(control)
+    else:
+        main = manager.run_local(
             config, max_segments=args.max_segments, demo_requests=args.demo_request,
-        ))
+        )
+    try:
+        asyncio.run(main)
     except KeyboardInterrupt:
         pass

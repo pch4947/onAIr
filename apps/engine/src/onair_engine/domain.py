@@ -67,6 +67,12 @@ class StationConfig:
     broadcast_minutes: int
     policy_name: str = "naive_fifo"
     recent_segments: int = 8  # 방송 맥락 = 최근 N개 세그먼트 요약 (확인 10 결정)
+    # 아래는 station.created로 오는 방 속성 (계약 3.3절). 로컬 설정 파일 실행에서는 비어 있다
+    persona_id: str | None = None
+    voice: str | None = None  # 이 방의 TTS 보이스. None이면 엔진 기본값(pipeline.tts_voice)
+    topic: str | None = None  # 오늘의 주제. None이면 엔진이 정한다
+    first_song: dict | None = None  # 계약 3.4절 track — 백엔드가 방송 시작과 함께 튼다
+    snapshot: dict | None = None  # 받은 station.created 페이로드 원문 — 계측에 persona 사본으로 남긴다
 
 
 @dataclass

@@ -28,12 +28,16 @@ class CaptureTransport:
     def __init__(self):
         self.segments = []
         self.states = []
+        self.station_events = []
 
     async def publish_segment(self, sub):
         self.segments.append(sub)
 
     async def notify_request_state(self, request_id, state):
         self.states.append((request_id, state))
+
+    async def notify_station(self, event_type, payload):
+        self.station_events.append((event_type, payload))
 
     async def events(self):
         while True:
