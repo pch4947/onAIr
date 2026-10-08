@@ -73,7 +73,7 @@ persona:
     energy: low                       # low | mid | high
     humor: rare                       # rare | some | often
   music_taste: [발라드, 어쿠스틱]       # 고정 장르 목록에서 0~3개
-  voice: ko-KR-Chirp3-HD-Aoede        # 엔진 TTS 제공자의 보이스 목록에서. 프롬프트에는 넣지 않는다 (9.3절)
+  voice: <Cartesia 보이스 ID>         # Cartesia 한국어 보이스 목록에서. 프롬프트에는 넣지 않는다 (9.3절)
 
   # ── 엔진이 LLM으로 만든 초안 → 호스트가 고르고 고친 값 (3절) ──
   dj_name: 새벽                        # 호스트가 폼에 적었으면 그 값, 비웠으면 LLM 제안
@@ -417,7 +417,7 @@ AI VTuber 팬덤 연구(Neuro-sama)에서 팬의 83%가 "일관된 성격"을 �
   - `StationConfig`(또는 그 안의 persona)에 보이스를 두고, `StationEngine.__init__`에서 그 값으로 TTS 어댑터를 만든다.
   - `EngineSettings.tts_voice`는 persona에 보이스가 없을 때의 기본값으로만 남긴다.
 - **TTS 제공자는 엔진 전체 설정으로 둔다.** 방마다 제공자가 다르면 비용·지연 비교가 흐려지고 실험 조건에 변수가 하나 더 생긴다. `voice_id`는 그 제공자의 보이스 목록 안에서만 고른다(2.3절 검증).
-- **선택 방식** (결정 2026-10-08) — 호스트가 폼에서 보이스 목록 중 직접 고른다. 목록은 TTS 제공자가 정해지면 확정된다 — Cartesia 검토 중 (ENGINE_ARCHITECTURE 확인 3).
+- **선택 방식** (결정 2026-10-08) — 호스트가 폼에서 보이스 목록 중 직접 고른다. 목록은 Cartesia 한국어 보이스다 — TTS 제공자 결정 2026-10-08 (ENGINE_ARCHITECTURE 확인 3). 엔진의 `list_cartesia_voices()`(`onair-engine --list-voices`)가 목록과 검증의 원천이다.
 - 목소리는 방 생성 시 확정돼 있어야 한다. ack 캐시([ack.py](../apps/engine/src/onair_engine/ack.py) `AckCache.prerender`)가 방송 시작 전에 그 목소리로 렌더링되기 때문이다.
 
 ### 9.4 방송 시작 시점의 사본을 남긴다 (권장)

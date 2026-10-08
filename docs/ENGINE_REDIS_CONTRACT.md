@@ -128,7 +128,7 @@
     "persona_id": "psn_7c1e",
     "style": {"formality": "polite", "energy": "low", "humor": "rare"},
     "music_taste": ["발라드", "어쿠스틱"],
-    "voice": "ko-KR-Chirp3-HD-Aoede",
+    "voice": "<Cartesia 보이스 ID>",
     "dj_name": "새벽",
     "concept": "심야 스터디 라디오",
     "tone": "차분하고 따뜻한 존댓말. 말수가 적고 문장이 짧다",
@@ -162,7 +162,7 @@ wsl redis-cli XADD engine:control '*' type station.created contract_version 1 ev
 | `persona.style.energy` | `low`\|`mid`\|`high` | O | — | | 말투 |
 | `persona.style.humor` | `rare`\|`some`\|`often` | O | — | | 말투 |
 | `persona.music_taste` | 문자열 배열 | | `[]` | 0~3개, 고정 장르 목록 중에서 | 곡 소개 멘트의 취향 표현 |
-| `persona.voice` | 문자열 | O | — | 엔진 TTS 제공자의 보이스 목록 중에서 | TTS 어댑터, ack 사전 렌더링 |
+| `persona.voice` | 문자열 | O | — | 엔진 TTS 제공자(Cartesia)의 한국어 보이스 ID 중에서 | TTS 어댑터, ack 사전 렌더링 |
 | `persona.dj_name` | 문자열 | O | — | 1~20자 | 시스템 프롬프트 정체성 |
 | `persona.concept` | 문자열 | O | — | 1~60자 | 시스템 프롬프트 정체성 |
 | `persona.tone` | 문자열 | O | — | 1~100자 | 시스템 프롬프트 말투 |
@@ -308,7 +308,7 @@ DJ가 실제 곡의 끝부분·인트로 위에 겹쳐 말하고 그동안 곡 �
 - **audio_ref**: 루트 기준 POSIX 상대 경로 — `{station_id}/seg_xxx.mp3`, `{station_id}/ack/ack_N.mp3`. 백엔드는 루트 밖으로 벗어나는 경로(`..`, 절대 경로)를 거부하고 파일 존재를 확인한다.
 - **곡 음원**: 공유 폴더에 두지 않는다. 백엔드가 YouTube에서 직접 재생한다 (3.4절). 엔진은 곡 오디오에 접근하지 않는다.
 - **원자적 쓰기**: 엔진은 같은 디렉토리에 `.{이름}.{랜덤}.tmp{확장자}`로 쓴 뒤 `os.replace`로 교체하고, 교체가 끝난 뒤에만 메시지를 발행한다. 메시지를 받았다면 파일은 완성본이다. 백엔드는 `.`으로 시작하는 파일을 무시한다.
-- **포맷**: 제공자 원본 그대로 쓴다(google/edge는 mp3, dummy는 wav). 확장자로 구분한다. 샘플레이트와 음량(loudnorm)은 백엔드 FFmpeg가 HLS로 변환할 때 정규화한다.
+- **포맷**: 제공자 원본 그대로 쓴다(cartesia·google·edge는 mp3, dummy는 wav). 확장자로 구분한다. 샘플레이트와 음량(loudnorm)은 백엔드 FFmpeg가 HLS로 변환할 때 정규화한다.
 - **duration_ms**: 엔진이 파일에서 실측한다(mutagen).
 - **읽기 전용**: 오디오 파일은 엔진 TTS 캐시와 하드링크로 내용을 공유할 수 있으므로 제자리에서 수정하지 않는다. 삭제는 괜찮다.
 - **TTS 캐시**: 엔진 전용이며 공유 루트 밖(`var/tts_cache`)에 있다. 백엔드와 무관하다.
@@ -358,7 +358,7 @@ DJ가 실제 곡의 끝부분·인트로 위에 겹쳐 말하고 그동안 곡 �
   "energy": "low",
   "humor": "rare",
   "music_taste": ["발라드", "어쿠스틱"],
-  "voice": "ko-KR-Chirp3-HD-Aoede",
+  "voice": "<Cartesia 보이스 ID>",
   "dj_name": null,
   "host_note": "공부하는 사람 옆에 조용히 있어 주는 DJ"
 }
