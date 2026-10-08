@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom'
-import { CURRENT_USER } from '@/routes/mypage/mock'
+import { useCurrentUser } from '@/shared/useCurrentUser'
 
 type NavKey = 'main' | 'admin' | 'board'
 
@@ -15,6 +15,8 @@ const NAV_ITEMS: { key: NavKey; label: string; icon: string; path: string }[] = 
 
 export function Sidebar({ active }: SidebarProps) {
   const navigate = useNavigate()
+  const { data: user } = useCurrentUser()
+  const name = user?.name ?? ''
 
   return (
     <aside className="flex w-[200px] shrink-0 flex-col gap-7 bg-sidebar px-4 py-6">
@@ -24,9 +26,9 @@ export function Sidebar({ active }: SidebarProps) {
         className="flex items-center gap-2 text-left"
       >
         <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary-strong text-xs font-semibold text-white">
-          {CURRENT_USER.avatarInitial}
+          {name.charAt(0) || '?'}
         </div>
-        <p className="truncate text-sm font-semibold text-white">{CURRENT_USER.name}</p>
+        <p className="truncate text-sm font-semibold text-white">{name}</p>
       </button>
 
       <nav className="flex flex-col gap-1">

@@ -1,4 +1,5 @@
-import type { AuthResponse, BroadcastStateResponse, SubmitRequestResponse } from '@/shared/types'
+import { getAccessToken } from '@/shared/authToken'
+import type { AuthResponse, AuthUser, BroadcastStateResponse, SubmitRequestResponse } from '@/shared/types'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
 
@@ -36,6 +37,20 @@ export async function signup(email: string, password: string, name: string): Pro
     throw new Error(`POST /api/auth/signup failed: ${res.status}`)
   }
   return res.json() as Promise<AuthResponse>
+}
+
+export async function getMe(): Promise<AuthUser> {
+  const res = await fetch(`${API_BASE}/api/auth/me`, {
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
+  })
+  if (res.status === 401) {
+    throw new Error('UNAUTHORIZED')
+  }
+  if (!res.ok) {
+    throw new Error(`GET /api/auth/me failed: ${res.status}`)
+  }
+  const { user } = (await res.json()) as { user: AuthUser }
+  return user
 }
 
 export async function login(email: string, password: string): Promise<AuthResponse> {
