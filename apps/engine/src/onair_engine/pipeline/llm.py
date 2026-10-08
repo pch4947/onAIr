@@ -4,6 +4,7 @@ openai(Chat Completions 호환 — OpenAI, Qwen(DashScope), Ollama 등).
 제공자는 아직 비교 실측 중이다(확인 3). 그래서 둘 다 같은 조건으로 붙여 두고 설정으로 고른다.
 GoogleTtsClient와 같이 표준 라이브러리 REST만 쓰고, 블로킹 urlopen은 to_thread로 감싼다.
 어댑터는 대본을 방송용으로 다듬어(clean_script) 돌려준다. 부적합 판단은 Script("REJECT")다.
+대본이 아닌 출력(persona 초안 JSON 등)은 complete()로 원문 그대로 받는다.
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ import random
 import re
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from typing import Protocol
 
 from .. import __version__
@@ -28,7 +30,29 @@ REJECT = "REJECT"
 
 
 class LlmClient(Protocol):
-    async def generate(self, prompt: Prompt) -> Script: ...
+    async def generate(self, prompt: Prompt) -> Script:
+        """방송 대본 — clean_script를 거친다. 부적합 판단은 Script(REJECT)."""
+        ...
+
+    async def complete(self, prompt: Prompt, *, max_tokens: int) -> str:
+        """원문 그대로 — JSON 등 구조화 출력용. 거부·잘림은 LlmError로 올린다."""
+        ...
+
+
+@dataclass
+class _Reply:
+    text: str
+    truncated: bool  # 출력 한도에서 잘림
+    refused: bool  # 제공자 안전 필터·모델 거부
+
+
+def _raw(reply: _Reply, provider: str) -> str:
+    """complete()의 공통 후처리 — 구조화 출력은 잘리거나 거부되면 쓸 수 없다."""
+    if reply.refused:
+        raise LlmError(f"{provider}가 요청을 거부했습니다")
+    if reply.truncated:
+        raise LlmError(f"{provider} 출력이 한도에서 잘렸습니다 — max_tokens를 늘리세요")
+    return reply.text
 
 
 # 더미 대본 — TTS로 실제로 읽혀도 방송처럼 들리도록 쓴 코너별 고정 문장.
@@ -113,6 +137,12 @@ class DummyLlmClient:
         template = self._rng.choice(_TEMPLATES[corner])
         return Script(text=template.format_map(_slots(prompt)))
 
+    async def complete(self, prompt: Prompt, *, max_tokens: int) -> str:
+        await asyncio.sleep(self.delay_sec)
+        # 구조화 출력 요청은 persona 초안뿐이다 — API 키 없이 방 생성 화면을 개발할 수 있게 한다
+        from ..personas import dummy_drafts_json  # 순환 import 회피 (personas가 llm을 쓴다)
+        return dummy_drafts_json(prompt)
+
 
 class LlmError(RuntimeError):
     """호출 실패·응답 해석 불가 — 파이프라인이 재시도 후 filler로 대체한다."""
@@ -192,9 +222,18 @@ class ClaudeLlmClient:
         self._timeout = timeout
 
     async def generate(self, prompt: Prompt) -> Script:
+        reply = await self._call(prompt, self.max_tokens)
+        if reply.refused:  # 모델 자체 거부 = L1 REJECT와 같게 다룬다
+            return Script(text=REJECT)
+        return Script(text=clean_script(reply.text, truncated=reply.truncated))
+
+    async def complete(self, prompt: Prompt, *, max_tokens: int) -> str:
+        return _raw(await self._call(prompt, max_tokens), "claude")
+
+    async def _call(self, prompt: Prompt, max_tokens: int) -> _Reply:
         body = {
             "model": self.model,
-            "max_tokens": self.max_tokens,
+            "max_tokens": max_tokens,
             "temperature": self.temperature,
             "system": prompt.system,
             "messages": [{"role": "user", "content": prompt.user}],
@@ -206,9 +245,8 @@ class ClaudeLlmClient:
             text = "".join(b["text"] for b in data["content"] if b.get("type") == "text")
         except (KeyError, TypeError) as exc:
             raise LlmError(f"claude 응답 형식 오류: {str(data)[:200]}") from exc
-        if data.get("stop_reason") == "refusal":  # 모델 자체 거부 = L1 REJECT와 같게 다룬다
-            return Script(text=REJECT)
-        return Script(text=clean_script(text, truncated=data.get("stop_reason") == "max_tokens"))
+        stop = data.get("stop_reason")
+        return _Reply(text, truncated=stop == "max_tokens", refused=stop == "refusal")
 
 
 class GeminiLlmClient:
@@ -231,7 +269,16 @@ class GeminiLlmClient:
         self._timeout = timeout
 
     async def generate(self, prompt: Prompt) -> Script:
-        config: dict = {"maxOutputTokens": self.max_tokens, "temperature": self.temperature}
+        reply = await self._call(prompt, self.max_tokens)
+        if reply.refused:
+            return Script(text=REJECT)
+        return Script(text=clean_script(reply.text, truncated=reply.truncated))
+
+    async def complete(self, prompt: Prompt, *, max_tokens: int) -> str:
+        return _raw(await self._call(prompt, max_tokens), "gemini")
+
+    async def _call(self, prompt: Prompt, max_tokens: int) -> _Reply:
+        config: dict = {"maxOutputTokens": max_tokens, "temperature": self.temperature}
         if self.thinking_budget is not None:
             config["thinkingConfig"] = {"thinkingBudget": self.thinking_budget}
         body = {
@@ -244,17 +291,16 @@ class GeminiLlmClient:
             self._timeout, "gemini")
         # 입력이 제공자 안전 필터에 막히면 후보가 없다 — L1 REJECT와 같게 다룬다
         if (data.get("promptFeedback") or {}).get("blockReason"):
-            return Script(text=REJECT)
+            return _Reply("", truncated=False, refused=True)
         try:
             cand = data["candidates"][0]
         except (KeyError, IndexError, TypeError) as exc:
             raise LlmError(f"gemini 응답 형식 오류: {str(data)[:200]}") from exc
         reason = cand.get("finishReason")
-        if reason in ("SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII"):
-            return Script(text=REJECT)
         parts = (cand.get("content") or {}).get("parts") or []
         text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
-        return Script(text=clean_script(text, truncated=reason == "MAX_TOKENS"))
+        return _Reply(text, truncated=reason == "MAX_TOKENS",
+                      refused=reason in ("SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII"))
 
 
 class OpenAiLlmClient:
@@ -288,13 +334,22 @@ class OpenAiLlmClient:
         self._timeout = timeout
 
     async def generate(self, prompt: Prompt) -> Script:
+        reply = await self._call(prompt, self.max_tokens)
+        if reply.refused:  # 제공자 필터·모델 거부 = L1 REJECT와 같게 다룬다
+            return Script(text=REJECT)
+        return Script(text=clean_script(reply.text, truncated=reply.truncated))
+
+    async def complete(self, prompt: Prompt, *, max_tokens: int) -> str:
+        return _raw(await self._call(prompt, max_tokens), "openai")
+
+    async def _call(self, prompt: Prompt, max_tokens: int) -> _Reply:
         body: dict = {
             "model": self.model,
             "messages": [{"role": "system", "content": prompt.system},
                          {"role": "user", "content": prompt.user}],
         }
         # OpenAI 본가는 max_tokens를 폐기했고, 호환 서버들은 아직 max_tokens만 아는 경우가 많다
-        body["max_completion_tokens" if self._official else "max_tokens"] = self.max_tokens
+        body["max_completion_tokens" if self._official else "max_tokens"] = max_tokens
         if self.temperature is not None:
             body["temperature"] = self.temperature
         if self.reasoning_effort:
@@ -309,12 +364,12 @@ class OpenAiLlmClient:
             raise LlmError(f"openai 응답 형식 오류: {str(data)[:200]}") from exc
         reason = choice.get("finish_reason")
         if reason == "content_filter" or message.get("refusal"):
-            return Script(text=REJECT)  # 제공자 필터·모델 거부 = L1 REJECT와 같게 다룬다
+            return _Reply("", truncated=False, refused=True)
         text = message.get("content") or ""
         if reason == "length" and not text.strip():
             raise LlmError("출력 한도를 추론 토큰이 다 썼습니다 — "
                            "reasoning_effort를 낮추거나 max_tokens를 늘리세요")
-        return Script(text=clean_script(text, truncated=reason == "length"))
+        return _Reply(text, truncated=reason == "length", refused=False)
 
 
 def make_llm(kind: str, *, model: str | None = None, base_url: str | None = None,

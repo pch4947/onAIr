@@ -12,7 +12,7 @@ cd apps/engine
 python -m venv .venv
 .venv\Scripts\activate        # Windows (bash: source .venv/Scripts/activate)
 pip install -e ../../packages/onair_schema   # 백엔드와 같이 쓰는 persona·station.created 스키마
-pip install -e ".[dev]"
+pip install -e ".[dev,redis,api]"   # redis: Redis 전송, api: 엔진 REST
 Copy-Item .env.example .env   # bash: cp .env.example .env
 ```
 
@@ -180,6 +180,28 @@ onair-engine --transport redis --serve
 - 검증·보이스 확인·ack 사전 렌더링을 통과하면 `station.started`(확정 주제), 아니면 `station.rejected`(`reason`, `detail`)를 그 방의 `:out`으로 보냅니다. 넣어 보는 명령은 계약 문서 3.3절에 있습니다.
 - `pipeline.tts: cartesia`면 `persona.voice`가 Cartesia 한국어 보이스 목록에 있는지 확인합니다.
 - 받은 `station.created` 원문은 계측 SQLite `station_log`에 persona 사본으로 남습니다.
+- 엔진 REST(아래)도 함께 열립니다.
+
+### 엔진 REST — 방 생성 화면용 API
+
+계약: [docs/ENGINE_REDIS_CONTRACT.md](../../docs/ENGINE_REDIS_CONTRACT.md) 6장. `127.0.0.1:8100`에만 열고, `/health`를 뺀 `/v1`은 `Authorization: Bearer {ONAIR_ENGINE_TOKEN}`이 필요합니다(토큰을 안 정하면 인증 없이 열립니다).
+
+```powershell
+onair-engine --api                                  # REST만 (Redis 불필요 — 방 생성 화면 개발용)
+onair-engine --api --llm openai --llm-model gpt-6-luna   # 실제 LLM으로 초안 만들기
+```
+
+| endpoint | 하는 일 |
+|---|---|
+| `POST /v1/personas/drafts` | 폼(`PersonaForm`) → persona 초안 N개. 기본 말투는 폼 선택지에서 규칙으로, 이름·컨셉·예시 멘트 등은 LLM이 만든다. 스키마·안전(L2)·말투 이탈 검사에서 떨어진 초안만 최대 2회 다시 만든다 |
+| `POST /v1/personas/check` | 호스트가 고친 persona — 스키마·L0·보이스 검사. 실패하면 `422 {"errors": [{"field", "reason"}]}` |
+| `GET /v1/engine/status` | 떠 있는 방, 진행 중 생성 수, 최근 10분 생성 지연 P95 |
+| `GET /v1/stations/{id}/decisions?after=&limit=` | 결정 로그 페이지 (`next`를 다음 `after`로) |
+| `GET /health` | 프로세스 생존 (인증 없음) |
+
+- **더미 LLM(`pipeline.llm: dummy`)도 초안을 돌려줍니다.** API 키 없이 프론트·백엔드가 방 생성 흐름을 개발할 수 있습니다.
+- 실측 (2026-10-09, `gpt-6-luna`): 초안 3개 12.8~14.8초. 응답 목표는 15초 `[예시]`, 상한은 `api.draft_timeout_sec`(30초)입니다.
+- API 문서: 엔진을 띄운 뒤 `http://127.0.0.1:8100/v1/docs`
 
 ## 테스트 / 린트
 

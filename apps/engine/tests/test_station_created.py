@@ -182,8 +182,8 @@ def test_voice_catalog_is_refreshed_once_for_new_voice(tmp_path):
                             voice_catalog=catalog)
 
     async def scenario():
-        known = [await manager._voice_known(VOICE), await manager._voice_known(VOICE),
-                 await manager._voice_known("voice-ko-new")]
+        known = [await manager.voice_known(VOICE), await manager.voice_known(VOICE),
+                 await manager.voice_known("voice-ko-new")]
         return known
 
     assert asyncio.run(scenario()) == [True, True, True]

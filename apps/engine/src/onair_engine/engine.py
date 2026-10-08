@@ -46,6 +46,10 @@ class EngineSettings:
     # 이보다 오래된 request.arrived는 답하지 않는다. 입력 스트림을 처음부터 읽으므로
     # 엔진이 꺼져 있던 사이의 예전 요청이 재기동 때 몰려온다 [예시]
     request_max_age_sec: float = 600.0
+    # 엔진 REST (계약 6장) — 단일 VM에서 백엔드만 접근하므로 루프백에만 연다. 포트는 [예시]
+    api_host: str = "127.0.0.1"
+    api_port: int = 8100
+    draft_timeout_sec: float = 30.0  # persona 초안 생성 상한 — 응답 목표는 15초 [예시]
 
 
 class StationRejected(Exception):

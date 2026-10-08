@@ -38,5 +38,11 @@ transport:
 telemetry:
   sqlite_path: var/engine_metrics.sqlite
 
+api:                          # 엔진 REST (계약 6장) — --serve, --api 때만 연다
+  host: 127.0.0.1             # 단일 VM에서 백엔드만 접근 — 루프백에만 연다
+  port: 8100                  # [예시]
+  draft_timeout_sec: 30       # persona 초안 생성 상한 (응답 목표 15초)
+                              # 인증 토큰은 ONAIR_ENGINE_TOKEN 환경변수 — 없으면 인증 없이 연다
+
 context:
   recent_segments: 8          # 방송 맥락 = 최근 N개 세그먼트 요약 (확인 10 결정)

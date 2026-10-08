@@ -13,8 +13,12 @@ from dotenv import load_dotenv
 from .domain import StationConfig, StationProfile
 from .engine import EngineSettings
 from .manager import EngineManager
+from .pipeline.llm import make_llm
+from .pipeline.safety import SafetyChecker
 from .pipeline.tts import list_cartesia_voices
 from .transport import RedisControlChannel
+
+logger = logging.getLogger(__name__)
 
 # apps/engine/.env — 백엔드(apps/backend/.env)와 같은 방식. 키는 설정 파일이 아니라 여기에 둔다
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
@@ -69,6 +73,9 @@ def load_config(path: Path) -> tuple[StationConfig, EngineSettings]:
         max_concurrent_generations=int(pipe.get("max_concurrent_generations", 2)),
         target_buffer_sec=float(pipe.get("target_buffer_sec", 30)),
         request_max_age_sec=float(pipe.get("request_max_age_sec", 600)),
+        api_host=str(raw.get("api", {}).get("host", "127.0.0.1")),
+        api_port=int(raw.get("api", {}).get("port", 8100)),
+        draft_timeout_sec=float(raw.get("api", {}).get("draft_timeout_sec", 30)),
     )
     return config, settings
 
@@ -96,6 +103,33 @@ def apply_llm_args(settings: EngineSettings, args: argparse.Namespace) -> None:
         settings.llm_reasoning_effort = args.llm_reasoning_effort
 
 
+async def _serve(manager: EngineManager, settings: EngineSettings, *, with_stations: bool) -> None:
+    """엔진 REST(+ engine:control 소비). 둘 중 하나가 끝나면 함께 끝낸다."""
+    from .api import create_app, serve_api  # fastapi는 선택 의존성 — 쓸 때만 불러온다
+    from .personas import PersonaDrafter
+
+    drafter = PersonaDrafter(
+        lambda: make_llm(settings.llm, model=settings.llm_model, base_url=settings.llm_base_url,
+                         reasoning_effort=settings.llm_reasoning_effort),
+        SafetyChecker(settings.safety_rules_path),
+    )
+    if settings.transport_token is None:
+        logger.warning("ONAIR_ENGINE_TOKEN이 없어 엔진 REST를 인증 없이 엽니다 (루프백 전용)")
+    app = create_app(manager, drafter, settings, settings.transport_token)
+    tasks = [asyncio.create_task(serve_api(app, settings))]
+    if with_stations:
+        tasks.append(asyncio.create_task(
+            manager.serve(RedisControlChannel(settings.transport_redis_url))))
+    try:
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            task.result()  # 예외가 있으면 여기서 올린다
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 def cli(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="onair-engine", description="onAIr 대본 엔진")
     parser.add_argument("--config", type=Path, default=Path("config/station.example.yaml"))
@@ -115,8 +149,10 @@ def cli(argv: list[str] | None = None) -> None:
     parser.add_argument("--backend-url", default=None, metavar="URL",
                         help="설정 파일의 transport.base_url 덮어쓰기")
     parser.add_argument("--serve", action="store_true",
-                        help="운영 모드 — engine:control의 station.created마다 방을 띄운다 "
+                        help="운영 모드 — engine:control의 station.created마다 방을 띄우고 엔진 REST도 연다 "
                              "(transport.kind=redis 필요, 설정 파일의 station은 쓰지 않음)")
+    parser.add_argument("--api", action="store_true",
+                        help="엔진 REST만 연다 (방 생성 화면 개발용 — Redis 불필요)")
     args = parser.parse_args(argv)
     # load_config가 ONAIR_REDIS_URL 등을 읽으므로 그보다 먼저 불러온다
     load_env()
@@ -139,11 +175,10 @@ def cli(argv: list[str] | None = None) -> None:
     if args.backend_url:
         settings.transport_base_url = args.backend_url
     manager = EngineManager(settings)
-    if args.serve:
-        if settings.transport_kind != "redis":
+    if args.serve or args.api:
+        if args.serve and settings.transport_kind != "redis":
             parser.error("--serve는 transport.kind=redis가 필요합니다 (--transport redis)")
-        control = RedisControlChannel(settings.transport_redis_url)
-        main = manager.serve(control)
+        main = _serve(manager, settings, with_stations=args.serve)
     else:
         main = manager.run_local(
             config, max_segments=args.max_segments, demo_requests=args.demo_request,
