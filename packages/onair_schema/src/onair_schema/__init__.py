@@ -3,7 +3,8 @@
 필드와 제한은 docs/ENGINE_REDIS_CONTRACT.md 3.3절 표가 명세다. 제한 수치는 [예시]이며,
 바꿀 때는 계약 문서와 함께 바꾼다.
 """
-from .persona import Persona, Style
+from .persona import Persona, PersonaForm, Style
 from .station import STATION_REJECT_REASONS, StationCreated, Track, error_detail
 
-__all__ = ["STATION_REJECT_REASONS", "Persona", "StationCreated", "Style", "Track", "error_detail"]
+__all__ = ["STATION_REJECT_REASONS", "Persona", "PersonaForm", "StationCreated", "Style", "Track",
+           "error_detail"]
