@@ -32,7 +32,7 @@ from ..domain import (
     Script,
     StationProfile,
 )
-from ..main import add_llm_args, apply_llm_args, load_config, load_profile
+from ..main import add_llm_args, apply_llm_args, load_config, load_env, load_profile
 from ..pipeline.llm import REJECT, LlmClient, LlmError, make_llm
 from ..pipeline.pipeline import GenerationPipeline
 from ..pipeline.safety import SafetyChecker
@@ -435,4 +435,6 @@ def cli(argv: list[str] | None = None) -> None:
     parser.add_argument("--judge-model", default=None, metavar="MODEL",
                         help="judge 모델 (기본: 생성과 같은 모델 — 자기 채점 편향에 주의)")
     parser.add_argument("--judge-base-url", default=None, metavar="URL")
-    asyncio.run(evaluate(parser.parse_args(argv)))
+    args = parser.parse_args(argv)
+    load_env()  # 엔진과 같이 apps/engine/.env에서 키를 읽는다
+    asyncio.run(evaluate(args))
