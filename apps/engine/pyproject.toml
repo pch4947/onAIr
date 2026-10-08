@@ -3,7 +3,7 @@ name = "onair-engine"
 version = "0.1.0"
 description = "onAIr 대본 엔진 — 편성 관리자, LLM/TTS 생성 파이프라인, 안전 계층"
 requires-python = ">=3.12"
-dependencies = ["PyYAML>=6.0", "mutagen>=1.47"]
+dependencies = ["PyYAML>=6.0", "mutagen>=1.47", "python-dotenv>=1,<2"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6", "fakeredis>=2.26"]

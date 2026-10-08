@@ -56,23 +56,13 @@ class BackendTests(unittest.TestCase):
 
     def test_request_and_policy_flow(self):
         self.assertEqual(self.call("/health"), (200, {"ok": True, "service": "onAIr backend"}))
-        self.assertEqual(self.call("/api/requests")[1], {"requests": []})
+        self.assertEqual(self.call("/api/requests")[0], 503)
         self.assertEqual(self.call("/api/stream/state")[1]["stream"]["status"], "bootstrapping")
-        result = self.call("/api/scheduler/tick", {})[1]
-        self.assertEqual(result["decision"]["action"], "build_buffer")
-        result = self.call("/api/scheduler/tick", {"bufferSeconds": 60})[1]
-        self.assertEqual(result["decision"]["action"], "idle")
-        self.assertEqual(result["stream"]["status"], "ready")
-        status, payload = self.call("/api/requests", {"prompt": "노래 부탁해요"})
-        self.assertEqual(status, 202)
-        entry = payload["request"]
-        self.assertEqual(entry["listenerId"], "anonymous")
-        self.assertEqual(entry["status"], "queued")
-        self.assertEqual(self.call("/api/requests")[1]["requests"], [entry])
-        result = self.call("/api/scheduler/tick", {})[1]
-        self.assertEqual(result["decision"]["action"], "serve_request")
-        self.assertEqual(result["pendingRequestCount"], 1)
-        self.assertEqual(result["stream"]["bufferSeconds"], 60)
+        result = self.call("/api/stream/state")[1]
+        self.assertIsNone(result["pendingRequestCount"])
+        self.assertFalse(result["requestStatsAvailable"])
+        self.assertEqual(self.call("/api/scheduler/tick", {})[0], 503)
+        self.assertEqual(self.call("/api/requests", {"prompt": "노래 부탁해요"})[0], 503)
 
     def test_invalid_inputs_and_absent_ingestion(self):
         for body in [{}, {"prompt": ""}, {"prompt": 5}]:
@@ -80,6 +70,19 @@ class BackendTests(unittest.TestCase):
         for body in [{"bufferSeconds": -1}, {"bufferSeconds": "NaN"}, {"bufferTargetSeconds": 0}]:
             self.assertEqual(self.call("/api/scheduler/tick", body)[0], 422)
         self.assertEqual(self.call("/api/segments", {})[0], 404)
+
+    def test_playback_fragment_validation(self):
+        fragment = "a" * 32 + "_" + "b" * 32 + "_0.ts"
+        status, result = self.call("/api/stream/state?fragment=" + fragment)
+        self.assertEqual(status, 200)
+        self.assertEqual(result["stream"]["playback"], {
+            "fragment": fragment, "status": "unavailable", "segment": None})
+        self.assertIsNone(result["stream"]["currentSegment"])
+        self.assertNotIn("playback", self.call("/api/stream/state")[1]["stream"])
+        for invalid in ["../secret", "", "a" * 129]:
+            self.assertEqual(self.call("/api/stream/state?fragment=" + invalid)[0], 422)
+        with self.client.open(self.base + "/api/stream/state?fragment=" + fragment) as response:
+            self.assertEqual(response.headers["Cache-Control"], "no-store")
 
     def test_cors_and_openapi(self):
         request = Request(self.base + "/api/requests", method="OPTIONS", headers={
@@ -90,6 +93,7 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(response.headers["Access-Control-Allow-Origin"], "*")
         self.assertEqual(set(self.call("/openapi.json")[1]["paths"]),
                          {"/health", "/health/redis", "/api/requests", "/api/stream/state", "/api/scheduler/tick",
+                          "/api/requests/{request_id}/history", "/api/broadcast/segments/{segment_id}/state",
                           "/api/broadcast/queue", "/api/requests/{request_id}/state", "/hls/{station_id}/{filename}"})
 
     def test_urgent_request_and_unsafe_buffer(self):

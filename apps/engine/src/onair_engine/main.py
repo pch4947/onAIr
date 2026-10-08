@@ -8,10 +8,20 @@ import os
 from pathlib import Path
 
 import yaml
+from dotenv import load_dotenv
 
 from .domain import StationConfig, StationProfile
 from .engine import EngineSettings
 from .manager import EngineManager
+
+# apps/engine/.env — 백엔드(apps/backend/.env)와 같은 방식. 키는 설정 파일이 아니라 여기에 둔다
+ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+
+
+def load_env(path: Path = ENV_FILE) -> bool:
+    """.env를 환경변수로 읽는다. 이미 설정된 OS 환경변수가 우선한다 (백엔드와 동일)."""
+    return load_dotenv(path, override=False)
+
 
 # persona 파일에서 프로필 필드가 아닌 메타데이터 — 읽고 버린다
 _PERSONA_META = {"persona_id", "description"}
@@ -100,6 +110,8 @@ def cli(argv: list[str] | None = None) -> None:
     parser.add_argument("--backend-url", default=None, metavar="URL",
                         help="설정 파일의 transport.base_url 덮어쓰기")
     args = parser.parse_args(argv)
+    # load_config가 ONAIR_REDIS_URL 등을 읽으므로 그보다 먼저 불러온다
+    load_env()
 
     # 생성된 대본을 SCRIPT 라인으로 보여준다 (SUBMIT 페이로드에는 대본 텍스트가 없다)
     logging.basicConfig(level=logging.INFO, format="%(message)s")

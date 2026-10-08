@@ -19,6 +19,10 @@ class Settings:
     hls_enabled: bool = False
     hls_dir: Path = Path(__file__).resolve().parents[1] / "var" / "hls"
     ffmpeg: str = "ffmpeg"
+    fallback_audio: Path | None = None
+    fallback_mode: str = "music"
+    buffer_low_seconds: float = 15
+    broadcast_delay_seconds: float = 12
     station_id: str = "st_local_dev"
     audio_dir: Path = Path(__file__).resolve().parents[2] / "engine" / "var" / "audio"
 
@@ -40,7 +44,14 @@ def load_settings() -> Settings:
     audio_dir = Path(os.environ.get("ONAIR_AUDIO_DIR", str(Settings.audio_dir))).expanduser()
     if not audio_dir.is_absolute():
         raise ValueError("ONAIR_AUDIO_DIR must be an absolute path")
+    fallback_mode = os.environ.get("ONAIR_FALLBACK_MODE", "music")
+    if fallback_mode not in {"music", "silence"}:
+        raise ValueError("ONAIR_FALLBACK_MODE must be music or silence")
+    fallback = os.environ.get("ONAIR_FALLBACK_AUDIO")
     return Settings(host=os.environ.get("HOST", "127.0.0.1"), port=port,
+                    fallback_mode=fallback_mode, fallback_audio=Path(fallback).resolve() if fallback else None,
+                    buffer_low_seconds=positive_seconds("ONAIR_BUFFER_LOW_SECONDS", "15"),
+                    broadcast_delay_seconds=positive_seconds("ONAIR_BROADCAST_DELAY_SECONDS", "12"),
                     buffer_target_seconds=positive_seconds("STREAM_BUFFER_TARGET_SECONDS", "45"),
                     response_window_seconds=positive_seconds("REQUEST_RESPONSE_WINDOW_SECONDS", "90"),
                     redis_url=os.environ.get("ONAIR_REDIS_URL") or os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0"),
