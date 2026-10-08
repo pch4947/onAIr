@@ -11,14 +11,15 @@ export function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<MainPage />} />
+        <Route path="/" element={<Navigate to="/login" replace />} />
+        <Route path="/main" element={<MainPage />} />
         <Route path="/listen" element={<ListenPage />} />
         <Route path="/admin" element={<AdminPage />} />
         <Route path="/board" element={<BoardPage />} />
         <Route path="/mypage" element={<MyPagePage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<SignupPage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
     </BrowserRouter>
   )
