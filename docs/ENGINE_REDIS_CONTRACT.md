@@ -1,6 +1,6 @@
 # 엔진 ↔ 백엔드 통신 계약 (v1)
 
-- 상태: **흐름(Redis) 중 세그먼트 제출·요청 전달·상태 통보는 엔진 구현 완료.** 하트비트, 조회 REST, 이번에 추가된 이벤트(3.3~3.5)는 미구현. 2026-10-08 팀 결정으로 9장의 미결 사항을 확정했다. 양쪽 모두 구현 전인 항목은 v1 안에서 확정하고, 이미 구현된 필드나 의미를 바꿀 때는 `contract_version`을 올린다.
+- 상태: **흐름(Redis) 중 세그먼트 제출·요청 전달·상태 통보는 엔진 구현 완료.** `station.created` 처리(3.3절)도 구현했다(#55). 하트비트, 조회 REST, 곡·사연 이벤트(3.4~3.5)는 미구현. 2026-10-08 팀 결정으로 9장의 미결 사항을 확정했다. 양쪽 모두 구현 전인 항목은 v1 안에서 확정하고, 이미 구현된 필드나 의미를 바꿀 때는 `contract_version`을 올린다.
 - **결정 (2026-09-20, 확인 1)**
   - **흐름은 Redis Streams** — 세그먼트 제출, 요청 전달, 상태 통보, 스테이션 수명주기
   - **관측도 Redis 푸시가 기본** — 엔진이 `engine.health` 하트비트로 상태를 밀어주고, 백엔드가 그 값으로 운영자 콘솔(F-14)을 구성한다 (설계 문서 5.3의 원래 방향)
@@ -22,7 +22,7 @@
 |---|---|---|---|
 | `engine:{station_id}:out` | 엔진 → 백엔드 | 엔진 | `backend` (백엔드가 기동 시 `MKSTREAM`으로 생성 — 구현됨) |
 | `engine:{station_id}:in` | 백엔드 → 엔진 | 백엔드 | `engine` (엔진이 구독 시작 시 `MKSTREAM`으로 생성) |
-| `engine:control` | 백엔드 → 엔진 | 백엔드 | `engine` — `station.created` 전용. **미구현 (M3)** |
+| `engine:control` | 백엔드 → 엔진 | 백엔드 | `engine` — `station.created` 전용. 엔진이 구독 시작 시 `MKSTREAM`으로 생성 (`onair-engine --serve`) — 구현됨 |
 
 엔진은 `XADD ... MAXLEN ~ 10000`으로 발행한다. 백엔드도 `:in`에 같은 상한을 권장한다.
 
@@ -48,8 +48,8 @@
 | `segment.submitted` | `SegmentSubmission` (설계 문서 5.1) | 구현 |
 | `request.state` | `{"request_id", "state"}` — state: `screened` `queued` `generating` `generated` `rejected` `cancelled` | 구현 (`cancelled`는 미구현 — 3.2 `request.cancelled`) |
 | `engine.health` | 3.1.1 참고 — 운영자 콘솔이 쓰는 스테이션 현재 상태 | 미구현 |
-| `station.started` | `{"topic"}` — 검증 통과, ack 사전 렌더링 완료. 첫 세그먼트가 곧 나온다. `topic`은 이 방송의 확정된 주제(호스트가 비웠으면 엔진이 생성한 값) — 백엔드는 이 주제로 게시판 사연 후보를 고른다 (3.5절) | 미구현 (M3) |
-| `station.rejected` | `{"reason": "invalid_payload"\|"unknown_voice"\|"llm_unavailable", "detail"}` — 방송을 시작하지 않았다. `detail`은 사람이 읽는 원인 (예: `persona.examples: 6개 — 최대 5개`) | 미구현 (M3) |
+| `station.started` | `{"topic"}` — 검증 통과, ack 사전 렌더링 완료. 첫 세그먼트가 곧 나온다. `topic`은 이 방송의 확정된 주제(호스트가 비웠으면 엔진이 생성한 값) — 백엔드는 이 주제로 게시판 사연 후보를 고른다 (3.5절) | 구현 (호스트가 비운 주제는 아직 컨셉을 그대로 쓴다 — LLM 생성은 오프닝 코너 작업에서) |
+| `station.rejected` | `{"reason": "invalid_payload"\|"unknown_voice"\|"llm_unavailable"\|"tts_unavailable", "detail"}` — 방송을 시작하지 않았다. `detail`은 사람이 읽는 원인 (예: `persona.examples: List should have at most 5 items after validation, not 6`). `tts_unavailable`은 TTS 키 누락·보이스 목록 조회 실패·ack 사전 렌더링 실패 (#55에서 추가 — 양쪽 구현 전이라 v1 안에서 확정) | 구현 |
 
 `segment.submitted` payload 예:
 
@@ -104,7 +104,7 @@
 |---|---|---|---|
 | `request.arrived` | `{"request_id", "kind": "story"\|"mood"\|"song", "body", "requester_ref", "track"?}` — `track`은 `kind: "song"`일 때만 (3.4절) | L0 검사(`body`만) 후 요청 큐 적재. **request_id는 백엔드 발급값을 그대로 쓴다** — 이후 `request.state`가 같은 id로 나간다 | 구현 (`song`은 미구현) |
 | `request.cancelled` | `{"request_id", "reason": "listener"\|"operator"}` | `queued`면 큐에서 빼고 `cancelled` 통보. `generating`이면 생성은 끝까지 하되 결과를 버리고 `cancelled` 통보. 이미 제출했으면(`generated`) 엔진은 아무것도 하지 않는다 — 제출된 세그먼트를 빼는 것은 백엔드 몫 | 미구현 |
-| `station.created` | 3.3절 | EngineManager가 StationEngine 기동, ack 캐시 사전 렌더링 → `station.started` 또는 `station.rejected` | 미구현 (M3) |
+| `station.created` | 3.3절 | EngineManager가 StationEngine 기동, ack 캐시 사전 렌더링 → `station.started` 또는 `station.rejected`. 같은 `station_id`가 다시 오면(재전달) 무시한다 | 구현 |
 | `station.closed` | `{"reason": "normal"\|"operator_stop"}` | 진행 중 생성 취소, 계측 플러시 후 인스턴스 종료 | 구현 (`reason`은 아직 미사용) |
 | `track.queued` | 3.4절 — 다음에 틀 곡 정보 | 다음 곡으로 기억해 두고, 러닝오더가 음악 칸에 오면 소개 멘트 생성 (`music_ref`로 그 곡 지정) | 미구현 |
 | `track.started` | 3.4절 — 곡 재생 시작 | 곡이 끝나는 시각을 버퍼 계산에 반영 | 미구현 |
@@ -144,10 +144,11 @@
 }
 ```
 
-로컬에서 백엔드 대신 넣어 보기 (엔진 구독은 M3 구현 후):
+로컬에서 백엔드 대신 넣어 보기 — 엔진은 `onair-engine --transport redis --serve`로 띄운다. `voice`는 `onair-engine --list-voices`의 ID로 바꾼다 (`pipeline.tts: dummy`면 보이스를 검사하지 않는다):
 
 ```powershell
-wsl redis-cli XADD engine:control '*' type station.created contract_version 1 event_id evt_demo2 station_id st_8f2a at 1789500000 payload '{"broadcast_minutes":30,"persona":{"style":{"formality":"polite","energy":"low","humor":"rare"},"dj_name":"새벽","concept":"심야 스터디 라디오","tone":"차분하고 따뜻한 존댓말"}}'
+wsl redis-cli XADD engine:control '*' type station.created contract_version 1 event_id evt_demo2 station_id st_8f2a at 1789500000 payload '{"broadcast_minutes":30,"persona":{"persona_id":"psn_demo","style":{"formality":"polite","energy":"low","humor":"rare"},"voice":"<Cartesia 보이스 ID>","dj_name":"새벽","concept":"심야 스터디 라디오","tone":"차분하고 따뜻한 존댓말","examples":["새벽 한 시가 넘었네요.","오늘 분량을 다 못 끝내도 괜찮아요.","졸리면 물 한 잔이요."]}}'
+wsl redis-cli XRANGE engine:st_8f2a:out - + COUNT 3   # station.started 또는 station.rejected
 ```
 
 #### 필드
@@ -171,7 +172,7 @@ wsl redis-cli XADD engine:control '*' type station.created contract_version 1 ev
 | `persona.signature_phrases` | 문자열 배열 | | `[]` | 0~3개, 각 30자 | 입버릇 (가끔만 쓰도록 지시) |
 | `policy` | 문자열 | | `naive_fifo` | 현재 `naive_fifo`만 | 편성 정책 선택. 코너별 정책 대응표는 [persona.md](persona.md) 8.1절 — 확정 시 객체로 확장 |
 
-- 스키마는 **Pydantic 모델 하나**로 정의하고 백엔드와 엔진이 같이 쓴다 (결정 2026-10-08, [persona.md](persona.md) 2.3절). 이 표가 그 모델의 명세다.
+- 스키마는 **Pydantic 모델 하나**로 정의하고 백엔드와 엔진이 같이 쓴다 (결정 2026-10-08, [persona.md](persona.md) 2.3절). 이 표가 그 모델의 명세다 — 구현: [packages/onair_schema](../packages/onair_schema/) `StationCreated`·`Persona`.
 - **목록은 JSON 배열만** 받는다. 문자열 하나로 오면 거부한다 (한 글자씩 예시로 쪼개지는 사고 방지).
 - **필드 이름은 엔진 코드 기준**(`dj_name` 등)이다. 엔진 구현·테스트가 이 이름을 쓴다.
 - `running_order`·행동 층(`behavior`)은 v1에 넣지 않는다. 러닝오더는 엔진이 `broadcast_minutes`로 만들고([ENGINE_ARCHITECTURE.md](ENGINE_ARCHITECTURE.md) 4.3절), 정책 A/B/C가 확정되면 필드를 추가하고 `contract_version`을 올린다.

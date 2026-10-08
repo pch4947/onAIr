@@ -11,17 +11,17 @@
 
 | 항목 | 상태 | 근거 (코드) |
 |---|---|---|
-| 스테이션별 DJ 스타일 (`StationProfile`) | **부분 구현** | [domain.py](../apps/engine/src/onair_engine/domain.py) `StationProfile` — `dj_name`·`tone`·`concept` + `examples`·`forbidden`·`signature_phrases`. persona 파일([config/personas/](../apps/engine/config/personas/))로 분리. 2.1절의 `style`·`music_taste`·`voice`·`persona_id`는 아직 없음 |
+| 스테이션별 DJ 스타일 (`StationProfile`) | **부분 구현** | [domain.py](../apps/engine/src/onair_engine/domain.py) `StationProfile` — `dj_name`·`tone`·`concept` + `examples`·`forbidden`·`signature_phrases`. persona 파일([config/personas/](../apps/engine/config/personas/))로 분리. `voice`·`persona_id`는 `StationConfig`에 있다(#55). `style`·`music_taste`는 계측 사본에만 남고 프롬프트에는 아직 안 쓴다 |
 | 스테이션별 엔진 분리 | **구현됨** | [manager.py](../apps/engine/src/onair_engine/manager.py) `EngineManager.start_station(config)`가 방마다 `StationEngine`을 따로 만든다. 프롬프트·방송 맥락·ack 캐시 폴더·계측(`station_id`)이 방 단위로 나뉜다 |
-| 스테이션별 TTS 보이스 | **미구현(설계)** | [engine.py](../apps/engine/src/onair_engine/engine.py) `EngineSettings.tts_voice`는 엔진 전체 설정이다 — 방이 여러 개여도 모두 같은 보이스. [ack.py](../apps/engine/src/onair_engine/ack.py) `AckCache`의 "스테이션마다 DJ 보이스가 다르다"는 전제와 어긋난다 (9.3절) |
-| 스테이션별 스타일 주입 경로 | **부분 구현** | 로컬 yaml의 방 하나만 읽는다([main.py](../apps/engine/src/onair_engine/main.py)). `station.created` 페이로드는 확정([ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md) 3.3절), 엔진 구독은 M3 |
+| 스테이션별 TTS 보이스 | **구현됨** | [engine.py](../apps/engine/src/onair_engine/engine.py) `StationEngine`이 `StationConfig.voice`(= `persona.voice`)로 TTS 어댑터를 만든다. `EngineSettings.tts_voice`는 로컬 실행용 기본값. Cartesia 보이스 목록 검증은 [manager.py](../apps/engine/src/onair_engine/manager.py) (#55) |
+| 스테이션별 스타일 주입 경로 | **구현됨** | `onair-engine --serve`가 `engine:control`의 `station.created`마다 방을 띄운다 — [manager.py](../apps/engine/src/onair_engine/manager.py) `config_from_created` (#55). 로컬 실행은 여전히 yaml의 방 하나 |
 | 표현과 정책의 분리 | **부분 구현** | `StationConfig.profile`(표현)과 `StationConfig.policy_name`(정책)이 이미 별도 필드. 행동 층 파라미터 자체는 없음 |
 | 공통 시스템 프롬프트 | **부분 구현** | [corners/base.py](../apps/engine/src/onair_engine/corners/base.py) `system_prompt()` — 4절 순서로 정체성·말투·입버릇·금지 사항·말하기 원칙(`RADIO_CRAFT`)·출력 규칙·L1 지시 + few-shot 예시(데이터 블록). 시간 예산 블록 없음 |
 | 편성 관리자 / 정책 | **부분 구현** | [scheduler/scheduler.py](../apps/engine/src/onair_engine/scheduler/scheduler.py) `Scheduler`, [policies/naive_fifo.py](../apps/engine/src/onair_engine/scheduler/policies/naive_fifo.py) `NaiveFifoPolicy` 하나뿐. 정책 A/B/C는 TODO |
 | 행동 층 스키마 (`behavior`) | **미구현(설계)** | — |
 | 페르소나 생성 흐름 (폼 → LLM 초안) | **미구현(설계 확정)** | 3절. 엔진 REST `POST /v1/personas/drafts`·`check` ([ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md) 6.2절) |
 | 페르소나 저장소 | **백엔드 담당 (결정)** | 백엔드 신규 DB (2.4절). 엔진은 저장소를 갖지 않는다 |
-| 스키마 검증 | **미구현(설계 확정)** | Pydantic 공용 모델 (2.3절). 엔진 의존성은 아직 `PyYAML`, `mutagen`뿐 |
+| 스키마 검증 | **구현됨** | [packages/onair_schema](../packages/onair_schema/) — `Persona`·`Style`·`Track`·`StationCreated` (2.3절, #55). `BehaviorSpec`은 정책 A/B/C 확정 후. 고정 장르 목록은 미정이라 `music_taste`는 길이만 검사 |
 | 청취자 채팅의 데이터 블록 분리 | **구현됨** | [prompt_data.py](../apps/engine/src/onair_engine/prompt_data.py) `data_block()` — 사연·RSS·곡 정보·직전 멘트·persona 예시 (#38) |
 | 실험용 프리셋 | **부분 구현** | 비교용 persona 프리셋 3종([config/personas/](../apps/engine/config/personas/)). 실험 조건(행동 층)을 고정하는 프리셋은 없음 |
 | 품질 평가 도구 (7절) | **구현됨** | `python -m onair_engine.eval` ([eval/](../apps/engine/src/onair_engine/eval/)) — 자동 지표 + LLM-judge 캐릭터 이탈률. 사용법은 [엔진 README](../apps/engine/README.md) |

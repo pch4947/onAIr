@@ -10,7 +10,10 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 from onair_engine.pipeline.tts import (
-    CARTESIA_VERSION, CartesiaTtsClient, list_cartesia_voices, make_tts,
+    CARTESIA_VERSION,
+    CartesiaTtsClient,
+    list_cartesia_voices,
+    make_tts,
 )
 
 VOICE = "a0e99841-438c-4a64-b679-ae501e7d6091"

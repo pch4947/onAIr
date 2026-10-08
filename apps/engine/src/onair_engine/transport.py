@@ -25,6 +25,10 @@ class Transport(Protocol):
 
     async def notify_request_state(self, request_id: str, state: RequestState) -> None: ...
 
+    async def notify_station(self, event_type: str, payload: dict) -> None:
+        """스테이션 수명주기 통보 — station.started / station.rejected (계약 3.1절)."""
+        ...
+
     def events(self) -> AsyncIterator[dict]:
         """백엔드 발행 이벤트 스트림 (request.arrived, backpressure, station.* 등)."""
         ...
@@ -39,6 +43,9 @@ class StdoutTransport:
 
     async def notify_request_state(self, request_id: str, state: RequestState) -> None:
         print(f"REQUEST_STATE {request_id} -> {state}", flush=True)
+
+    async def notify_station(self, event_type: str, payload: dict) -> None:
+        print(f"STATION {event_type} {json.dumps(payload, ensure_ascii=False)}", flush=True)
 
     async def events(self) -> AsyncIterator[dict]:
         while True:
@@ -71,6 +78,10 @@ class HttpTransport:
             f"/api/engine/requests/{request_id}/state",
             {"request_id": request_id, "state": str(state), "at": time.time()},
         )
+
+    async def notify_station(self, event_type: str, payload: dict) -> None:
+        # 스테이션 수명주기는 Redis 전용이다 (HTTP 경로는 M0 관통용) — 로컬 실행 로그로만 남긴다
+        print(f"STATION {event_type} {json.dumps(payload, ensure_ascii=False)}", flush=True)
 
     async def events(self) -> AsyncIterator[dict]:
         # HTTP로는 백엔드 -> 엔진 이벤트를 받지 않는다 (엔진이 포트를 열지 않음). Redis를 쓴다.
@@ -146,24 +157,13 @@ class RedisTransport:
     async def notify_request_state(self, request_id: str, state: RequestState) -> None:
         await self._publish("request.state", {"request_id": request_id, "state": str(state)})
 
+    async def notify_station(self, event_type: str, payload: dict) -> None:
+        await self._publish(event_type, payload)
+
     async def events(self) -> AsyncIterator[dict]:
-        await self._ensure_group()
-        # 이전 실행에서 받고 ACK 못 한 내 몫(pending, ID "0")부터 처리한 뒤 새 메시지(">")로 넘어간다
-        cursor = "0"
-        while True:
-            resp = await self._redis.xreadgroup(
-                self.GROUP, self._consumer, {self.in_stream: cursor}, count=10,
-                block=None if cursor == "0" else self._block_ms,
-            )
-            entries = resp[0][1] if resp else []
-            if cursor == "0" and not entries:
-                cursor = ">"
-                continue
-            for entry_id, fields in entries:
-                event = self._decode(entry_id, fields)
-                if event is not None:
-                    yield event  # 소비자가 처리를 마치고 다음 이벤트를 요청해야 ACK된다
-                await self._redis.xack(self.in_stream, self.GROUP, entry_id)
+        async for event in _consume(self._redis, self.in_stream, self.GROUP, self._consumer,
+                                    self._block_ms, self._response_error):
+            yield event
 
     async def close(self) -> None:
         await self._redis.aclose()
@@ -184,26 +184,88 @@ class RedisTransport:
             print(f"TRANSPORT_FAILED {self.out_stream} {event_type} {exc!r}", flush=True)
 
     async def _ensure_group(self) -> None:
-        try:
-            await self._redis.xgroup_create(self.in_stream, self.GROUP, id="0", mkstream=True)
-        except self._response_error as exc:
-            if "BUSYGROUP" not in str(exc):  # 이미 있으면 정상
-                raise
+        await _ensure_group(self._redis, self.in_stream, self.GROUP, self._response_error)
 
-    def _decode(self, entry_id: str, fields: dict | None) -> dict | None:
+
+class RedisControlChannel:
+    """engine:control 소비 — 방이 생기기 전에 오는 station.created 전용 (계약 1·3.3절).
+
+    엔진 프로세스에 하나만 둔다. 응답(station.started/rejected)은 그 방의 :out 스트림으로 나간다.
+    """
+
+    STREAM = "engine:control"
+    GROUP = "engine"
+
+    def __init__(self, url: str, *, client=None, consumer: str | None = None,
+                 block_ms: int = 5_000):
         try:
-            return {
-                "stream_id": entry_id,
-                "type": fields["type"],
-                "contract_version": fields.get("contract_version"),
-                "event_id": fields.get("event_id"),
-                "at": float(fields["at"]),
-                "payload": json.loads(fields.get("payload") or "{}"),
-            }
-        except (KeyError, TypeError, ValueError) as exc:
-            # 계약 위반 메시지를 붙잡고 있으면 뒤 메시지가 전부 막힌다 — 기록 후 ACK로 흘려보낸다
-            print(f"TRANSPORT_BAD_EVENT {self.in_stream} {entry_id} {exc!r}", flush=True)
-            return None
+            import redis.asyncio as redis_asyncio
+            from redis.exceptions import ResponseError
+        except ImportError as exc:  # 선택 의존성 — 기동 시점에 실패시킨다
+            raise RuntimeError('redis transport를 쓰려면 pip install -e ".[redis]" 가 필요합니다') from exc
+        self._redis = client if client is not None else redis_asyncio.from_url(
+            url, decode_responses=True)
+        self._response_error = ResponseError
+        self._consumer = consumer or f"engine-{socket.gethostname()}"
+        self._block_ms = block_ms
+
+    async def events(self) -> AsyncIterator[dict]:
+        async for event in _consume(self._redis, self.STREAM, self.GROUP, self._consumer,
+                                    self._block_ms, self._response_error):
+            yield event
+
+    async def close(self) -> None:
+        await self._redis.aclose()
+
+
+async def _ensure_group(redis, stream: str, group: str, response_error) -> None:
+    try:
+        await redis.xgroup_create(stream, group, id="0", mkstream=True)
+    except response_error as exc:
+        if "BUSYGROUP" not in str(exc):  # 이미 있으면 정상
+            raise
+
+
+async def _consume(redis, stream: str, group: str, consumer: str, block_ms: int,
+                   response_error) -> AsyncIterator[dict]:
+    """소비 그룹으로 읽고, 소비자가 다음 이벤트를 요청할 때 직전 것을 XACK한다 (at-least-once)."""
+    await _ensure_group(redis, stream, group, response_error)
+    # 이전 실행에서 받고 ACK 못 한 내 몫(pending, ID "0")부터 처리한 뒤 새 메시지(">")로 넘어간다
+    cursor = "0"
+    while True:
+        resp = await redis.xreadgroup(
+            group, consumer, {stream: cursor}, count=10,
+            block=None if cursor == "0" else block_ms,
+        )
+        entries = resp[0][1] if resp else []
+        if cursor == "0" and not entries:
+            cursor = ">"
+            continue
+        if not entries:
+            # 블로킹 읽기가 기다리지 않고 빈 응답을 바로 주면(fakeredis 등) 이 루프가 이벤트 루프를 굶긴다
+            await asyncio.sleep(0)
+        for entry_id, fields in entries:
+            event = _decode(stream, entry_id, fields)
+            if event is not None:
+                yield event  # 소비자가 처리를 마치고 다음 이벤트를 요청해야 ACK된다
+            await redis.xack(stream, group, entry_id)
+
+
+def _decode(stream: str, entry_id: str, fields: dict | None) -> dict | None:
+    try:
+        return {
+            "stream_id": entry_id,
+            "type": fields["type"],
+            "contract_version": fields.get("contract_version"),
+            "event_id": fields.get("event_id"),
+            "station_id": fields.get("station_id"),  # engine:control에서는 새 방의 ID다
+            "at": float(fields["at"]),
+            "payload": json.loads(fields.get("payload") or "{}"),
+        }
+    except (KeyError, TypeError, ValueError) as exc:
+        # 계약 위반 메시지를 붙잡고 있으면 뒤 메시지가 전부 막힌다 — 기록 후 ACK로 흘려보낸다
+        print(f"TRANSPORT_BAD_EVENT {stream} {entry_id} {exc!r}", flush=True)
+        return None
 
 
 def make_transport(kind: str, *, base_url: str = "http://localhost:3000",

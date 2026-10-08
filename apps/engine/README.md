@@ -11,6 +11,7 @@
 cd apps/engine
 python -m venv .venv
 .venv\Scripts\activate        # Windows (bash: source .venv/Scripts/activate)
+pip install -e ../../packages/onair_schema   # 백엔드와 같이 쓰는 persona·station.created 스키마
 pip install -e ".[dev]"
 Copy-Item .env.example .env   # bash: cp .env.example .env
 ```
@@ -168,6 +169,17 @@ wsl redis-cli XRANGE engine:st_local_dev:out - + COUNT 5
 - 세그먼트 제출과 요청 상태는 `engine:{station_id}:out`으로 나갑니다.
 - 백엔드가 `engine:{station_id}:in`에 넣은 `request.arrived`는 요청 큐로, `station.closed`는 방송 정지로 처리됩니다.
 - 테스트는 fakeredis를 쓰므로 Redis 서버 없이 `pytest`로 돌아갑니다.
+
+#### 운영 모드 (`--serve`) — 호스트가 만든 방 띄우기
+
+```powershell
+onair-engine --transport redis --serve
+```
+
+- `engine:control`의 `station.created`마다 방을 하나씩 띄웁니다 (설정 파일의 `station`은 쓰지 않음). 페이로드 검증은 [packages/onair_schema](../../packages/onair_schema/) `StationCreated`로 합니다.
+- 검증·보이스 확인·ack 사전 렌더링을 통과하면 `station.started`(확정 주제), 아니면 `station.rejected`(`reason`, `detail`)를 그 방의 `:out`으로 보냅니다. 넣어 보는 명령은 계약 문서 3.3절에 있습니다.
+- `pipeline.tts: cartesia`면 `persona.voice`가 Cartesia 한국어 보이스 목록에 있는지 확인합니다.
+- 받은 `station.created` 원문은 계측 SQLite `station_log`에 persona 사본으로 남습니다.
 
 ## 테스트 / 린트
 

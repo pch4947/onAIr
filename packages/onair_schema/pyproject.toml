@@ -1,0 +1,19 @@
+[project]
+name = "onair-schema"
+version = "0.1.0"
+description = "onAIr 백엔드·엔진 공용 스키마 — persona, station.created (docs/persona.md 2.3절)"
+requires-python = ">=3.12"
+dependencies = ["pydantic>=2.7,<3"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
