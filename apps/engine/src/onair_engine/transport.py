@@ -140,7 +140,7 @@ class RedisTransport:
         except ImportError as exc:  # 선택 의존성 — 기동 시점에 실패시킨다
             raise RuntimeError('redis transport를 쓰려면 pip install -e ".[redis]" 가 필요합니다') from exc
         self._redis = client if client is not None else redis_asyncio.from_url(
-            url, decode_responses=True)
+            url, decode_responses=True, socket_timeout=_socket_timeout(block_ms))
         self._errors = (RedisError, OSError)
         self._response_error = ResponseError
         self.station_id = station_id
@@ -204,7 +204,7 @@ class RedisControlChannel:
         except ImportError as exc:  # 선택 의존성 — 기동 시점에 실패시킨다
             raise RuntimeError('redis transport를 쓰려면 pip install -e ".[redis]" 가 필요합니다') from exc
         self._redis = client if client is not None else redis_asyncio.from_url(
-            url, decode_responses=True)
+            url, decode_responses=True, socket_timeout=_socket_timeout(block_ms))
         self._response_error = ResponseError
         self._consumer = consumer or f"engine-{socket.gethostname()}"
         self._block_ms = block_ms
@@ -216,6 +216,15 @@ class RedisControlChannel:
 
     async def close(self) -> None:
         await self._redis.aclose()
+
+
+def _socket_timeout(block_ms: int) -> float:
+    """블로킹 XREADGROUP이 응답할 때까지 기다리는 시간보다 길어야 한다.
+
+    redis-py 8의 기본 소켓 타임아웃은 5초라, BLOCK 5000ms와 같아서 새 이벤트가 없을 때
+    TimeoutError가 나고 이벤트 수신이 EVENT_RETRY_SEC만큼 끊겼다.
+    """
+    return block_ms / 1000 + 5.0
 
 
 async def _ensure_group(redis, stream: str, group: str, response_error) -> None:

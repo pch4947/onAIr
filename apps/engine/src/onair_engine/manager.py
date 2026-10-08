@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from collections.abc import AsyncIterator, Callable, Iterable
 from typing import Protocol
 
@@ -235,15 +236,22 @@ class EngineManager:
         event_type = event.get("type")
         payload = event.get("payload") or {}
         if event_type == "request.arrived":
+            age = time.time() - event["at"] if event.get("at") else 0.0
+            if age > self.settings.request_max_age_sec and payload.get("request_id"):
+                logger.warning("REQUEST_STALE %s age=%.0fs", payload["request_id"], age)
+                await engine.reject_stale_request(payload["request_id"])
+                return
             await engine.submit_request(
                 payload.get("kind", "story"), payload["body"],
                 payload.get("requester_ref", "anonymous"),
                 request_id=payload.get("request_id"),
             )
+        elif event_type == "backpressure":
+            engine.report_backpressure(payload, at=event.get("at"))
         elif event_type == "station.closed":
             engine.stop()  # 방송 태스크가 끝나면 _run_station이 방을 정리한다
         elif event_type:
-            # TODO(M3): backpressure, state.transition — 정책 컨텍스트에 반영
+            # TODO(M3): state.transition — 재배치 가능 집합·방송 맥락(PUBLISHED 기준)에 반영
             logger.info("EVENT_IGNORED %s", event_type)
 
     async def _inject_demo(self, engine: StationEngine, bodies: list[str]) -> None:

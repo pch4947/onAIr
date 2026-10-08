@@ -68,6 +68,7 @@ def load_config(path: Path) -> tuple[StationConfig, EngineSettings]:
         tts_cache_dir=Path(pipe["tts_cache_dir"]) if pipe.get("tts_cache_dir") else None,
         max_concurrent_generations=int(pipe.get("max_concurrent_generations", 2)),
         target_buffer_sec=float(pipe.get("target_buffer_sec", 30)),
+        request_max_age_sec=float(pipe.get("request_max_age_sec", 600)),
     )
     return config, settings
 
