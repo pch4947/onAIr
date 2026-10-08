@@ -8,7 +8,7 @@ interface SidebarProps {
 }
 
 const NAV_ITEMS: { key: NavKey; label: string; icon: string; path: string }[] = [
-  { key: 'main', label: '홈 · 방송 선택', icon: '🏠', path: '/' },
+  { key: 'main', label: '홈 · 방송 선택', icon: '🏠', path: '/main' },
   { key: 'admin', label: '운영자 콘솔', icon: '🛠', path: '/admin' },
   { key: 'board', label: '게시판', icon: '🪧', path: '/board' },
 ]
