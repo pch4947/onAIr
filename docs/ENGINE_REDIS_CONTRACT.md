@@ -102,7 +102,7 @@
 
 | type | payload | 엔진 동작 | 상태 |
 |---|---|---|---|
-| `request.arrived` | `{"request_id", "kind": "story"\|"mood"\|"song", "body", "requester_ref", "track"?}` — `track`은 `kind: "song"`일 때만 (3.4절) | L0 검사(`body`만) 후 요청 큐 적재. **request_id는 백엔드 발급값을 그대로 쓴다** — 이후 `request.state`가 같은 id로 나간다 | 구현 (`song`은 미구현) |
+| `request.arrived` | `{"request_id", "kind": "story"\|"mood"\|"song", "body", "requester_ref", "track"?}` — `track`은 `kind: "song"`일 때만 (3.4절) | L0 검사(`body`만) 후 요청 큐 적재. **request_id는 백엔드 발급값을 그대로 쓴다** — 이후 `request.state`가 같은 id로 나간다. envelope `at`이 `request_max_age_sec`(기본 600초 `[예시]`)보다 오래됐으면 답하지 않고 `rejected`로 종결한다 — 엔진이 입력 스트림을 처음부터 읽어 꺼져 있던 동안의 예전 요청이 재기동 때 몰려오기 때문 (#61) | 구현 (`song`은 미구현) |
 | `request.cancelled` | `{"request_id", "reason": "listener"\|"operator"}` | `queued`면 큐에서 빼고 `cancelled` 통보. `generating`이면 생성은 끝까지 하되 결과를 버리고 `cancelled` 통보. 이미 제출했으면(`generated`) 엔진은 아무것도 하지 않는다 — 제출된 세그먼트를 빼는 것은 백엔드 몫 | 미구현 |
 | `station.created` | 3.3절 | EngineManager가 StationEngine 기동, ack 캐시 사전 렌더링 → `station.started` 또는 `station.rejected`. 같은 `station_id`가 다시 오면(재전달) 무시한다 | 구현 |
 | `station.closed` | `{"reason": "normal"\|"operator_stop"}` | 진행 중 생성 취소, 계측 플러시 후 인스턴스 종료 | 구현 (`reason`은 아직 미사용) |
@@ -110,7 +110,7 @@
 | `track.started` | 3.4절 — 곡 재생 시작 | 곡이 끝나는 시각을 버퍼 계산에 반영 | 미구현 |
 | `board.story` | 3.5절 — 게시판 사연 후보 | L0 검사 후 사연 풀에 적재, 사연 코너가 고른다 | 미구현 |
 | `board.story.withdrawn` | 3.5절 — `{"story_id"}` 다른 방에서 읽힌 사연 | 사연 풀에서 뺀다 (이미 생성 중이면 결과를 버린다) | 미구현 |
-| `backpressure` | `{"d_total_ms", "threshold_ms", "severity"}` | 정책 ScheduleContext에 반영 → filler 우선 생성·요청 반영 보류 | 수신만, 무시 (M3) |
+| `backpressure` | `{"d_total_ms", "threshold_ms", "severity"}` | `d_total_ms`를 엔진 버퍼 계산의 기준으로 쓴다 — 보고 시각 이후 흐른 시간만큼 빼고, 그 뒤 엔진이 제출한 분량을 더한다. `target_buffer_sec` 이상이면 생성을 쉰다. 30초 넘게 보고가 없으면 엔진 자체 추정으로 돌아간다. `severity`가 `low`·`critical`이면 `ScheduleContext.backpressure`를 켠다 (#61) | 구현 (filler 우선·요청 보류 같은 정책 반영은 정책 A/B/C에서) |
 | `state.transition` | `{"segment_id", "state": "MIXING"\|"PUBLISHED"\|"PLAYED", "at"}` | 재배치 가능 집합에서 제거, 계측 기록. **`PUBLISHED`를 받은 멘트만 "송출됨"으로 기억에 넣는다** (결정 2026-10-08) | 수신만, 무시 (M3) |
 
 상태 전이를 여러 건 보낼 때 **일괄 전용 이벤트는 두지 않는다.** 스트림에 엔트리를 연달아 `XADD`하면 된다.
