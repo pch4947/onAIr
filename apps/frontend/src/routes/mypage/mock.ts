@@ -1,13 +1,3 @@
-export interface UserProfile {
-  name: string
-  avatarInitial: string
-}
-
-export const CURRENT_USER: UserProfile = {
-  name: '사용자',
-  avatarInitial: '사',
-}
-
 export type MyPageTab = 'notifications' | 'myPosts' | 'myBroadcastReplays' | 'savedReplays'
 
 export interface MyPageTabConfig {
