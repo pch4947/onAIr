@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from .domain import StationConfig, StationProfile
 from .engine import EngineSettings
 from .manager import EngineManager
+from .pipeline.tts import list_cartesia_voices
 
 # apps/engine/.env — 백엔드(apps/backend/.env)와 같은 방식. 키는 설정 파일이 아니라 여기에 둔다
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
@@ -103,8 +104,10 @@ def cli(argv: list[str] | None = None) -> None:
     parser.add_argument("--persona", type=Path, default=None, metavar="FILE",
                         help="설정 파일의 station.profile을 persona 파일로 덮어쓴다")
     add_llm_args(parser)
-    parser.add_argument("--tts", choices=["dummy", "google", "edge"], default=None,
+    parser.add_argument("--tts", choices=["dummy", "google", "edge", "cartesia"], default=None,
                         help="설정 파일의 pipeline.tts를 덮어쓴다")
+    parser.add_argument("--list-voices", action="store_true",
+                        help="Cartesia 한국어 보이스 목록(ID·이름·성별)을 출력하고 종료 — pipeline.tts_voice에 쓸 ID")
     parser.add_argument("--transport", choices=["stdout", "http", "redis"], default=None,
                         help="설정 파일의 transport.kind 덮어쓰기 (관통 테스트용)")
     parser.add_argument("--backend-url", default=None, metavar="URL",
@@ -112,6 +115,10 @@ def cli(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     # load_config가 ONAIR_REDIS_URL 등을 읽으므로 그보다 먼저 불러온다
     load_env()
+    if args.list_voices:
+        for v in list_cartesia_voices():
+            print(f"{v['id']}	{v['name']}	{v['gender'] or '-'}")
+        return
 
     # 생성된 대본을 SCRIPT 라인으로 보여준다 (SUBMIT 페이로드에는 대본 텍스트가 없다)
     logging.basicConfig(level=logging.INFO, format="%(message)s")

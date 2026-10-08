@@ -49,7 +49,22 @@ onair-engine --tts edge --max-segments 15 --demo-request "요즘 잠이 안 와�
 
 - 오디오: `var/audio/st_local_dev/seg_xxx.mp3` (ack는 `ack/ack_N.mp3`)
 - 보이스 변경: 설정 파일 `pipeline.tts_voice` (기본 `ko-KR-SunHiNeural`, 남성 `ko-KR-InJoonNeural`)
-- 제공자 확정(확인 3) 전 청취 테스트용 어댑터입니다. 비공식 엔드포인트이므로 운영에는 쓰지 않습니다.
+- API 키 없이 듣는 청취 테스트용 어댑터입니다. 비공식 엔드포인트이므로 운영에는 쓰지 않습니다 (운영은 Cartesia).
+
+### Cartesia TTS (운영 — 2026-10-08 확정)
+
+1. [play.cartesia.ai/keys](https://play.cartesia.ai/keys)에서 API 키를 만들어 `.env`의 `CARTESIA_API_KEY`에 넣습니다.
+2. 한국어 보이스 목록을 보고 쓸 보이스 ID를 고릅니다.
+3. 설정 파일 `pipeline.tts_voice`에 그 ID를 넣고 실행합니다. 보이스 기본값은 없습니다 (방마다 호스트가 고르는 값).
+
+```powershell
+onair-engine --list-voices          # ID<탭>이름<탭>성별
+onair-engine --tts cartesia --max-segments 15 --demo-request "요즘 잠이 안 와요"
+```
+
+- 모델은 날짜 고정 스냅샷 `sonic-3.6-2026-08-27`, 언어 `ko`, 출력 mp3(44.1kHz 128kbps)입니다. 실험 중 모델이 바뀌지 않도록 별칭(`sonic-3.6`)을 쓰지 않습니다.
+- 추가 의존성은 없습니다 (표준 라이브러리 REST 호출).
+- 채팅의 `ㅋㅋㅋ`는 "엑엑엑"으로, `ㅠㅠ`·이모지는 읽지 않습니다. TTS 전 텍스트 정규화는 별도 과제입니다.
 
 ### Google Cloud TTS
 
@@ -66,7 +81,7 @@ onair-engine --tts google --max-segments 15 --demo-request "요즘 잠이 안 �
 
 ### 실제 LLM으로 대본 생성
 
-제공자는 비교 실측 중(확인 3)이라 두 어댑터를 같은 조건으로 붙여 두었습니다. 추가 의존성은 없습니다 (표준 라이브러리 REST 호출).
+LLM은 OpenAI `gpt-6-luna`(`--llm openai`)로 확정됐습니다(확인 3). Claude·Gemini 어댑터는 비교용으로 남겨 두었습니다. 추가 의존성은 없습니다 (표준 라이브러리 REST 호출).
 
 | `--llm` | 키 (`.env`) | 기본 모델 (`pipeline.llm_model` / `--llm-model`로 변경) |
 |---|---|---|
@@ -182,4 +197,4 @@ src/onair_engine/
 ## 다음 단계
 
 설계 문서 9장 단계별 구현 계획(M0~M4)과 10장 확인 필요 사항을 참고하세요.
-당장의 미결: LLM/TTS 제공자 선정(확인 3) — `generation_log`의 llm/tts 단계 지연으로 비교 실측.
+제공자는 확정됐습니다(확인 3) — LLM `gpt-6-luna`(openai), TTS Cartesia. `generation_log`의 llm/tts 단계 지연은 버퍼 기준값(F-31) 실측에 씁니다.
