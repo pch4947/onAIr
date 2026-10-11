@@ -8,7 +8,7 @@ from .stations import router as stations_router
 from .config import Settings, load_settings
 from .redis_connection import redis_health, redis_lifespan
 from fastapi import Request, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 import re
 
 
@@ -29,6 +29,10 @@ async def hls_file(station_id: str, filename: str, request: Request):
     path = publisher.directory / filename
     if not path.is_file():
         raise HTTPException(404, "HLS file not found")
+    if filename == 'index.m3u8':
+        # This tiny live file is replaced frequently. Snapshot it before yielding
+        # so Content-Length and body always describe the same playlist version.
+        return Response(path.read_bytes(), media_type=media_type, headers={'Cache-Control': cache})
     return FileResponse(path, media_type=media_type, headers={"Cache-Control": cache})
 
 def create_app(settings: Settings | None = None) -> FastAPI:

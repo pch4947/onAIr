@@ -101,6 +101,8 @@ class BroadcastE2ETests(unittest.TestCase):
                                 seen.append(segment_id)
                         elif seen == ['seg_0', 'seg_1']:
                             silence_after_sources = True
+                        elif seen == ['seg_0']:
+                            self.fail('Fallback inserted between prequeued source segments')
                     if not decoded:
                         # Join after the live playlist is ready and decode actual HTTP audio.
                         pcm = subprocess.run([ffmpeg, '-loglevel', 'error', '-i',

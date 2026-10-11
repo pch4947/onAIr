@@ -131,8 +131,13 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             client = AsyncMock()
-            client.lindex.return_value = 'seg_one'
-            client.hget.side_effect = [json.dumps(segment()), None]
+            pipe = AsyncMock()
+            pipe.lrange = Mock()
+            pipe.hgetall = Mock()
+            pipe.execute.return_value = (['seg_one'], {'seg_one': json.dumps(segment())})
+            client.pipeline = Mock(return_value=pipe)
+            pipe.__aenter__.return_value = pipe
+            client.hget.return_value = None
             settings = Settings('127.0.0.1', 3000, station_id='st_test', audio_dir=root)
             publisher = HlsPublisher(client, settings)
             publisher.journal = Journal(root / 'journal.sqlite', 'st_test')

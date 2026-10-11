@@ -73,7 +73,10 @@ class Journal:
     def transition(self, segment, state, at=None):
         at = time.time() if at is None else at
         with self.db:
-            self.db.execute('INSERT OR REPLACE INTO jobs VALUES(?,?,?)',
+            # Preserve first-claim order when a prefetched job exists before the
+            # current source transitions to PUBLISHED (REPLACE changes rowid).
+            self.db.execute('INSERT INTO jobs VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET '
+                            'status=excluded.status, payload=excluded.payload',
                             (segment['id'], state, json.dumps(segment)))
             request_id = segment.get('request_ref') if segment.get('kind') == 'speech' and segment.get('corner_type') == 'request_reply' else None
             self._enqueue('encoding.failed' if state == 'FAILED' else 'state.transition',
