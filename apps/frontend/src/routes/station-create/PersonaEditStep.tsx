@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { checkPersonaDraft } from '@/routes/station-create/mock'
+import { checkPersonaDraft } from '@/routes/station-create/api'
 import type { Persona } from '@/shared/types'
 
 const fieldLabelClass = 'text-[13px] font-medium text-label'
@@ -80,25 +80,34 @@ export function PersonaEditStep({ persona, isSubmitting, submitError, onBack, on
   const [forbidden, setForbidden] = useState(persona.forbidden)
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [isChecking, setIsChecking] = useState(false)
+  const [checkError, setCheckError] = useState('')
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
     const next: Persona = { ...persona, djName, concept, tone, examples, signaturePhrases, forbidden }
     setIsChecking(true)
-    const result = await checkPersonaDraft(next)
-    setIsChecking(false)
-    if (!result.ok) {
-      const nextErrors: Record<string, string> = {}
-      for (const error of result.errors) nextErrors[error.field] = error.reason
-      setFieldErrors(nextErrors)
-      return
+    setCheckError('')
+    try {
+      const result = await checkPersonaDraft(next)
+      if (!result.ok) {
+        const nextErrors: Record<string, string> = {}
+        for (const error of result.errors) nextErrors[error.field] = error.reason
+        setFieldErrors(nextErrors)
+        setCheckError(result.errors.map((error) => error.reason).join(' / ') || '입력 내용을 확인해주세요.')
+        return
+      }
+      setFieldErrors({})
+      onConfirm(next)
+    } catch (error) {
+      setCheckError(error instanceof Error ? error.message : '검증 요청을 완료하지 못했어요.')
+    } finally {
+      setIsChecking(false)
     }
-    setFieldErrors({})
-    onConfirm(next)
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex w-full flex-col gap-5">
+    <form onSubmit={handleSubmit}>
+      <fieldset disabled={isChecking || isSubmitting} className="flex w-full flex-col gap-5">
       <div className="flex flex-col gap-1">
         <h1 className="text-[22px] font-semibold text-text">캐릭터를 다듬어주세요</h1>
         <p className="text-[13px] text-text-muted">방송 중에는 바뀌지 않으니 지금 확인해주세요</p>
@@ -156,7 +165,7 @@ export function PersonaEditStep({ persona, isSubmitting, submitError, onBack, on
         onChange={setSignaturePhrases}
         maxItemLength={30}
         maxItems={3}
-        errorFor={(index) => fieldErrors[`persona.signature_phrases.${index}`]}
+        errorFor={(index) => fieldErrors[`persona.signature_phrases.${index}`] || fieldErrors['persona.signature_phrases']}
       />
 
       <ListField
@@ -165,10 +174,11 @@ export function PersonaEditStep({ persona, isSubmitting, submitError, onBack, on
         onChange={setForbidden}
         maxItemLength={50}
         maxItems={10}
-        errorFor={(index) => fieldErrors[`persona.forbidden.${index}`]}
+        errorFor={(index) => fieldErrors[`persona.forbidden.${index}`] || fieldErrors['persona.forbidden']}
       />
 
       {submitError && <p className="text-xs text-danger">{submitError}</p>}
+      {checkError && <p role="alert" className="text-xs text-danger">{checkError}</p>}
 
       <div className="flex gap-2">
         <button
@@ -186,6 +196,7 @@ export function PersonaEditStep({ persona, isSubmitting, submitError, onBack, on
           {isChecking ? '확인 중...' : isSubmitting ? '방 만드는 중...' : '방 만들기'}
         </button>
       </div>
+      </fieldset>
     </form>
   )
 }

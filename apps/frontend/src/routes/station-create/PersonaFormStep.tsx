@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { GENRE_OPTIONS, MAX_MUSIC_TASTE, getVoices } from '@/routes/station-create/mock'
+import { GENRE_OPTIONS, MAX_MUSIC_TASTE, getVoices } from '@/routes/station-create/api'
 import type { Energy, Formality, Humor, PersonaForm, StationInfo, Voice } from '@/shared/types'
 
 const FORMALITY_OPTIONS: { value: Formality; label: string }[] = [
@@ -65,9 +65,10 @@ function Chips<T extends string>({
 
 interface PersonaFormStepProps {
   onSubmit: (form: PersonaForm, station: StationInfo) => void
+  serverErrors?: Record<string, string>
 }
 
-export function PersonaFormStep({ onSubmit }: PersonaFormStepProps) {
+export function PersonaFormStep({ onSubmit, serverErrors = {} }: PersonaFormStepProps) {
   const [voices, setVoices] = useState<Voice[]>([])
   const [formality, setFormality] = useState<Formality>('polite')
   const [energy, setEnergy] = useState<Energy>('low')
@@ -76,7 +77,8 @@ export function PersonaFormStep({ onSubmit }: PersonaFormStepProps) {
   const [musicTaste, setMusicTaste] = useState<string[]>([])
   const [djName, setDjName] = useState('')
   const [hostNote, setHostNote] = useState('')
-  const [firstSongUrl, setFirstSongUrl] = useState('')
+  const [voiceError, setVoiceError] = useState('')
+  const [voiceAttempt, setVoiceAttempt] = useState(0)
   const [broadcastMinutes, setBroadcastMinutes] = useState(30)
   const [topic, setTopic] = useState('')
   const [errors, setErrors] = useState<Record<string, string>>({})
@@ -86,12 +88,16 @@ export function PersonaFormStep({ onSubmit }: PersonaFormStepProps) {
     getVoices().then((result) => {
       if (cancelled) return
       setVoices(result)
+      setVoiceError('')
       setVoice((current) => current || result[0]?.id || '')
+      if (result.length === 0) setVoiceError('사용 가능한 목소리가 없어요.')
+    }).catch((error: unknown) => {
+      if (!cancelled) setVoiceError(error instanceof Error ? error.message : '목소리를 불러오지 못했어요.')
     })
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [voiceAttempt])
 
   const toggleGenre = (genre: string) => {
     setMusicTaste((prev) => {
@@ -120,7 +126,6 @@ export function PersonaFormStep({ onSubmit }: PersonaFormStepProps) {
         hostNote: hostNote.trim() || undefined,
       },
       {
-        firstSongUrl: firstSongUrl.trim() || undefined,
         broadcastMinutes,
         topic: topic.trim() || undefined,
       },
@@ -166,7 +171,8 @@ export function PersonaFormStep({ onSubmit }: PersonaFormStepProps) {
           </select>
           <SelectArrow />
         </div>
-        <span className={errorTextClass}>{errors.voice || ' '}</span>
+        <span className={errorTextClass}>{errors.voice || serverErrors['form.voice'] || voiceError || ' '}</span>
+        {voiceError && <button type="button" onClick={() => setVoiceAttempt((value) => value + 1)}>목소리 다시 불러오기</button>}
       </label>
 
       <div className="flex flex-col gap-2">
@@ -205,7 +211,7 @@ export function PersonaFormStep({ onSubmit }: PersonaFormStepProps) {
           maxLength={20}
           className={textInputClass}
         />
-        <span className={errorTextClass}>{errors.djName || ' '}</span>
+        <span className={errorTextClass}>{errors.djName || serverErrors['form.dj_name'] || ' '}</span>
       </label>
 
       <label className="flex flex-col gap-1.5">
@@ -219,7 +225,7 @@ export function PersonaFormStep({ onSubmit }: PersonaFormStepProps) {
           className="h-16 w-full resize-none rounded-lg border border-field-border bg-field-bg px-3.5 py-2.5 text-[13px] text-text placeholder:text-field-placeholder"
         />
         <span className={errors.hostNote ? errorTextClass : 'block text-xs text-text-muted'}>
-          {errors.hostNote || `${hostNote.length}/100`}
+          {errors.hostNote || serverErrors['form.host_note'] || `${hostNote.length}/100`}
         </span>
       </label>
 
@@ -229,9 +235,8 @@ export function PersonaFormStep({ onSubmit }: PersonaFormStepProps) {
         <span className={fieldLabelClass}>첫 노래 (선택, YouTube 링크)</span>
         <input
           type="text"
-          value={firstSongUrl}
-          onChange={(event) => setFirstSongUrl(event.target.value)}
-          placeholder="https://youtube.com/watch?v=..."
+          disabled
+          placeholder="첫 노래 지정은 준비 중이에요"
           className={textInputClass}
         />
       </label>
@@ -269,6 +274,7 @@ export function PersonaFormStep({ onSubmit }: PersonaFormStepProps) {
 
       <button
         type="submit"
+        disabled={!voice || !!voiceError}
         className="mt-2 self-start rounded-md bg-primary px-5 py-3 text-sm font-semibold text-white"
       >
         방송 시작하기
