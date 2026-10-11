@@ -3,14 +3,10 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Sidebar } from '@/app/Sidebar'
+import { BoardPostCollection } from '@/routes/mypage/BoardPostCollection'
 import { clearAccessToken } from '@/shared/authToken'
-import {
-  MY_BOARD_POSTS,
-  MY_BROADCAST_REPLAYS,
-  MYPAGE_TABS,
-  NOTIFICATIONS,
-  SAVED_REPLAYS,
-} from '@/routes/mypage/mock'
+import { getLikedBoardPosts, getMyBoardPosts } from '@/shared/api'
+import { MY_BROADCAST_REPLAYS, MYPAGE_TABS, NOTIFICATIONS, SAVED_REPLAYS } from '@/routes/mypage/mock'
 import type { ReplayItem } from '@/routes/mypage/mock'
 import type { MyPageTab } from '@/routes/mypage/mock'
 
@@ -105,19 +101,20 @@ export function MyPagePage() {
         )}
 
         {activeTab === 'myPosts' && (
-          <ul className="flex flex-col gap-3">
-            {MY_BOARD_POSTS.map((post) => (
-              <li
-                key={post.id}
-                className="flex flex-col gap-1 rounded-md border border-field-border bg-field-bg px-4 py-3.5"
-              >
-                <p className="text-sm font-semibold text-[#1a1a1f]">{post.title}</p>
-                <p className="text-xs text-text-muted">
-                  {post.boardName} · {post.timeAgo} · 댓글 {post.commentCount}
-                </p>
-              </li>
-            ))}
-          </ul>
+          <BoardPostCollection
+            queryKey="my-board-posts"
+            fetcher={getMyBoardPosts}
+            emptyText="아직 작성한 글이 없어요"
+          />
+        )}
+
+        {activeTab === 'likedPosts' && (
+          <BoardPostCollection
+            queryKey="liked-board-posts"
+            fetcher={getLikedBoardPosts}
+            emptyText="아직 좋아요한 글이 없어요"
+            removeOnUnlike
+          />
         )}
 
         {activeTab === 'myBroadcastReplays' && (

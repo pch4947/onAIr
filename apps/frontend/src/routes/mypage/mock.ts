@@ -1,4 +1,4 @@
-export type MyPageTab = 'notifications' | 'myPosts' | 'myBroadcastReplays' | 'savedReplays'
+export type MyPageTab = 'notifications' | 'myPosts' | 'likedPosts' | 'myBroadcastReplays' | 'savedReplays'
 
 export interface MyPageTabConfig {
   id: MyPageTab
@@ -14,8 +14,13 @@ export const MYPAGE_TABS: MyPageTabConfig[] = [
   },
   {
     id: 'myPosts',
-    label: '내 게시판 글 모아보기',
-    subtitle: '내가 남긴 글과 방송 기록을 모아볼 수 있어요',
+    label: '내가 쓴 글',
+    subtitle: '내가 게시판에 남긴 글을 모아볼 수 있어요',
+  },
+  {
+    id: 'likedPosts',
+    label: '좋아요한 글',
+    subtitle: '좋아요를 누른 게시판 글을 모아볼 수 있어요',
   },
   {
     id: 'myBroadcastReplays',
@@ -61,38 +66,6 @@ export const NOTIFICATIONS: NotificationItem[] = [
     title: '저장한 방송 다시보기 준비 완료',
     description: '<오늘의 주제> 방송 다시듣기를 이용할 수 있어요 · 어제',
     isUnread: false,
-  },
-]
-
-export interface MyBoardPost {
-  id: string
-  title: string
-  boardName: string
-  timeAgo: string
-  commentCount: number
-}
-
-export const MY_BOARD_POSTS: MyBoardPost[] = [
-  {
-    id: '1',
-    title: '오늘 하루 위로가 필요해요',
-    boardName: '감성 발라드 나이트 게시판',
-    timeAgo: '3일 전',
-    commentCount: 3,
-  },
-  {
-    id: '2',
-    title: '친구와 화해하고 싶어요',
-    boardName: '심야 사연 게시판',
-    timeAgo: '5일 전',
-    commentCount: 3,
-  },
-  {
-    id: '3',
-    title: '이 노래 신청해도 될까요?',
-    boardName: '오늘의 주제 게시판',
-    timeAgo: '1주 전',
-    commentCount: 1,
   },
 ]
 
