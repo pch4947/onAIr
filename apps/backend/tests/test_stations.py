@@ -53,10 +53,17 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(caught.exception.status_code, status)
             self.assertNotIn('private', str(caught.exception.detail))
         upstream.request.side_effect = None
-        upstream.request.return_value = httpx.Response(422, json={'errors': [{'field': 'voice', 'reason': 'unknown'}]})
+        for payload in ({'errors': [{'field': 'persona.voice', 'reason': 'unknown'}]},
+                        {'detail': [{'loc': ['body', 'form', 'voice'], 'msg': 'Required'}]}):
+            upstream.request.return_value = httpx.Response(422, json=payload)
+            result = await engine_call(request, 'POST', '/v1/personas/check')
+            self.assertEqual(result.status_code, 422)
+            self.assertEqual(json.loads(result.body), payload)
+        upstream.request.return_value = httpx.Response(503, text='private credentials')
         with self.assertRaises(HTTPException) as caught:
-            await engine_call(request, 'POST', '/v1/personas/check')
-        self.assertEqual(caught.exception.detail['errors'][0]['field'], 'voice')
+            await engine_call(request, 'GET', '/v1/voices')
+        self.assertEqual(caught.exception.status_code, 503)
+        self.assertNotIn('private', caught.exception.detail)
 
     async def test_auth_validation_proxy_errors_and_readiness(self):
         app = create_app(Settings('127.0.0.1', 3000))
