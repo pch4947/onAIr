@@ -23,11 +23,11 @@ export function DraftSelectStep({ drafts, onSelect, onRegenerate }: DraftSelectS
         </button>
       </div>
 
-      <ul className="flex flex-wrap gap-4">
+      <ul className="flex flex-col gap-4">
         {drafts.map((draft, index) => (
           <li
             key={`${draft.djName}-${index}`}
-            className="flex w-[300px] flex-col gap-3 rounded-lg border border-border bg-surface p-5"
+            className="flex w-full flex-col gap-3 rounded-lg border border-border bg-surface p-5"
           >
             <div className="flex flex-col gap-1">
               <h2 className="text-base font-semibold text-text">{draft.djName}</h2>
