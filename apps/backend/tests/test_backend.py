@@ -99,7 +99,8 @@ class BackendTests(unittest.TestCase):
                           "/api/stations", "/api/stations/{station_id}", "/api/voices",
                           "/api/personas/drafts", "/api/personas/check", "/api/board/posts",
                           "/api/board/posts/{post_id}/comments", "/api/board/posts/{post_id}/like",
-                          "/api/board/comments/{comment_id}/like"})
+                          "/api/board/comments/{comment_id}/like", "/api/board/posts/mine",
+                          "/api/board/posts/liked"})
 
     def test_urgent_request_and_unsafe_buffer(self):
         args = dict(buffer_seconds=40, estimated_generation_seconds=30,
