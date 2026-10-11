@@ -86,3 +86,31 @@ export interface PersonaFieldError {
   field: string
   reason: string
 }
+
+export interface BoardPost {
+  id: string
+  authorId: string
+  authorName: string
+  title: string
+  body: string
+  songRequestUrl: string | null
+  createdAt: string
+  likeCount: number
+  liked: boolean
+}
+
+export interface BoardComment {
+  id: string
+  postId: string
+  authorId: string
+  authorName: string
+  body: string
+  createdAt: string
+  likeCount: number
+  liked: boolean
+}
+
+export interface LikeStatus {
+  likeCount: number
+  liked: boolean
+}
