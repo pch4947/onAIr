@@ -3,12 +3,12 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Sidebar } from '@/app/Sidebar'
-import { StartBroadcastModal } from '@/routes/main/StartBroadcastModal'
+import { StationCreateModal } from '@/routes/station-create/StationCreateModal'
 import { STATIONS } from '@/routes/main/mock'
 
 export function MainPage() {
-  const [isModalOpen, setIsModalOpen] = useState(false)
   const navigate = useNavigate()
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
 
   return (
     <div className="flex min-h-screen">
@@ -22,7 +22,7 @@ export function MainPage() {
           </div>
           <button
             type="button"
-            onClick={() => setIsModalOpen(true)}
+            onClick={() => setIsCreateModalOpen(true)}
             className="rounded-md bg-primary px-4.5 py-3 text-xs font-semibold text-white"
           >
             🎙 방송 시작하기
@@ -62,7 +62,7 @@ export function MainPage() {
         </ul>
       </main>
 
-      {isModalOpen && <StartBroadcastModal onClose={() => setIsModalOpen(false)} />}
+      {isCreateModalOpen && <StationCreateModal onClose={() => setIsCreateModalOpen(false)} />}
     </div>
   )
 }
