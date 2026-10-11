@@ -49,6 +49,7 @@ class HlsPublisher:
         self.maintenance = None
         self.preparation = None
         self.fallback_source = None
+        self.fallback_cache = None
         self.fallback_active = False
         self.timeline = deque()
         self.finishing = deque()
@@ -189,6 +190,8 @@ class HlsPublisher:
         covered = {segment['id'] for _, segment in self.finishing}
         if self.active_id:
             covered.add(self.active_id)
+        if self.current:
+            covered.add(self.current['id'])
         queued = sum(seconds for key, seconds in self.queued.items() if key not in covered) if self.queue_available else None
         return {'bufferSeconds': round(encoded, 3), 'queuedAudioSeconds': queued,
                 'totalAudioEstimateSeconds': round(encoded + queued, 3) if queued is not None else None,
@@ -198,8 +201,34 @@ class HlsPublisher:
                 'pendingStateEvents': self.journal.pending() if self.journal else 0}
 
     async def remove_head(self, segment_id):
-        await self.redis.eval("if redis.call('LINDEX', KEYS[1], 0) == ARGV[1] then return redis.call('LPOP', KEYS[1]) end",
+        await self.redis.eval("return redis.call('LREM', KEYS[1], 0, ARGV[1])",
                               1, self.prefix + ':queue', segment_id)
+
+    async def select_next(self):
+        async with self.redis.pipeline(transaction=True) as pipe:
+            pipe.lrange(self.prefix + ':queue', 0, -1)
+            pipe.hgetall(self.prefix + ':segments')
+            ids, records = await pipe.execute()
+        candidates = []
+        for key in ids:
+            if self.current and key == self.current['id']:
+                continue
+            if self.journal.status(key) in ('PUBLISHED', 'PLAYED', 'FAILED'):
+                await self.remove_head(key)
+                continue
+            row = Segment.model_validate_json(records[key])
+            candidates.append(row)
+            # A fixed segment is a barrier: it may pass preceding movable items,
+            # but later arrivals cannot pass it.
+            if not row.reorderable:
+                break
+        if not candidates:
+            return None
+        chosen = candidates[0]
+        for row in candidates[1:]:
+            if (row.kind == 'ack' or row.corner_type == 'request_reply') and row.priority < chosen.priority:
+                chosen = row
+        return chosen
 
     async def maintain(self):
         while True:
@@ -220,8 +249,9 @@ class HlsPublisher:
                     self.queue_available = True
                     self.redis_error = None
                     # Retry an interrupted queue removal without replaying a published source.
-                    if ids and self.journal.status(ids[0]) in ('PUBLISHED', 'PLAYED', 'FAILED'):
-                        await self.remove_head(ids[0])
+                    for segment_id in ids:
+                        if self.journal.status(segment_id) in ('PUBLISHED', 'PLAYED', 'FAILED'):
+                            await self.remove_head(segment_id)
                     snapshot = self.buffer_snapshot()
                     total = snapshot['totalAudioEstimateSeconds']
                     severity = 'critical' if total <= 0 else 'low' if total < self.settings.buffer_low_seconds else 'normal'
@@ -248,14 +278,9 @@ class HlsPublisher:
                 recovered = True
             else:
                 async with asyncio.timeout(3):
-                    segment_id = await self.redis.lindex(self.prefix + ':queue', 0)
-                    if not segment_id:
+                    segment = await self.select_next()
+                    if segment is None:
                         return None
-                    if self.journal.status(segment_id) in ('PUBLISHED', 'PLAYED', 'FAILED'):
-                        await self.remove_head(segment_id)
-                        return None
-                    raw = await self.redis.hget(self.prefix + ':segments', segment_id)
-                segment = Segment.model_validate_json(raw)
             if segment.request_ref:
                 async with asyncio.timeout(3):
                     raw_state = await self.redis.hget(self.prefix + ':request-states', segment.request_ref)
@@ -264,7 +289,6 @@ class HlsPublisher:
                     if recovered:
                         self.recovery.popleft()
                     return None
-            self.active_id = segment.id
             self.journal.transition(segment.model_dump(), 'MIXING')
             started = time.monotonic()
             source = await asyncio.to_thread(validate_audio, self.settings.audio_dir, segment)
@@ -273,7 +297,8 @@ class HlsPublisher:
             except TimeoutError as exc:
                 raise ValueError('Audio encoding timed out') from exc
             self.journal.measure(segment.id, 'encode', (time.monotonic() - started) * 1000)
-            self.unpublished_seconds = sum(duration for _, duration in chunks)
+            self.unpublished_seconds += sum(duration for _, duration in chunks)
+            self.active_id = segment.id
             if recovered:
                 self.recovery.popleft()
             return segment.model_dump(), chunks
@@ -292,20 +317,42 @@ class HlsPublisher:
             return None
 
     async def fallback_chunks(self):
-        try:
-            return await self.encode(self.fallback_source)
-        except (ValueError, OSError, TimeoutError):
-            self.error = 'Fallback music unavailable; using silence'
-            self.fallback_source = None
-            return await self.encode(None)
+        if self.fallback_cache is None:
+            try:
+                chunks = await self.encode(self.fallback_source)
+            except (ValueError, OSError, TimeoutError):
+                self.error = 'Fallback music unavailable; using silence'
+                self.fallback_source = None
+                chunks = await self.encode(None)
+            self.fallback_cache = []
+            for name, duration in chunks:
+                path = self.directory / name
+                self.fallback_cache.append((path.read_bytes(), duration))
+                path.unlink()
+        chunks = []
+        token = uuid.uuid4().hex
+        for index, (data, duration) in enumerate(self.fallback_cache):
+            name = f'{self.session}_{token}_{index}.ts'
+            (self.directory / name).write_bytes(data)
+            chunks.append((name, duration))
+        return chunks
+
+    async def wait_for_next(self):
+        # Keep polling while current audio plays, with at most one prepared source.
+        while True:
+            prepared = await self.prepare_next()
+            if prepared:
+                return prepared
+            await asyncio.sleep(0.1)
 
     async def run(self):
         try:
             while True:
                 if self.preparation is None:
-                    self.preparation = asyncio.create_task(self.prepare_next())
+                    self.preparation = asyncio.create_task(self.wait_for_next())
                 # Source encoding is independent of paced fallback publishing.
-                done, _ = await asyncio.wait({self.preparation}, timeout=0.1)
+                await asyncio.sleep(max(0, self.next_publish - time.monotonic()))
+                done, _ = await asyncio.wait({self.preparation}, timeout=0.1 if not self.entries else 0)
                 prepared = None
                 if done:
                     prepared = self.preparation.result()
@@ -315,6 +362,8 @@ class HlsPublisher:
                     self.current = segment
                     self.fallback_active = False
                     self.error = None
+                    self.active_id = None
+                    self.preparation = asyncio.create_task(self.wait_for_next())
                 else:
                     segment = None
                     self.current = None
@@ -331,8 +380,6 @@ class HlsPublisher:
                 if segment:
                     self.journal.transition(segment, 'PUBLISHED')
                     self.finishing.append((self.next_publish + self.settings.broadcast_delay_seconds, segment))
-                    self.active_id = None
-                    self.unpublished_seconds = 0
                     # State and removal retry in maintenance; publishing never waits for Redis.
                 await asyncio.sleep(0)
         except asyncio.CancelledError:
