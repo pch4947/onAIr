@@ -97,7 +97,9 @@ class BackendTests(unittest.TestCase):
                           "/api/broadcast/queue", "/api/requests/{request_id}/state", "/hls/{station_id}/{filename}",
                           "/api/auth/signup", "/api/auth/login", "/api/auth/me",
                           "/api/stations", "/api/stations/{station_id}", "/api/voices",
-                          "/api/personas/drafts", "/api/personas/check"})
+                          "/api/personas/drafts", "/api/personas/check", "/api/board/posts",
+                          "/api/board/posts/{post_id}/comments", "/api/board/posts/{post_id}/like",
+                          "/api/board/comments/{comment_id}/like"})
 
     def test_urgent_request_and_unsafe_buffer(self):
         args = dict(buffer_seconds=40, estimated_generation_seconds=30,

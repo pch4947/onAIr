@@ -13,6 +13,7 @@ from .streaming.hls import HlsPublisher
 from .requests import RequestStore
 from .users import UserStore
 from .stations import StationStore
+from .board import BoardStore, CommentStore, LikeStore
 
 
 @asynccontextmanager
@@ -24,6 +25,10 @@ async def redis_lifespan(app):
     app.state.requests = RequestStore(client, app.state.settings.station_id)
     app.state.users = UserStore(client)
     app.state.stations = StationStore(client, app.state.settings.station_id)
+    app.state.board = BoardStore(client)
+    app.state.board_comments = CommentStore(client)
+    app.state.post_likes = LikeStore(client, "backend:board:post-likes")
+    app.state.comment_likes = LikeStore(client, "backend:board:comment-likes")
     headers = {'Authorization': f'Bearer {app.state.settings.engine_token}'} if app.state.settings.engine_token else {}
     engine_http = httpx.AsyncClient(base_url=app.state.settings.engine_api_url,
                                    headers=headers, timeout=httpx.Timeout(30, connect=3), trust_env=False)
