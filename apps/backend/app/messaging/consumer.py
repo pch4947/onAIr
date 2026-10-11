@@ -9,7 +9,8 @@ import uuid
 
 from redis.exceptions import RedisError, ResponseError
 
-from .contracts import Segment, decode, validate_audio
+from .contracts import Segment, StationStarted, StationRejected, decode, validate_audio
+from ..stations import StationStore
 
 log = logging.getLogger(__name__)
 GROUP = "backend"
@@ -114,6 +115,9 @@ class EngineConsumer:
             if result == -1:
                 await self.quarantine(entry_id, fields, "segment_id_conflict")
                 return
+        elif isinstance(event, (StationStarted, StationRejected)):
+            await StationStore(self.redis, self.settings.station_id).result(
+                fields['type'], event.model_dump(), float(fields['at']))
         else:
             # Source stream ID prevents older pending events overwriting newer states.
             await self.redis.eval(STATE, 3, self.prefix + ":request-versions",

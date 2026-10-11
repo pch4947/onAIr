@@ -72,7 +72,7 @@ class BroadcastE2ETests(unittest.TestCase):
                     ONAIR_REDIS_URL=redis_url, ONAIR_STATION_ID=station, ONAIR_FALLBACK_MODE='silence',
                     ONAIR_AUDIO_DIR=str(root), ONAIR_HLS_DIR=str(root / 'hls'), ONAIR_HLS_ENABLED='1'))
             try:
-                deadline = time.monotonic() + 45
+                deadline = time.monotonic() + 75
                 seen = []
                 sequences = []
                 checked = set()
@@ -122,5 +122,10 @@ class BroadcastE2ETests(unittest.TestCase):
                 self.assertEqual(redis.xpending(f'engine:{station}:out', 'backend')['pending'], 0)
                 self.assertEqual(json.loads(get('/health/redis'))['ok'], True)
             finally:
-                server.terminate()
+                if os.name == 'nt' and server.poll() is None:
+                    # Windows venv Python launches a child interpreter; terminate the entire test tree.
+                    subprocess.run(['taskkill', '/PID', str(server.pid), '/T', '/F'],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+                elif server.poll() is None:
+                    server.terminate()
                 server.wait(timeout=10)

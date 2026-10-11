@@ -31,6 +31,17 @@ class RequestState(BaseModel):
     state: Literal["screened", "queued", "generating", "generated", "rejected"]
 
 
+class StationStarted(BaseModel):
+    model_config = ConfigDict(strict=True, extra='forbid')
+    topic: str = Field(max_length=60)
+
+
+class StationRejected(BaseModel):
+    model_config = ConfigDict(strict=True, extra='forbid')
+    reason: Literal['invalid_payload', 'unknown_voice', 'llm_unavailable', 'tts_unavailable']
+    detail: str = Field(max_length=4096)
+
+
 def decode(fields: dict, station_id: str):
     required = {"type", "contract_version", "event_id", "station_id", "at", "payload"}
     if not required <= fields.keys() or not all(isinstance(v, str) for v in fields.values()):
@@ -50,6 +61,10 @@ def decode(fields: dict, station_id: str):
         return result
     if fields["type"] == "request.state":
         return RequestState.model_validate(payload)
+    if fields['type'] == 'station.started':
+        return StationStarted.model_validate(payload)
+    if fields['type'] == 'station.rejected':
+        return StationRejected.model_validate(payload)
     raise ValueError("unsupported_event")
 
 

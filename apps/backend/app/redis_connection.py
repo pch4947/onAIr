@@ -1,6 +1,7 @@
 """Redis connection lifecycle and bounded readiness check."""
 
 import asyncio
+import httpx
 from contextlib import asynccontextmanager
 
 from fastapi import Request
@@ -11,6 +12,7 @@ from .messaging.consumer import EngineConsumer, stop_consumer
 from .streaming.hls import HlsPublisher
 from .requests import RequestStore
 from .users import UserStore
+from .stations import StationStore
 
 
 @asynccontextmanager
@@ -21,6 +23,11 @@ async def redis_lifespan(app):
     app.state.redis = client
     app.state.requests = RequestStore(client, app.state.settings.station_id)
     app.state.users = UserStore(client)
+    app.state.stations = StationStore(client, app.state.settings.station_id)
+    headers = {'Authorization': f'Bearer {app.state.settings.engine_token}'} if app.state.settings.engine_token else {}
+    engine_http = httpx.AsyncClient(base_url=app.state.settings.engine_api_url,
+                                   headers=headers, timeout=httpx.Timeout(90, connect=3), trust_env=False)
+    app.state.engine_http = engine_http
     app.state.engine_consumer = EngineConsumer(client, app.state.settings)
     task = asyncio.create_task(app.state.engine_consumer.run(), name="engine-consumer")
     publisher = HlsPublisher(client, app.state.settings)
@@ -33,6 +40,7 @@ async def redis_lifespan(app):
         await publisher.stop()
         await stop_consumer(task)
         await client.aclose()
+        await engine_http.aclose()
 
 
 async def redis_health(request: Request):
