@@ -26,7 +26,7 @@ async def redis_lifespan(app):
     app.state.stations = StationStore(client, app.state.settings.station_id)
     headers = {'Authorization': f'Bearer {app.state.settings.engine_token}'} if app.state.settings.engine_token else {}
     engine_http = httpx.AsyncClient(base_url=app.state.settings.engine_api_url,
-                                   headers=headers, timeout=httpx.Timeout(90, connect=3), trust_env=False)
+                                   headers=headers, timeout=httpx.Timeout(30, connect=3), trust_env=False)
     app.state.engine_http = engine_http
     app.state.engine_consumer = EngineConsumer(client, app.state.settings)
     task = asyncio.create_task(app.state.engine_consumer.run(), name="engine-consumer")

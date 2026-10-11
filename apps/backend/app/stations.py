@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from onair_schema import Persona, PersonaForm, StationCreated
 from onair_schema.persona import text
 from pydantic import BaseModel, ConfigDict, Field
@@ -135,18 +136,25 @@ async def get_station(station_id: str, request: Request, response: Response, use
 
 async def engine_call(request, method, path, body=None, params=None):
     try:
-        response = await request.app.state.engine_http.request(method, path, json=body, params=params)
-    except httpx.TimeoutException:
+        async with asyncio.timeout(30):
+            response = await request.app.state.engine_http.request(method, path, json=body, params=params)
+    except (httpx.TimeoutException, TimeoutError):
         raise HTTPException(504, 'Engine response timed out') from None
     except httpx.RequestError:
         raise HTTPException(503, 'Engine unavailable') from None
     if response.status_code == 422:
         # Preserve field-level validation errors, but never forward upstream credentials/tracebacks.
         try:
-            errors = response.json().get('errors', [])
-        except (ValueError, AttributeError):
-            errors = []
-        raise HTTPException(422, {'errors': errors})
+            payload = response.json()
+            if isinstance(payload, dict):
+                for key in ('errors', 'detail'):
+                    if isinstance(payload.get(key), list):
+                        return JSONResponse(status_code=422, content={key: payload[key]})
+        except ValueError:
+            pass
+        raise HTTPException(502, 'Invalid engine validation response')
+    if response.status_code == 503:
+        raise HTTPException(503, 'Engine unavailable; try again shortly')
     if not response.is_success:
         raise HTTPException(502, 'Engine request failed')
     try:
