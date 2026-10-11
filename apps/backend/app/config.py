@@ -26,6 +26,8 @@ class Settings:
     station_id: str = "st_local_dev"
     audio_dir: Path = Path(__file__).resolve().parents[2] / "engine" / "var" / "audio"
     jwt_secret: str = "dev-insecure-secret-change-me"
+    engine_api_url: str = "http://127.0.0.1:8100"
+    engine_token: str | None = None
 
 
 def load_settings() -> Settings:
@@ -60,4 +62,6 @@ def load_settings() -> Settings:
                     hls_enabled=os.environ.get("ONAIR_HLS_ENABLED", "1") == "1",
                     hls_dir=Path(os.environ.get("ONAIR_HLS_DIR", str(Settings.hls_dir))).resolve(),
                     ffmpeg=os.environ.get("ONAIR_FFMPEG", "ffmpeg"),
-                    jwt_secret=os.environ.get("ONAIR_JWT_SECRET", Settings.jwt_secret))
+                    jwt_secret=os.environ.get("ONAIR_JWT_SECRET", Settings.jwt_secret),
+                    engine_api_url=os.environ.get("ONAIR_ENGINE_API_URL", Settings.engine_api_url),
+                    engine_token=os.environ.get("ONAIR_ENGINE_TOKEN"))

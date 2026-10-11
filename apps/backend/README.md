@@ -1,5 +1,9 @@
 # onAIr Backend — FastAPI / Redis / HLS
 
+방송 생성·보이스·persona API 연결은 [단일 방송 생성 가이드](../../docs/BACKEND_STATION_CREATION.md)를 참고합니다.
+공용 스키마 의존성이 추가되어 최초 설치 및 업데이트 시 저장소 루트에서
+`apps/backend/.venv/Scripts/python.exe -m pip install -e packages/onair_schema -e apps/backend`를 실행합니다.
+
 FastAPI가 엔진의 Redis 이벤트를 받아 방송 큐에 저장하고, FFmpeg로 HLS를 생성합니다.
 `/health`는 서버 프로세스 응답 여부이며 방송 준비 완료를 의미하지 않습니다.
 
@@ -9,7 +13,7 @@ Python 3.12 이상에서, 저장소 루트 기준으로 한 단계씩 실행합�
 
 1. `cd apps/backend`
 2. `python -m venv .venv`
-3. `.\.venv\Scripts\python.exe -m pip install -e .`
+3. `.\.venv\Scripts\python.exe -m pip install -e ../../packages/onair_schema -e .`
 4. `Copy-Item .env.example .env` (기존 .env가 있으면 생략)
 5. `.\.venv\Scripts\python.exe -m app`
 

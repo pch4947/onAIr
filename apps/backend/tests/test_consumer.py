@@ -70,10 +70,13 @@ class ConsumerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         return entry_id, fields
 
     async def test_real_engine_duplicate_and_restart(self):
-        from onair_engine.main import load_config
+        from onair_engine.domain import StationConfig, StationProfile
+        from onair_engine.engine import EngineSettings
         from onair_engine.manager import EngineManager
         engine_dir = Path(__file__).resolve().parents[2] / "engine"
-        config, settings = load_config(engine_dir / "config/station.example.yaml")
+        config = StationConfig(station_id=self.station, profile=StationProfile(
+            dj_name='테스트', tone='차분한 존댓말', concept='테스트 방송'), broadcast_minutes=30)
+        settings = EngineSettings()
         config.station_id = self.station
         settings = replace(settings, transport_kind="redis", transport_redis_url=self.settings.redis_url,
                            audio_dir=self.settings.audio_dir, tts_cache_dir=None,
@@ -88,10 +91,11 @@ class ConsumerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         count = await self.redis.llen(self.consumer.prefix + ":queue")
         self.assertGreater(count, 0)
         # New delivery of same engine payload with another event ID stays deduplicated.
-        await self.deliver(json.loads(entries[0][1]["payload"]))
+        submitted = next(fields for _, fields in entries if fields['type'] == 'segment.submitted')
+        await self.deliver(json.loads(submitted["payload"]))
         self.assertEqual(await self.redis.llen(self.consumer.prefix + ":queue"), count)
         # Save succeeds but ACK is interrupted; a new consumer reclaims pending work.
-        original = json.loads(entries[0][1]["payload"])
+        original = json.loads(submitted["payload"])
         original["id"] = "seg_before_crash"
         original_ack = self.consumer.ack
         async def crash(_):

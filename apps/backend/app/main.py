@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .api import BroadcastState, router
 from .auth import router as auth_router
+from .stations import router as stations_router
 from .config import Settings, load_settings
 from .redis_connection import redis_health, redis_lifespan
 from fastapi import Request, HTTPException
@@ -39,6 +40,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                allow_headers=["Content-Type", "Idempotency-Key", "Authorization"])
     application.include_router(router)
     application.include_router(auth_router)
+    application.include_router(stations_router)
     application.add_api_route("/hls/{station_id}/{filename}", hls_file, methods=["GET"])
     application.add_api_route("/health", health, methods=["GET"])
     application.add_api_route("/health/redis", redis_health, methods=["GET"],

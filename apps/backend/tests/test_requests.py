@@ -97,12 +97,15 @@ class RequestIntegrationTests(unittest.TestCase):
         self.assertEqual(self.call('/api/stream/state')[1]['pendingRequestCount'], 1)
 
         async def engine_round_trip():
-            from onair_engine.main import load_config
+            from onair_engine.domain import StationConfig, StationProfile
+            from onair_engine.engine import EngineSettings
             from onair_engine.engine import StationEngine
             from onair_engine.manager import EngineManager
             from onair_engine.transport import RedisTransport
             engine_dir = Path(__file__).resolve().parents[2] / 'engine'
-            config, settings = load_config(engine_dir / 'config/station.example.yaml')
+            config = StationConfig(station_id=self.station, profile=StationProfile(
+                dj_name='테스트', tone='차분한 존댓말', concept='테스트 방송'), broadcast_minutes=30)
+            settings = EngineSettings()
             config.station_id = self.station
             with tempfile.TemporaryDirectory() as directory:
                 settings = replace(settings, sqlite_path=Path(directory) / 'metrics.sqlite',
