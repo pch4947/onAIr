@@ -1,5 +1,13 @@
 import { getAccessToken } from '@/shared/authToken'
-import type { AuthResponse, AuthUser, BroadcastStateResponse, SubmitRequestResponse } from '@/shared/types'
+import type {
+  AuthResponse,
+  AuthUser,
+  BoardComment,
+  BoardPost,
+  BroadcastStateResponse,
+  LikeStatus,
+  SubmitRequestResponse,
+} from '@/shared/types'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
 
@@ -67,3 +75,89 @@ export async function login(email: string, password: string): Promise<AuthRespon
   }
   return res.json() as Promise<AuthResponse>
 }
+
+export async function getBoardPosts(params: {
+  offset?: number
+  limit?: number
+} = {}): Promise<{ posts: BoardPost[]; total: number }> {
+  const query = new URLSearchParams()
+  if (params.offset !== undefined) query.set('offset', String(params.offset))
+  if (params.limit !== undefined) query.set('limit', String(params.limit))
+  const qs = query.toString()
+  const res = await fetch(`${API_BASE}/api/board/posts${qs ? `?${qs}` : ''}`, {
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
+  })
+  if (!res.ok) {
+    throw new Error(`GET /api/board/posts failed: ${res.status}`)
+  }
+  return (await res.json()) as { posts: BoardPost[]; total: number }
+}
+
+export async function createBoardPost(input: {
+  title: string
+  body: string
+  songRequestUrl?: string
+}): Promise<BoardPost> {
+  const res = await fetch(`${API_BASE}/api/board/posts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getAccessToken() ?? ''}` },
+    body: JSON.stringify({
+      title: input.title,
+      body: input.body,
+      songRequestUrl: input.songRequestUrl || null,
+    }),
+  })
+  if (!res.ok) {
+    throw new Error(`POST /api/board/posts failed: ${res.status}`)
+  }
+  const { post } = (await res.json()) as { post: BoardPost }
+  return post
+}
+
+export async function getComments(postId: string, params: {
+  offset?: number
+  limit?: number
+} = {}): Promise<{ comments: BoardComment[]; total: number }> {
+  const query = new URLSearchParams()
+  if (params.offset !== undefined) query.set('offset', String(params.offset))
+  if (params.limit !== undefined) query.set('limit', String(params.limit))
+  const qs = query.toString()
+  const res = await fetch(`${API_BASE}/api/board/posts/${postId}/comments${qs ? `?${qs}` : ''}`, {
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
+  })
+  if (!res.ok) {
+    throw new Error(`GET /api/board/posts/${postId}/comments failed: ${res.status}`)
+  }
+  return (await res.json()) as { comments: BoardComment[]; total: number }
+}
+
+export async function createComment(postId: string, body: string): Promise<BoardComment> {
+  const res = await fetch(`${API_BASE}/api/board/posts/${postId}/comments`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getAccessToken() ?? ''}` },
+    body: JSON.stringify({ body }),
+  })
+  if (!res.ok) {
+    throw new Error(`POST /api/board/posts/${postId}/comments failed: ${res.status}`)
+  }
+  const { comment } = (await res.json()) as { comment: BoardComment }
+  return comment
+}
+
+async function toggleLike(url: string, method: 'POST' | 'DELETE'): Promise<LikeStatus> {
+  const res = await fetch(url, {
+    method,
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
+  })
+  if (!res.ok) {
+    throw new Error(`${method} ${url} failed: ${res.status}`)
+  }
+  return (await res.json()) as LikeStatus
+}
+
+export const likePost = (postId: string) => toggleLike(`${API_BASE}/api/board/posts/${postId}/like`, 'POST')
+export const unlikePost = (postId: string) => toggleLike(`${API_BASE}/api/board/posts/${postId}/like`, 'DELETE')
+export const likeComment = (commentId: string) =>
+  toggleLike(`${API_BASE}/api/board/comments/${commentId}/like`, 'POST')
+export const unlikeComment = (commentId: string) =>
+  toggleLike(`${API_BASE}/api/board/comments/${commentId}/like`, 'DELETE')
