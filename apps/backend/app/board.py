@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Annotated
 import asyncio
 import json
+import time
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -43,6 +44,14 @@ class BoardStore:
         await self.redis.hset(self.key, entry["id"], json.dumps(entry, ensure_ascii=False))
         return entry
 
+    # Defined before `list` below — once that method exists, its name shadows the
+    # builtin `list` for annotations evaluated later in this class body.
+    async def get_many(self, post_ids: list[str]) -> dict[str, dict]:
+        if not post_ids:
+            return {}
+        raw = await self.redis.hmget(self.key, post_ids)
+        return {post_id: json.loads(value) for post_id, value in zip(post_ids, raw) if value}
+
     async def list(self) -> list[dict]:
         raw = await self.redis.hgetall(self.key)
         posts = [json.loads(value) for value in raw.values()]
@@ -73,20 +82,42 @@ class CommentStore:
 
 
 class LikeStore:
-    """One Redis SET per liked thing, keyed by the liking user's id — SCARD for count, SISMEMBER for mine."""
+    """One Redis SET per liked thing, keyed by the liking user's id — SCARD for count, SISMEMBER for mine.
 
-    def __init__(self, redis, prefix: str):
+    When user_index_prefix is set, also maintains a per-user ZSET (member=target_id, score=like time)
+    so "things this user liked, most recent first" can be listed without scanning every target.
+    Comment likes don't need this view, so comment_likes leaves user_index_prefix unset.
+    """
+
+    def __init__(self, redis, prefix: str, user_index_prefix: str | None = None):
         self.redis = redis
         self.prefix = prefix
+        self.user_index_prefix = user_index_prefix
 
     def key(self, target_id: str) -> str:
         return f"{self.prefix}:{target_id}"
 
+    def user_index_key(self, user_id: str) -> str:
+        return f"{self.user_index_prefix}:{user_id}"
+
     async def like(self, target_id: str, user_id: str) -> None:
         await self.redis.sadd(self.key(target_id), user_id)
+        if self.user_index_prefix:
+            await self.redis.zadd(self.user_index_key(user_id), {target_id: time.time()})
 
     async def unlike(self, target_id: str, user_id: str) -> None:
         await self.redis.srem(self.key(target_id), user_id)
+        if self.user_index_prefix:
+            await self.redis.zrem(self.user_index_key(user_id), target_id)
+
+    async def liked_by(self, user_id: str, offset: int, limit: int) -> tuple[list[str], int]:
+        """Target ids this user liked, most recently liked first. Requires user_index_prefix."""
+        key = self.user_index_key(user_id)
+        async with self.redis.pipeline(transaction=True) as pipe:
+            pipe.zrevrange(key, offset, offset + limit - 1)
+            pipe.zcard(key)
+            ids, total = await pipe.execute()
+        return ids, total
 
     async def status(self, target_id: str, user_id: str) -> tuple[int, bool]:
         async with self.redis.pipeline(transaction=True) as pipe:
@@ -135,6 +166,37 @@ async def list_posts(request: Request, current_user: User, offset: Offset = 0,
         raise HTTPException(503, "Redis unavailable") from None
     enriched = [with_like_status(post, *likes[post["id"]]) for post in page]
     return {"posts": enriched, "total": len(posts)}
+
+
+@router.get("/posts/mine")
+async def list_my_posts(request: Request, current_user: User, offset: Offset = 0,
+                        limit: Annotated[int, Query(ge=1, le=100)] = 20):
+    try:
+        async with asyncio.timeout(3):
+            posts = await request.app.state.board.list()
+            mine = [post for post in posts if post["authorId"] == current_user["id"]]
+            page = mine[offset:offset + limit]
+            likes = await request.app.state.post_likes.status_many(
+                [post["id"] for post in page], current_user["id"])
+    except (RedisError, TimeoutError):
+        raise HTTPException(503, "Redis unavailable") from None
+    enriched = [with_like_status(post, *likes[post["id"]]) for post in page]
+    return {"posts": enriched, "total": len(mine)}
+
+
+@router.get("/posts/liked")
+async def list_liked_posts(request: Request, current_user: User, offset: Offset = 0,
+                           limit: Annotated[int, Query(ge=1, le=100)] = 20):
+    try:
+        async with asyncio.timeout(3):
+            post_ids, total = await request.app.state.post_likes.liked_by(
+                current_user["id"], offset, limit)
+            posts_by_id = await request.app.state.board.get_many(post_ids)
+            likes = await request.app.state.post_likes.status_many(post_ids, current_user["id"])
+    except (RedisError, TimeoutError):
+        raise HTTPException(503, "Redis unavailable") from None
+    enriched = [with_like_status(posts_by_id[pid], *likes[pid]) for pid in post_ids if pid in posts_by_id]
+    return {"posts": enriched, "total": total}
 
 
 @router.post("/posts/{post_id}/like")

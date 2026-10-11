@@ -117,25 +117,46 @@ class FakeSetPipeline:
     def sismember(self, key, member):
         self.calls.append(("sismember", key, member))
 
+    def zrevrange(self, key, start, stop):
+        self.calls.append(("zrevrange", key, start, stop))
+
+    def zcard(self, key):
+        self.calls.append(("zcard", key))
+
     async def execute(self):
         results = []
         for call in self.calls:
             if call[0] == "scard":
                 results.append(len(self.redis.sets.get(call[1], set())))
-            else:
+            elif call[0] == "sismember":
                 results.append(call[2] in self.redis.sets.get(call[1], set()))
+            elif call[0] == "zrevrange":
+                _, key, start, stop = call
+                members = sorted(self.redis.zsets.get(key, {}).items(), key=lambda kv: kv[1], reverse=True)
+                ids = [member for member, _ in members]
+                stop = len(ids) - 1 if stop == -1 else stop
+                results.append(ids[start:stop + 1])
+            elif call[0] == "zcard":
+                results.append(len(self.redis.zsets.get(call[1], {})))
         return results
 
 
 class FakeRedisSet:
     def __init__(self, sets=None):
         self.sets = sets if sets is not None else {}
+        self.zsets = {}
 
     async def sadd(self, key, member):
         self.sets.setdefault(key, set()).add(member)
 
     async def srem(self, key, member):
         self.sets.setdefault(key, set()).discard(member)
+
+    async def zadd(self, key, mapping):
+        self.zsets.setdefault(key, {}).update(mapping)
+
+    async def zrem(self, key, member):
+        self.zsets.setdefault(key, {}).pop(member, None)
 
     def pipeline(self, transaction=True):
         return FakeSetPipeline(self)
@@ -166,6 +187,243 @@ class LikeStoreTests(unittest.IsolatedAsyncioTestCase):
     async def test_status_many_empty_returns_empty(self):
         store = LikeStore(FakeRedisSet(), "prefix")
         self.assertEqual(await store.status_many([], "u1"), {})
+
+
+class LikeStoreUserIndexTests(unittest.IsolatedAsyncioTestCase):
+    async def test_like_and_unlike_update_user_index_ordered_by_recency(self):
+        store = LikeStore(FakeRedisSet(), "backend:board:post-likes", "backend:board:user-liked-posts")
+        await store.like("p1", "u1")
+        await store.like("p2", "u1")
+        ids, total = await store.liked_by("u1", 0, 10)
+        self.assertEqual(total, 2)
+        self.assertEqual(ids, ["p2", "p1"])
+
+        await store.unlike("p2", "u1")
+        self.assertEqual(await store.liked_by("u1", 0, 10), (["p1"], 1))
+
+    async def test_liked_by_paginates(self):
+        store = LikeStore(FakeRedisSet(), "prefix", "user-index")
+        for i in range(5):
+            await store.like(f"p{i}", "u1")
+        ids, total = await store.liked_by("u1", 0, 3)
+        self.assertEqual(total, 5)
+        self.assertEqual(len(ids), 3)
+
+    async def test_comment_likes_skip_user_index_entirely(self):
+        redis = FakeRedisSet()
+        store = LikeStore(redis, "backend:board:comment-likes")  # no user_index_prefix
+        await store.like("c1", "u1")
+        self.assertEqual(redis.zsets, {})
+
+
+class BoardStoreGetManyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_get_many_returns_only_found_posts_by_id(self):
+        post = dict(id="a", authorId="u1", authorName="x", title="t1", body="b1",
+                   songRequestUrl=None, createdAt="2026-01-01T00:00:00.000+00:00")
+        redis = SimpleNamespace(hmget=AsyncMock(return_value=[json.dumps(post, ensure_ascii=False), None]))
+        store = BoardStore(redis)
+        result = await store.get_many(["a", "missing"])
+        self.assertEqual(set(result.keys()), {"a"})
+        redis.hmget.assert_awaited_once_with(store.key, ["a", "missing"])
+
+    async def test_get_many_empty_list_skips_redis_call(self):
+        redis = SimpleNamespace(hmget=AsyncMock())
+        store = BoardStore(redis)
+        self.assertEqual(await store.get_many([]), {})
+        redis.hmget.assert_not_called()
+
+
+class MyAndLikedPostsApiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_mine_filters_by_author_and_paginates(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        app.dependency_overrides[get_current_user] = lambda: {"id": "u1", "name": "x"}
+        raw = {}
+        for i in range(3):
+            post = dict(id=f"mine{i}", authorId="u1", authorName="x", title=f"t{i}", body="b",
+                       songRequestUrl=None, createdAt=f"2026-01-0{i + 1}T00:00:00.000+00:00")
+            raw[post["id"]] = json.dumps(post, ensure_ascii=False)
+        other = dict(id="other1", authorId="u2", authorName="y", title="other", body="b",
+                    songRequestUrl=None, createdAt="2026-01-04T00:00:00.000+00:00")
+        raw["other1"] = json.dumps(other, ensure_ascii=False)
+        app.state.board = BoardStore(SimpleNamespace(hgetall=AsyncMock(return_value=raw)))
+        app.state.post_likes = LikeStore(FakeRedisSet(), "backend:board:post-likes",
+                                         "backend:board:user-liked-posts")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            res = await client.get("/api/board/posts/mine")
+            self.assertEqual(res.status_code, 200)
+            body = res.json()
+            self.assertEqual(body["total"], 3)
+            self.assertEqual({p["id"] for p in body["posts"]}, {"mine0", "mine1", "mine2"})
+            self.assertTrue(all(p["authorId"] == "u1" for p in body["posts"]))
+
+    async def test_mine_requires_login(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            res = await client.get("/api/board/posts/mine")
+            self.assertEqual(res.status_code, 401)
+
+    async def test_liked_returns_posts_in_recency_order(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        app.dependency_overrides[get_current_user] = lambda: {"id": "u1", "name": "x"}
+        raw = {}
+        for pid in ("p1", "p2"):
+            post = dict(id=pid, authorId="u2", authorName="y", title=pid, body="b",
+                       songRequestUrl=None, createdAt="2026-01-01T00:00:00.000+00:00")
+            raw[pid] = json.dumps(post, ensure_ascii=False)
+        app.state.board = BoardStore(SimpleNamespace(
+            hmget=AsyncMock(side_effect=lambda key, ids: [raw.get(i) for i in ids])))
+        app.state.post_likes = LikeStore(FakeRedisSet(), "backend:board:post-likes",
+                                         "backend:board:user-liked-posts")
+        await app.state.post_likes.like("p1", "u1")
+        await app.state.post_likes.like("p2", "u1")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            res = await client.get("/api/board/posts/liked")
+            self.assertEqual(res.status_code, 200)
+            body = res.json()
+            self.assertEqual(body["total"], 2)
+            self.assertEqual([p["id"] for p in body["posts"]], ["p2", "p1"])
+            self.assertTrue(all(p["liked"] for p in body["posts"]))
+
+    async def test_liked_requires_login(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            res = await client.get("/api/board/posts/liked")
+            self.assertEqual(res.status_code, 401)
+
+    async def test_liked_handles_redis_failure(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        app.dependency_overrides[get_current_user] = lambda: {"id": "u1", "name": "x"}
+        failing = SimpleNamespace(
+            pipeline=lambda transaction=True: (_ for _ in ()).throw(ConnectionError("offline")))
+        app.state.post_likes = LikeStore(failing, "backend:board:post-likes", "backend:board:user-liked-posts")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            res = await client.get("/api/board/posts/liked")
+            self.assertEqual(res.status_code, 503)
+
+    async def test_mine_pagination_boundaries(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        app.dependency_overrides[get_current_user] = lambda: {"id": "u1", "name": "x"}
+        raw = {}
+        for i in range(5):
+            post = dict(id=f"m{i}", authorId="u1", authorName="x", title=f"t{i}", body="b",
+                       songRequestUrl=None, createdAt=f"2026-01-0{i + 1}T00:00:00.000+00:00")
+            raw[post["id"]] = json.dumps(post, ensure_ascii=False)
+        app.state.board = BoardStore(SimpleNamespace(hgetall=AsyncMock(return_value=raw)))
+        app.state.post_likes = LikeStore(FakeRedisSet(), "backend:board:post-likes",
+                                         "backend:board:user-liked-posts")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            # last page is a partial page (5 items, limit 2 -> pages of 2,2,1)
+            res = await client.get("/api/board/posts/mine", params={"offset": 4, "limit": 2})
+            body = res.json()
+            self.assertEqual(body["total"], 5)
+            self.assertEqual(len(body["posts"]), 1)
+
+            # offset at exactly total -> empty page, not an error
+            res = await client.get("/api/board/posts/mine", params={"offset": 5, "limit": 2})
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.json()["posts"], [])
+            self.assertEqual(res.json()["total"], 5)
+
+            # offset past total -> still empty, not an error
+            res = await client.get("/api/board/posts/mine", params={"offset": 100, "limit": 2})
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.json()["posts"], [])
+
+    async def test_mine_empty_when_no_posts(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        app.dependency_overrides[get_current_user] = lambda: {"id": "u1", "name": "x"}
+        app.state.board = BoardStore(SimpleNamespace(hgetall=AsyncMock(return_value={})))
+        app.state.post_likes = LikeStore(FakeRedisSet(), "backend:board:post-likes",
+                                         "backend:board:user-liked-posts")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            res = await client.get("/api/board/posts/mine")
+            self.assertEqual(res.json(), {"posts": [], "total": 0})
+
+    async def test_liked_pagination_boundaries(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        app.dependency_overrides[get_current_user] = lambda: {"id": "u1", "name": "x"}
+        raw = {}
+        for i in range(5):
+            pid = f"l{i}"
+            post = dict(id=pid, authorId="u2", authorName="y", title=pid, body="b",
+                       songRequestUrl=None, createdAt="2026-01-01T00:00:00.000+00:00")
+            raw[pid] = json.dumps(post, ensure_ascii=False)
+        app.state.board = BoardStore(SimpleNamespace(
+            hmget=AsyncMock(side_effect=lambda key, ids: [raw.get(i) for i in ids])))
+        app.state.post_likes = LikeStore(FakeRedisSet(), "backend:board:post-likes",
+                                         "backend:board:user-liked-posts")
+        for i in range(5):
+            await app.state.post_likes.like(f"l{i}", "u1")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            res = await client.get("/api/board/posts/liked", params={"offset": 4, "limit": 2})
+            body = res.json()
+            self.assertEqual(body["total"], 5)
+            self.assertEqual(len(body["posts"]), 1)
+            self.assertEqual(body["posts"][0]["id"], "l0")  # least-recently-liked, last page
+
+            res = await client.get("/api/board/posts/liked", params={"offset": 10, "limit": 2})
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.json()["posts"], [])
+
+    async def test_liking_own_post_shows_up_in_both_mine_and_liked(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        app.dependency_overrides[get_current_user] = lambda: {"id": "u1", "name": "x"}
+        post = dict(id="own1", authorId="u1", authorName="x", title="내 글", body="b",
+                   songRequestUrl=None, createdAt="2026-01-01T00:00:00.000+00:00")
+        raw = {"own1": json.dumps(post, ensure_ascii=False)}
+        app.state.board = BoardStore(SimpleNamespace(
+            hgetall=AsyncMock(return_value=raw),
+            hmget=AsyncMock(side_effect=lambda key, ids: [raw.get(i) for i in ids])))
+        app.state.post_likes = LikeStore(FakeRedisSet(), "backend:board:post-likes",
+                                         "backend:board:user-liked-posts")
+        await app.state.post_likes.like("own1", "u1")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            mine = await client.get("/api/board/posts/mine")
+            self.assertEqual([p["id"] for p in mine.json()["posts"]], ["own1"])
+            self.assertTrue(mine.json()["posts"][0]["liked"])
+
+            liked = await client.get("/api/board/posts/liked")
+            self.assertEqual([p["id"] for p in liked.json()["posts"]], ["own1"])
+
+    async def test_relike_is_idempotent_in_liked_list(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        app.dependency_overrides[get_current_user] = lambda: {"id": "u1", "name": "x"}
+        post = dict(id="p1", authorId="u2", authorName="y", title="t", body="b",
+                   songRequestUrl=None, createdAt="2026-01-01T00:00:00.000+00:00")
+        raw = {"p1": json.dumps(post, ensure_ascii=False)}
+        app.state.board = BoardStore(SimpleNamespace(
+            hmget=AsyncMock(side_effect=lambda key, ids: [raw.get(i) for i in ids])))
+        app.state.post_likes = LikeStore(FakeRedisSet(), "backend:board:post-likes",
+                                         "backend:board:user-liked-posts")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            await client.post("/api/board/posts/p1/like")
+            await client.post("/api/board/posts/p1/like")  # liking an already-liked post again
+            res = await client.get("/api/board/posts/liked")
+            body = res.json()
+            self.assertEqual(body["total"], 1)
+            self.assertEqual(len(body["posts"]), 1)
+            self.assertEqual(body["posts"][0]["likeCount"], 1)
+
+    async def test_two_users_liking_same_post_have_independent_liked_lists(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        post_a = dict(id="shared", authorId="u3", authorName="z", title="t", body="b",
+                     songRequestUrl=None, createdAt="2026-01-01T00:00:00.000+00:00")
+        raw = {"shared": json.dumps(post_a, ensure_ascii=False)}
+        app.state.board = BoardStore(SimpleNamespace(
+            hmget=AsyncMock(side_effect=lambda key, ids: [raw.get(i) for i in ids])))
+        app.state.post_likes = LikeStore(FakeRedisSet(), "backend:board:post-likes",
+                                         "backend:board:user-liked-posts")
+        await app.state.post_likes.like("shared", "u1")
+
+        app.dependency_overrides[get_current_user] = lambda: {"id": "u1", "name": "x"}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            res = await client.get("/api/board/posts/liked")
+            self.assertEqual(res.json()["total"], 1)
+
+        app.dependency_overrides[get_current_user] = lambda: {"id": "u2", "name": "y"}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            res = await client.get("/api/board/posts/liked")
+            self.assertEqual(res.json(), {"posts": [], "total": 0})
 
 
 class LikeApiTests(unittest.IsolatedAsyncioTestCase):

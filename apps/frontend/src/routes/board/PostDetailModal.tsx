@@ -21,11 +21,13 @@ interface PostDetailModalProps {
 
 export function PostDetailModal({ post, onClose, onPostLikeChange }: PostDetailModalProps) {
   const [postLike, setPostLike] = useState<LikeStatus>({ likeCount: post.likeCount, liked: post.liked })
+  const [commentPage, setCommentPage] = useState(1)
   const [comments, setComments] = useState<BoardComment[]>([])
   const [commentTotal, setCommentTotal] = useState(0)
   const [isLoadingComments, setIsLoadingComments] = useState(false)
   const [commentBody, setCommentBody] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const commentTotalPages = Math.max(1, Math.ceil(commentTotal / COMMENT_PAGE_SIZE))
 
   const handleTogglePostLike = async () => {
     const status = postLike.liked ? await unlikePost(post.id) : await likePost(post.id)
@@ -38,11 +40,11 @@ export function PostDetailModal({ post, onClose, onPostLikeChange }: PostDetailM
     setComments((prev) => prev.map((item) => (item.id === comment.id ? { ...item, ...status } : item)))
   }
 
-  const loadComments = async (offset: number) => {
+  const loadComments = async (page: number) => {
     setIsLoadingComments(true)
     try {
-      const result = await getComments(post.id, { offset, limit: COMMENT_PAGE_SIZE })
-      setComments((prev) => (offset === 0 ? result.comments : [...prev, ...result.comments]))
+      const result = await getComments(post.id, { offset: (page - 1) * COMMENT_PAGE_SIZE, limit: COMMENT_PAGE_SIZE })
+      setComments(result.comments)
       setCommentTotal(result.total)
     } finally {
       setIsLoadingComments(false)
@@ -50,9 +52,14 @@ export function PostDetailModal({ post, onClose, onPostLikeChange }: PostDetailM
   }
 
   useEffect(() => {
-    loadComments(0)
+    loadComments(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [post.id])
+
+  const handleCommentPageChange = (nextPage: number) => {
+    setCommentPage(nextPage)
+    loadComments(nextPage)
+  }
 
   const handleSubmitComment = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -62,7 +69,10 @@ export function PostDetailModal({ post, onClose, onPostLikeChange }: PostDetailM
     try {
       await createComment(post.id, trimmed)
       setCommentBody('')
-      await loadComments(0)
+      // New comments land at the end (chronological order), so jump to the new last page.
+      const lastPage = Math.max(1, Math.ceil((commentTotal + 1) / COMMENT_PAGE_SIZE))
+      setCommentPage(lastPage)
+      await loadComments(lastPage)
     } finally {
       setIsSubmitting(false)
     }
@@ -122,15 +132,28 @@ export function PostDetailModal({ post, onClose, onPostLikeChange }: PostDetailM
             ))}
           </ul>
 
-          {comments.length < commentTotal && (
-            <button
-              type="button"
-              onClick={() => loadComments(comments.length)}
-              disabled={isLoadingComments}
-              className="self-start text-xs font-semibold text-primary disabled:opacity-60"
-            >
-              {isLoadingComments ? '불러오는 중...' : '댓글 더보기'}
-            </button>
+          {commentTotalPages > 1 && (
+            <div className="flex items-center justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => handleCommentPageChange(Math.max(1, commentPage - 1))}
+                disabled={commentPage <= 1 || isLoadingComments}
+                className="rounded-md border border-field-border px-3.5 py-2 text-xs font-semibold text-text-muted disabled:opacity-40"
+              >
+                이전
+              </button>
+              <span className="text-xs text-text-muted">
+                {commentPage} / {commentTotalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => handleCommentPageChange(Math.min(commentTotalPages, commentPage + 1))}
+                disabled={commentPage >= commentTotalPages || isLoadingComments}
+                className="rounded-md border border-field-border px-3.5 py-2 text-xs font-semibold text-text-muted disabled:opacity-40"
+              >
+                다음
+              </button>
+            </div>
           )}
 
           <form onSubmit={handleSubmitComment} className="flex gap-2">

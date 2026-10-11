@@ -76,22 +76,29 @@ export async function login(email: string, password: string): Promise<AuthRespon
   return res.json() as Promise<AuthResponse>
 }
 
-export async function getBoardPosts(params: {
-  offset?: number
-  limit?: number
-} = {}): Promise<{ posts: BoardPost[]; total: number }> {
+async function fetchBoardPostPage(
+  path: string,
+  params: { offset?: number; limit?: number },
+): Promise<{ posts: BoardPost[]; total: number }> {
   const query = new URLSearchParams()
   if (params.offset !== undefined) query.set('offset', String(params.offset))
   if (params.limit !== undefined) query.set('limit', String(params.limit))
   const qs = query.toString()
-  const res = await fetch(`${API_BASE}/api/board/posts${qs ? `?${qs}` : ''}`, {
+  const res = await fetch(`${API_BASE}${path}${qs ? `?${qs}` : ''}`, {
     headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
   })
   if (!res.ok) {
-    throw new Error(`GET /api/board/posts failed: ${res.status}`)
+    throw new Error(`GET ${path} failed: ${res.status}`)
   }
   return (await res.json()) as { posts: BoardPost[]; total: number }
 }
+
+export const getBoardPosts = (params: { offset?: number; limit?: number } = {}) =>
+  fetchBoardPostPage('/api/board/posts', params)
+export const getMyBoardPosts = (params: { offset?: number; limit?: number } = {}) =>
+  fetchBoardPostPage('/api/board/posts/mine', params)
+export const getLikedBoardPosts = (params: { offset?: number; limit?: number } = {}) =>
+  fetchBoardPostPage('/api/board/posts/liked', params)
 
 export async function createBoardPost(input: {
   title: string
