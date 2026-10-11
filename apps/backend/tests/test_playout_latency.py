@@ -13,6 +13,19 @@ from test_broadcast_runtime import segment
 
 
 class PlayoutLatencyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_recovery_keeps_current_before_prefetched_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Journal(Path(directory) / 'journal.sqlite', 'st_test')
+            try:
+                current = {**segment(), 'id': 'current'}
+                prepared = {**segment(), 'id': 'prepared'}
+                journal.transition(current, 'MIXING')
+                journal.transition(prepared, 'MIXING')
+                journal.transition(current, 'PUBLISHED')
+                self.assertEqual([row['id'] for row in journal.recover()], ['current', 'prepared'])
+            finally:
+                journal.close()
+
     async def test_prefetched_audio_not_counted_again_in_queue(self):
         publisher = HlsPublisher(None, Settings('127.0.0.1', 3000))
         publisher.current = {'id': 'playing'}
