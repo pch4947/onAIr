@@ -2,7 +2,7 @@
 
 > **한 줄 요약** — **실제로 송출된 것**만 채널(방)별 하나의 기록에 남기고, 그 기록에서 **프롬프트용 요약**과 **분석용 로그** 두 개의 뷰를 뽑는다. 프롬프트에는 전체 기록이 아니라 요약 + 최근 N개만 넣는다.
 
-- 관련 문서: [persona.md](persona.md) (페르소나 3층 중 기억 층), [PROJECT_PLAN.md](PROJECT_PLAN.md) (기획서 rev.9 — 4.2 요청 반영의 정의, 5.1 persona·context 관리, 8장 연구 설계 초안), [ENGINE_ARCHITECTURE.md](ENGINE_ARCHITECTURE.md) (4.4 방송 맥락, 7장 계측), [ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md)
+- 관련 문서: [persona.md](persona.md) (표현 층과 기억 층), [CORNER_DESIGN.md](CORNER_DESIGN.md) (입력 상태 머신·반영 단계 — 9절), [PROJECT_PLAN.md](PROJECT_PLAN.md) (기획서 rev.11 — 4.2 요청 반영의 정의, 5.1 persona·context 관리, 8장 연구 설계 초안), [ENGINE_ARCHITECTURE.md](ENGINE_ARCHITECTURE.md) (4.4 방송 맥락, 7장 계측), [ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md)
 - 표기: `[예시]` = 팀 합의 전 예시값, `[미정]` = 결정되지 않은 선택, **권장 이름** = 코드에 아직 없는 이름
 - 코드 기준: `main` (2026-10-08 확인).
 - **결정 (2026-10-08, 팀 회의)**: 송출 기준 시점은 **`PUBLISHED`**(3.1절), 요청의 성격(`intent`) 판정은 **규칙 기반**(5절 — 규칙은 초안), persona 저장소는 백엔드 신규 DB이고 송출 이력·요약은 엔진 SQLite(3.2절).
@@ -64,7 +64,7 @@
 
 | 소비자 | 쓰는 것 | 용도 |
 |---|---|---|
-| **편성 관리자** (`Scheduler`, 코너의 `gather`) | 최근 송출 곡·뉴스 항목 ID, 화자별 마지막 반영 시각 | 방금 튼 곡이나 읽은 뉴스를 다시 고르지 않기, `flood_selection`의 `not_yet_reflected_this_session` 계산 |
+| **편성 관리자** (`Scheduler`, `CornerRun`, `QuoteSelector`) | 최근 송출 곡·뉴스 항목 ID, 화자별 마지막 반영 시각 | 방금 튼 곡이나 읽은 뉴스를 다시 고르지 않기, 다양성 우선 선별 기준(아직 인용되지 않은 사람 우선) 계산 |
 | **ScriptWriter** (권장 이름, 현재 `_with_context`) | 요약 + 최근 N개 멘트 | 시스템 프롬프트 6번 블록 ([persona.md](persona.md) 4절) |
 
 - 곡은 백엔드가 고른다(YouTube, [ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md) 3.4절). 엔진은 `track.queued`로 받은 곡 정보를 송출 이력에 남겨, 다음 멘트에서 "방금 들은 곡"을 언급하는 재료로 쓴다. `BriefingCorner.gather()`는 항상 RSS 최신 3개를 읽는다 — 송출 이력을 보지 않는다.
@@ -88,7 +88,7 @@
 
 ## 5. 반영 ④단계를 위한 데이터
 
-요청마다 다음 필드를 기록한다. 이 기록이 ④단계(재언급)의 재료이자, `L_ack`·`L_res` 산출과 RQ2 (a)/(b) 집단 분류의 원천이다(F-30).
+입력마다 다음 필드를 기록한다. 이 기록이 ④단계(회상)의 재료이자, `L_ui`·`L_reflect`·`quote_age` 산출과 RQ-A (a)/(b)/(c) 집단 분류의 원천이다(F-30). 2026-10-12 재설계로 상태는 입력 상태 머신([CORNER_DESIGN.md](CORNER_DESIGN.md) 9.3절)을 따르고, 엔진 계측에서는 `input_log`·`selection_log`가 이 기록을 맡는다([ENGINE_ARCHITECTURE.md](ENGINE_ARCHITECTURE.md) 7장).
 
 | 필드 | 의미 | 현재 코드 |
 |---|---|---|
@@ -96,21 +96,22 @@
 | `speaker_id` | 화자 | `ListenerRequest.requester_ref` — **있음 (이름 다름).** 새 이름을 만들지 않고 `requester_ref`를 쓰는 것을 권장 |
 | `text` | 요청 본문 | `ListenerRequest.body` — **있음 (이름 다름).** `body` 유지 권장 |
 | `received_at` | 수신 시각 | `ListenerRequest.received_at` — 있음 |
-| `kind` (proactive \| reactive) | 방송 흐름을 바꾸려는 요청인지(proactive), 이미 나온 내용에 반응한 것인지(reactive) | **충돌** — 기존 `ListenerRequest.kind`는 `"story" \| "mood"`(요청 종류)이고 백엔드 계약에도 쓰인다. **권장 이름** `intent`로 분리 |
-| `selected` | 폭주 시 선별에 포함됐는지 — false면 RQ2 (b) | 없음. 생략 여부는 `decision_log`의 `Decision`에서 간접 추정만 가능 |
-| `ack_at` | ① 접수 확인 송출 시각 | 없음. ack 세그먼트 제출은 있으나 송출 시각은 백엔드 이벤트 필요 |
-| `reacted_at` | ② 리액션 송출 시각 | 없음 |
-| `schedule_changed_at` | ③ 흐름 변경 송출 시각 | 없음 |
-| `recalled_at` | ④ 재언급 송출 시각 | 없음 |
+| `kind` (proactive \| reactive) | 방송 흐름을 바꾸려는 요청인지(proactive), 이미 나온 내용에 반응한 것인지(reactive) | **충돌** — 기존 `ListenerRequest.kind`는 입력 종류(v1 `story`\|`mood`\|`song`, v2 `chat`\|`message`\|`song_request`)이고 백엔드 계약에도 쓰인다. **권장 이름** `intent`로 분리 |
+| `state` / 전이 시각 | 입력 상태(pooled·inboxed·selected·reflected·expired 등) — 최종이 `expired`면 RQ-A (b) | 일부 — `request_log`에 v1 상태 전이만 있음 |
+| `routed_at` | 라우팅 결과 통보 시각 — `L_ui` 계산 | 없음 |
+| `mentioned_at` | ① 언급 재생 시각 | 없음 |
+| `reacted_at` | ② 리액션 재생 시각 | 없음 |
+| `schedule_changed_at` | ③ 흐름 변경(화제 전환·신청곡·투표 결과) 재생 시각 | 없음 |
+| `recalled_at` | ④ 회상 재생 시각 | 없음 |
 | `max_level_reached` | 도달한 최고 단계 (0~4) | 없음 |
 
-- `*_at` 필드는 모두 **송출 시각**이다(3.1). 엔진은 세그먼트 제출 시 `request_ref`를 붙이므로(`SegmentSubmission.request_ref`), 백엔드의 `state.transition`(`segment_id`, `at`)과 조인하면 계산할 수 있다.
+- ①~④ `*_at` 필드는 **재생 시작 시각**이다. 엔진은 세그먼트 제출 시 반영한 입력을 붙이므로(v1 `request_ref`, v2 `input_refs`), 백엔드의 `segment.started`(서버 방송 시간상 재생 시작, v2 — [ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md) 10.6절)와 조인하면 계산할 수 있다. 청취자 기기 기준이 아니라 서버 방송 시간 기준이고, 인용 구절이 아니라 세그먼트 단위다. 기억(3.1)의 기준이 `PUBLISHED`인 것과 다르다 — 기억은 "방송에 나갔는가", 반영 시각은 "언제 재생되기 시작했는가"를 본다.
 - **화자별 요약(Affective)은 이 기록에서 파생한다.** 별도 저장소를 두지 않고, `requester_ref`로 묶어 "이번 방송의 요청 수, 최근 화제, 마지막 반영 시각"을 계산한다.
 - **`intent`는 규칙으로 판정한다** (결정 2026-10-08). 규칙 내용은 아직 초안이다 — 아래는 출발점이며 실제 채팅 로그로 다듬는다 `[예시]`.
 
   | 순서 | 조건 | 판정 |
   |---|---|---|
-  | 1 | `kind`가 `song`·`mood` (신청곡·무드 신청) | proactive |
+  | 1 | `kind`가 `song_request` (신청곡) | proactive |
   | 2 | 요청 동사·표현이 있다 — "틀어", "들려", "읽어", "해주세요", "신청", "궁금" 등 | proactive |
   | 3 | 직전에 송출된 멘트·곡(최근 60초 `[예시]`)의 핵심어와 겹치는 단어가 있다 | reactive |
   | 4 | 짧은 감탄·반응 — "ㅋㅋ", "와", "좋아요", "ㄹㅇ" 등만으로 이루어졌다 | reactive |
@@ -119,7 +120,7 @@
   - 규칙은 코드가 아니라 데이터 파일로 둔다(안전 룰 `safety_rules.yaml`과 같은 방식) — 실측하며 고치기 쉽게.
   - 규칙의 정확도는 6절의 채팅 분류와 같은 방식으로 확인한다 — 무작위 100건을 사람이 따로 분류해 일치도를 본다.
   - 게시판 사연은 방송 흐름과 무관하게 미리 쓴 글이므로 판정하지 않는다 (분류: `board`).
-- ④단계 생성: 편성 관리자가 송출 이력에서 재언급할 요청을 골라 job에 담는다(`max_reflection_level` ≥ 4일 때). LLM이 기억에서 알아서 꺼내게 하지 않는다 — "편성은 규칙, LLM은 문장만" ([persona.md](persona.md) 1.1).
+- ④단계 생성: `closing` 코너의 돌아보기 단계에서 편성 관리자가 송출 이력 중 반영된 입력 1~2건을 골라 job에 담는다([CORNER_DESIGN.md](CORNER_DESIGN.md) 7.2절). LLM이 기억에서 알아서 꺼내게 하지 않는다 — "고르는 것은 규칙, 말하는 것은 LLM" ([persona.md](persona.md) 1.1).
 
 ## 6. 로깅 지표 (멘토: 설문보다 로깅)
 

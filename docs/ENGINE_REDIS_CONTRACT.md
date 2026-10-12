@@ -1,5 +1,6 @@
 # 엔진 ↔ 백엔드 통신 계약 (v1)
 
+- **v2 개정안 (2026-10-12, 백엔드 합의 전)**: 코너·입력 반영 재설계([CORNER_DESIGN.md](CORNER_DESIGN.md))에 따른 변경 제안은 **10장**에 있다. 1~9장은 현재 구현된 v1이다.
 - 상태: **흐름(Redis) 중 세그먼트 제출·요청 전달·상태 통보는 엔진 구현 완료.** `station.created` 처리(3.3절)도 구현했다(#55). 엔진 REST(6장)도 구현했다(#64). 하트비트, 곡·사연 이벤트(3.4~3.5)는 미구현. 2026-10-08 팀 결정으로 9장의 미결 사항을 확정했다. 양쪽 모두 구현 전인 항목은 v1 안에서 확정하고, 이미 구현된 필드나 의미를 바꿀 때는 `contract_version`을 올린다.
 - **결정 (2026-09-20, 확인 1)**
   - **흐름은 Redis Streams** — 세그먼트 제출, 요청 전달, 상태 통보, 스테이션 수명주기
@@ -244,7 +245,7 @@ wsl redis-cli XRANGE engine:st_8f2a:out - + COUNT 3   # station.started 또는 s
 1. 엔진이 `station.started`로 확정된 주제(`topic`)를 알린다. 호스트가 주제를 비웠으면 엔진이 생성한 값이다 — 그래서 후보 추리기는 `station.started` 이후에 시작한다.
 2. 백엔드가 전체 게시판에서 주제와 맞는 사연 **최대 30개** `[예시]`를 골라 `board.story`로 보낸다. 방송 중 새 사연이 올라와 주제와 맞으면 그때 보낸다.
    - **맞추는 방법** `[제안]` — 작성자가 사연을 쓸 때 카테고리·태그를 고르게 하고(예: 공부, 연애, 일상, 위로), 방송 주제와 태그를 맞춘다. 정확도가 더 필요하면 주제와 본문의 임베딩 유사도로 순위를 매긴다.
-3. 엔진은 풀에서 **규칙으로** 고른다 — 아직 안 읽은 것, 최근 것, 태그·주제 일치 ([persona.md](persona.md) 5절 `flood_selection`과 같은 방식).
+3. 엔진은 풀에서 **규칙으로** 고른다 — 아직 안 읽은 것, 최근 것, 태그·주제 일치. 게시판 사연은 `story_corner`의 주 소재(FEATURE)다 ([CORNER_DESIGN.md](CORNER_DESIGN.md) 5.4절, 7.5절).
 4. 읽은 사연은 그 멘트의 `segment.submitted.request_ref`에 `story_id`가 실려 나간다.
 
 **한 번 읽힌 사연은 다른 방 후보에서 뺀다** (결정 2026-10-08)
@@ -471,3 +472,167 @@ wsl redis-cli XADD engine:st_local_dev:in '*' type request.arrived contract_vers
 2. 게시판 사연과 주제를 맞추는 방법 — 태그 / 임베딩 유사도 (3.5절)
 3. 장르 라벨링 방법 — 플레이리스트 선곡과 `music_taste` 매칭에 필요. 비공식 YouTube API는 약관·차단 위험이 있어, 공식 음악 메타데이터 서비스(Last.fm·MusicBrainz 태그) → 없으면 LLM 분류를 권장
 4. 예시값 확정 — REST 포트, persona 필드 길이 제한, 초안 응답 목표, 사연 후보 수, 신청곡 검색 결과 수·길이 상한
+5. v2 개정안 합의 — 10장. 특히 `input_refs` 전환(10.5), 위치 삽입 지원 여부(10.9)
+
+## 10. v2 개정안 — 코너 재설계 반영 (제안, 백엔드 합의 전)
+
+코너·입력 반영 재설계([CORNER_DESIGN.md](CORNER_DESIGN.md), 2026-10-12 초안)에 따른 계약 변경 **제안**이다. 1~9장(v1)은 지금 양쪽에 구현된 계약이므로 그대로 두고, 백엔드 파트와 합의하면 v1 본문에 반영한 뒤 `contract_version`을 **2**로 올린다. 이미 구현된 필드의 의미가 바뀌므로(`request.arrived.kind`, `request.state` 값, `segment.submitted.request_ref`) 버전을 올려야 한다.
+
+### 10.1 변경 요약
+
+| 이벤트 | 방향 | 변경 |
+|---|---|---|
+| `station.created` | B→E | `format`, `corners`, `news_sections`, `intensity`, `experiment` 추가. `policy` 제거 (10.2) |
+| `request.arrived` | B→E | `kind`를 `chat`\|`message`\|`song_request`로 변경(`story`·`mood` 폐지), `nickname` 추가 (10.3) |
+| `request.state` | E→B | state 값을 입력 상태로 교체 (10.4) |
+| `segment.submitted` | E→B | `request_ref` 단일 값 → `input_refs` 배열, `reflection_level` 추가, `kind: ack` 폐지 → `glue` (10.5) |
+| `segment.started` | B→E | **신설** — 서버 방송 시간상 세그먼트 재생 시작. 입력의 `REFLECTED` 확정과 `L_reflect`·`quote_age` 계산. `state.transition`(`PUBLISHED`·`PLAYED`)은 의미 그대로 (10.6) |
+| `corner.changed` | E→B | **신설** — 현재 코너와 입력 계약 요약 (10.7) |
+| `vote.open` / `vote.result` | E→B / B→E | **신설** — 투표 열기 / 집계 결과 (10.8) |
+| `segment.insert_before` | E→B | **신설 `[실험 조건 후보]`** — 지연 결합용. 지원 가능 여부부터 확인 (10.9) |
+| `board.story` | B→E | 변경 없음. `tags`에 양자택일형 고민 표시 추가 `[미정]` |
+| `engine.health` | E→B | `order_position`·`next_slot`·`policy_name` → `corner`·`step`·`experiment`, 풀·inbox 크기 추가 (필드 추가는 버전 무관, 3.1.1) |
+| `request.cancelled` | B→E | 변경 없음. 풀·inbox에 있으면 빼고 `cancelled`, 이미 `selected`면 생성 결과에서만 뺀다 |
+
+### 10.2 `station.created` 추가 필드
+
+```json
+{
+  "broadcast_minutes": 60,
+  "first_song": {"...": "..."},
+  "topic": "시험 기간을 버티는 나만의 방법",
+  "persona": {"...": "..."},
+  "format": "talk",
+  "corners": ["story_corner", "topic_talk"],
+  "intensity": "mid",
+  "experiment": null
+}
+```
+
+| 필드 | 타입 | 필수 | 없을 때 | 제한 `[예시]` |
+|---|---|---|---|---|
+| `format` | `music`\|`talk`\|`news` | O | — | |
+| `corners` | 문자열 배열 | `talk`만 | — | 2~3개, `story_corner`·`text_corner`·`topic_talk`·`dj_vs_listeners` 중 |
+| `news_sections` | 문자열 배열 | `news`만 | — | 2~3개, 종합/경제/IT/스포츠/문화 중 |
+| `intensity` | `low`\|`mid`\|`high` | | `mid` | `news`에서는 무시 |
+| `experiment` | 객체 \| `null` | | `null` | 실험용 방만. `{"condition", "selector": "recency"\|"relevance"\|"diversity", "window_sec", "binding": "early"\|"late", "aggregate_ack"}` — [persona.md](persona.md) 2.3절 `ExperimentSpec` |
+| ~~`policy`~~ | | | | 제거 — `SchedulingPolicy`가 없어진다 |
+
+- 호스트 폼은 형식을 먼저 고르고, 형식에 따라 `corners` 또는 `news_sections`와 `intensity`를 보여준다([CORNER_DESIGN.md](CORNER_DESIGN.md) 8절). `experiment`는 호스트 폼에 노출하지 않는다.
+- 검증 실패(형식과 맞지 않는 코너 등)는 v1과 같이 `station.rejected`(`invalid_payload`)다.
+
+### 10.3 `request.arrived`
+
+```json
+{"request_id": "req_abc123", "kind": "chat", "body": "저는 새벽에 컵라면이요", "requester_ref": "listener_1", "nickname": "밤샘러"}
+```
+
+| `kind` | 보내는 곳 (프론트) | `body` 상한 `[예시]` |
+|---|---|---|
+| `chat` | 플레이어 채팅창 | 100자 |
+| `message` | 플레이어 "사연 보내기" 폼 (v1의 `story`) | 200자 |
+| `song_request` | 신청곡 폼 (v1의 `song`) — `track` 필수, `body`는 한마디 | 60자 |
+
+- `nickname`은 방송에서 부를 이름이다(`message`·`song_request` 낭독용). `requester_ref`(내부 ID)는 프롬프트에 넣지 않는다. 사연 보내기 폼에 "방송에서 닉네임이 불릴 수 있음" 동의 표시가 필요하다 `[미정]`.
+- `mood`는 폐지한다(기획서 rev.11).
+- 투표는 `request.arrived`로 보내지 않는다 — 백엔드가 집계해 `vote.result`로 한 번에 보낸다(10.8).
+
+### 10.4 `request.state` 값
+
+| state | 의미 | 종결 |
+|---|---|---|
+| `pooled` | 인용 후보 풀 | |
+| `inboxed` | 그 입력을 쓰는 코너의 받은편지함 | |
+| `collected` | 열린 질문 창에 수집됨 | |
+| `held` | 반영하지 않는 구간(곡 재생 중 등) — 다음 코너에서 다시 라우팅 | |
+| `not_on_air` | 이 형식은 방송에 반영하지 않음 (뉴스) | O |
+| `selected` | 세그먼트에 들어감 (생성 중) | |
+| `reflected` | 그 입력이 들어간 세그먼트가 재생됨 — payload에 `segment_id`, `played_at` | O |
+| `expired` | 창이 지나도록 선택되지 못함 / 방송 종료 | O |
+| `rejected` | 안전 검사 탈락 | O |
+| `cancelled` | 취소됨 (v1과 같음) | O |
+
+- `selected` 뒤 생성이 실패하거나 대본에 인용이 빠지면 `pooled`/`inboxed`로 되돌아갈 수 있다. 백엔드는 마지막 상태만 표시하면 된다.
+- 프론트 표시 문구 예는 [CORNER_DESIGN.md](CORNER_DESIGN.md) 9.1절.
+
+### 10.5 `segment.submitted`
+
+```json
+{
+  "id": "seg_9be9401b85d7",
+  "corner_type": "topic_talk",
+  "kind": "speech",
+  "input_refs": ["req_abc123", "req_abc130"],
+  "reflection_level": 2,
+  "music_ref": null,
+  "...": "나머지 필드는 v1과 같다"
+}
+```
+
+- `input_refs`: 이 멘트가 반영한 입력의 `request_id` 또는 게시판 사연의 `story_id` 배열. 없으면 `[]`. v1의 `request_ref`를 대체한다 — 채팅 여러 건이 한 멘트에 인용될 수 있기 때문이다.
+- `reflection_level`: 그 입력들에 대해 이 멘트가 도달한 반영 단계(0~4, 기획서 4.2절). 입력이 없으면 0.
+- `kind`: `speech`\|`glue`\|`filler`. v1의 `ack`는 없어지고, 사전 렌더 접착 요소(코너 콜 등)는 `glue`다. 백엔드의 BGM 더킹 구분(3.6절)은 그대로 — 셋 다 멘트다.
+- 사연 읽힘 처리(3.5절)는 `request_ref` 대신 `input_refs`에 `story_id`가 있는지로 판단한다.
+
+### 10.6 `segment.started` (B→E, 신설 — PR #99 백엔드 리뷰 반영)
+
+엔진은 입력의 `REFLECTED`를 "그 입력이 들어간 세그먼트의 **재생이 시작된 시각**"에 확정한다(`PUBLISHED`가 아니라). `L_reflect`와 `quote_age`(재생 시작 시각 − 채팅 도착 시각)가 연구 지표이기 때문이다.
+
+```json
+{"segment_id": "seg_9be9401b85d7", "started_at": 1789497013.4}
+```
+
+| 이벤트 | 의미 | 엔진이 쓰는 곳 |
+|---|---|---|
+| `state.transition` `PUBLISHED` | HLS에 공개 | 방송 맥락 기록 기준 ([context-memory.md](context-memory.md) 3.1) |
+| **`segment.started`** | 서버 방송 시간상 재생 시작 | 입력 `REFLECTED` 확정, `L_reflect`·`quote_age`·`topic_match` 계산 |
+| `state.transition` `PLAYED` | 서버 방송 시간상 재생 완료 (기존 의미 유지 — [BACKEND_BROADCAST_RUNTIME.md](BACKEND_BROADCAST_RUNTIME.md)) | 계측(재생 완료 시각) |
+
+- **`PLAYED`의 의미는 바꾸지 않는다.** 처음 제안은 `PLAYED`(완료) 시각에서 `duration_ms`를 빼 시작 시각을 추정하는 것이었지만, (1) 세그먼트가 끝나야 `REFLECTED`가 확정되어 요청자 UI의 "방송에 나왔어요"가 세그먼트 길이(15~45초)만큼 늦어지고, (2) 재생이 끊김 없이 이어졌다는 가정에 기대므로, 시작 시각을 백엔드가 직접 보내는 쪽으로 정했다.
+- **측정 기준** — `started_at`은 청취자 기기의 실제 재생 시각이 아니라 **서버 방송 시간 기준**이다. 청취자 간 편차는 E_sync로 따로 잰다.
+- **세그먼트 단위다** — 인용 구절이 아니라 그 구절이 들어 있는 **세그먼트의 시작 시각**이다. 인용이 세그먼트 중간에 있으면 `quote_age`가 실제보다 그만큼 작게 잡힌다. 이 한계를 실험 보고에 밝힌다.
+- `segment.started`는 모든 세그먼트에 보내도 되고, `input_refs`가 비어 있지 않은 세그먼트에만 보내도 된다 — 엔진은 입력이 없는 세그먼트의 통보를 무시한다 `[미정: 백엔드 편한 쪽]`.
+
+### 10.7 `corner.changed` (E→B, 신설)
+
+```json
+{"corner": "topic_talk", "title": "오늘의 이야기", "contract": {"chat": "quote", "message": "defer", "song_request": "defer"}, "ends_at_est": 1789497413.0}
+```
+
+- 엔진이 코너에 들어갈 때 보낸다. 백엔드는 WebSocket으로 프론트에 전달하고, 늦게 들어온 청취자에게도 마지막 값을 보낸다(기획서 5.6절 늦은 합류).
+- 프론트는 `contract`로 "지금은 채팅이 인용될 수 있는 시간", "사연은 문자 소개 시간에 읽혀요" 같은 안내를 띄운다. 값은 `quote`\|`steer`\|`read`\|`feature`\|`solicit`\|`closed`\|`defer`.
+- `ends_at_est`는 예상치다. 표시용으로만 쓴다.
+
+### 10.8 `vote.open` / `vote.result` (신설)
+
+```json
+// vote.open (E→B)
+{"vote_id": "vote_01", "kind": "game", "question": "고백은 문자로? 전화로?", "options": ["문자", "전화"], "closes_at": 1789497473.0}
+// vote.result (B→E)
+{"vote_id": "vote_01", "counts": {"문자": 12, "전화": 7}, "total": 19}
+```
+
+- `kind`: `game`(`dj_vs_listeners` 코너) \| `last_song`(엔딩 선곡 투표, F-36). `last_song`의 결과 곡은 v1처럼 `track.queued`(`source: "vote"`)로도 보낸다.
+- 백엔드는 `closes_at`에 창을 닫고 `vote.result`를 보낸다. 한 청취자 한 표 — 중복 방지는 백엔드가 `requester_ref`로 한다.
+- 엔진은 투표 창이 열린 동안 방송이 비지 않도록 다른 단계(DJ 이야기, 곡)와 겹쳐 연다. DJ의 선택은 결과를 보기 전에 정해 저장한다.
+- 투표한 청취자의 입력 상태(`collected`)는 백엔드가 직접 표시해도 된다 — 엔진이 표마다 `request.state`를 보내지 않는다.
+
+### 10.9 `segment.insert_before` (E→B, 신설 `[실험 조건 후보]`)
+
+지연 결합(RQ-B 실험 조건)용이다. 엔진이 5~10초짜리 인용 세그먼트를 만들어, 백엔드 큐에서 아직 `MIXING`에 들어가지 않은(`GENERATED`) 세그먼트 **앞에** 끼워 달라고 요청한다.
+
+```json
+{"segment": {"...": "segment.submitted와 같은 형식"}, "before_segment_id": "seg_9be9401b85d7"}
+```
+
+- 백엔드가 `before_segment_id`가 이미 `MIXING` 이후면 거절하고, 엔진은 그 인용 세그먼트를 큐 끝에 붙이거나 버린다 — 거절 응답 이벤트 형식 `[미정]`.
+- **먼저 확인할 것**: 백엔드 큐가 제출 순서가 아닌 위치 삽입을 지원할 수 있는지. 불가하면 이 이벤트는 만들지 않고, RQ-B를 버퍼 크기 단일 변수로 줄인다(기획서 10장).
+
+### 10.10 엔진 구현 순서
+
+v2 합의 전까지 엔진은 v1을 유지한다. 합의 후 [ENGINE_ARCHITECTURE.md](ENGINE_ARCHITECTURE.md) 9장 M3~M5에서 다음 순서로 바꾼다.
+
+1. `station.created` 추가 필드 (M3 — 형식·클락)
+2. `request.arrived` `kind`·`nickname`, `request.state` 새 값, `segment.submitted` `input_refs`·`reflection_level`·`kind: glue`, `segment.started` 처리, `state.transition` `PUBLISHED` 처리(방송 맥락), `corner.changed` (M4 — 입력 반영)
+3. `vote.open`/`vote.result` (M5)
+4. `segment.insert_before` (M6 — 지원 시)

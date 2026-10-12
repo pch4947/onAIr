@@ -1,8 +1,8 @@
 # 코너 편성 · 청취자 입력 반영 설계
 
 **대상**: `apps/engine`의 편성(코너·러닝오더)과 청취자 입력 처리 전체
-**상태**: 초안 v0.1 (2026-10-12) — 팀 합의 전
-**대체하는 것**: [ENGINE_ARCHITECTURE.md](ENGINE_ARCHITECTURE.md) 4.1~4.3·4.5절, [PROJECT_PLAN.md](PROJECT_PLAN.md) 4.2·4.3(코너 부분)·5.4(요청 상태 머신)·7.1(지연 정의)·8장, [persona.md](persona.md) 2.2절과 `BehaviorSpec`. 합의되면 각 문서를 이 문서 기준으로 개정한다(13절).
+**상태**: 초안 v0.2 (2026-10-12) — 팀 합의 전. 관련 문서를 이 문서 기준으로 개정했다(13.1절)
+**대체하는 것**: [ENGINE_ARCHITECTURE.md](ENGINE_ARCHITECTURE.md) 4.1~4.3·4.5절, [PROJECT_PLAN.md](PROJECT_PLAN.md) 4.2·4.3(코너 부분)·5.4(요청 상태 머신)·7.1(지연 정의)·8장, [persona.md](persona.md) 2.2절과 `BehaviorSpec`. 각 문서는 2026-10-12에 이 문서 기준으로 개정했다(13.1절). 계약 변경은 백엔드 합의 전이라 [ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md) 10장에 제안으로만 두었다.
 
 - 표기: `[예시]` = 합의 전 예시값, `[미정]` = 결정되지 않은 선택, **권장 이름** = 코드에 아직 없는 이름
 - 이 문서는 기존 설계를 고치는 것이 아니라 **처음부터 다시 세운 것**이다. 기존 이름(러닝오더, SchedulingPolicy, ack, `request.state` 값)은 13절의 대응표로만 연결한다.
@@ -466,7 +466,7 @@ class CornerRun:                        # 방송 중 코너 1회 진행의 상�
 ```
 RECEIVED ─L0─┬→ REJECTED
              ├→ NOT_ON_AIR                                   (뉴스 형식)
-             └→ ROUTED ─┬→ POOLED ──┬→ SELECTED → GENERATING → GENERATED → (백엔드) PUBLISHED → PLAYED
+             └→ ROUTED ─┬→ POOLED ──┬→ SELECTED → GENERATING → GENERATED → (백엔드) PUBLISHED → segment.started
                         ├→ INBOXED ─┤      │                                                    └→ REFLECTED
                         ├→ COLLECTED┘      └→ (생성 실패·인용 누락) POOLED/INBOXED 복귀 또는 EXPIRED
                         └→ HELD → (다음 코너 진입 시 재라우팅)
@@ -474,7 +474,8 @@ RECEIVED ─L0─┬→ REJECTED
               L1 REJECT(입력 때문) → REJECTED
 ```
 
-- `REFLECTED`는 그 입력을 반영한 세그먼트가 **실제로 재생된 시각**에 확정한다(백엔드 `PLAYED` 통보 필요 — 12절)
+- `REFLECTED`는 그 입력을 반영한 세그먼트의 **재생 시작 통보(`segment.started`)** 를 받은 시각에 확정한다(12절). 측정 시각은 청취자 기기의 실제 재생 시각이 아니라 **서버 방송 시간 기준**이고, 인용 구절이 아니라 **그 구절이 들어 있는 세그먼트의 시작 시각**이다. 인용이 세그먼트 중간에 있으면 `quote_age`는 실제보다 그만큼 작게 잡힌다 — 세그먼트가 15~45초이므로 이 오차를 보고에 밝힌다
+- 세그먼트 상태 이벤트의 역할: `PUBLISHED`(HLS 공개) = 방송 맥락 기록 기준([context-memory.md](context-memory.md) 3.1), `segment.started`(서버 방송 시간상 재생 시작) = `REFLECTED`·`L_reflect`·`quote_age`, `PLAYED`(서버 방송 시간상 재생 완료) = 기존 의미 유지
 - `GENERATING`/`GENERATED`는 FEATURE·READ처럼 입력 하나가 세그먼트 하나를 차지할 때 의미가 있고, QUOTE처럼 여러 입력이 한 세그먼트에 섞일 때는 세그먼트 단위로 추적한다
 
 ### 9.4 반영 단계와 지연 재정의
@@ -490,7 +491,7 @@ RECEIVED ─L0─┬→ REJECTED
 |---|---|---|
 | **L_ui** | 입력 도착 → 라우팅 상태 UI 표시 | 기존 L_ack(방송) 폐지 |
 | **L_reflect** | 입력 도착 → 그 입력을 반영한 세그먼트 재생 시작 | 기존 L_res |
-| **quote_age** | 인용 세그먼트 재생 시각 − 입력 도착 시각 | 신설 (QUOTE 전용) |
+| **quote_age** | 인용 세그먼트 재생 시작 시각(`segment.started`) − 입력 도착 시각 | 신설 (QUOTE 전용) |
 | **topic_match** | 인용 재생 시점에 입력의 화제가 아직 진행 중이었는지 (0/1) | 신설 — Q-02(반응 시점의 적절성) 지표 후보 |
 
 ---
@@ -569,7 +570,7 @@ while 방송 중:
 
 ## 12. 백엔드 계약 변경안
 
-[ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md) 개정 대상. 백엔드 팀 합의 전까지 **제안**이다.
+[ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md) 10장(v2 개정안)에 페이로드까지 구체화했다. 백엔드 팀 합의 전까지 **제안**이다.
 
 | 이벤트 | 방향 | 변경 |
 |---|---|---|
@@ -577,7 +578,7 @@ while 방송 중:
 | `request.arrived` | B→E | `kind: chat\|message\|song_request` 로 변경(`story`·`mood` 폐지), `nickname` 추가 |
 | `request.state` | E→B | state 값을 9.3절 상태로 교체: `pooled` `inboxed` `collected` `held` `not_on_air` `selected` `reflected` `expired` `rejected` |
 | `segment.submitted` | E→B | `request_ref` 단일 값 → `input_refs: [...]`(인용 여러 건), `reflection_level` 추가. ack 세그먼트(`kind: ack`) 폐지 |
-| `segment.played` | B→E | **신설** — 세그먼트 재생 시작 시각. `REFLECTED` 확정과 `quote_age` 계산에 필요 |
+| `segment.started` | B→E | **신설** — 서버 방송 시간상 세그먼트 재생 시작. `REFLECTED` 확정과 `L_reflect`·`quote_age` 계산에 쓴다. `PLAYED`는 기존 의미(재생 완료)를 유지한다 (PR #99 백엔드 리뷰 반영) |
 | `corner.changed` | E→B | **신설** — 현재 코너, 그 코너의 입력 계약 요약. UI가 "지금은 채팅이 인용될 수 있는 시간" 등을 표시 |
 | `vote.open` / `vote.result` | E→B / B→E | **신설** — 투표 주제·선택지·창 길이 / 집계 결과 |
 | `segment.insert_before` | E→B | **신설 `[실험 조건 후보]`** — 지연 결합(5.1.2절)용. GENERATED 세그먼트 앞에 인용 세그먼트 삽입 |
@@ -605,12 +606,15 @@ while 방송 중:
 | L_ack / L_res | L_ui / L_reflect (+ `quote_age`, `topic_match`) |
 | RQ1 / RQ2 / RQ3 | RQ-B / RQ-A / RQ-B |
 
-### 13.1 개정할 문서 (합의 후)
+### 13.1 개정한 문서 (2026-10-12)
 
-- PROJECT_PLAN.md — 4.2(반영 단계), 4.3(코너 모듈·persona 행동 층), 5.4(요청 상태 머신), 7.1(지연 정의), 8장(연구 설계), 2.5(RQ)
-- ENGINE_ARCHITECTURE.md — 4.1~4.3, 4.5, 5장
-- persona.md — 2.2절, `BehaviorSpec`, 5~6절, 8절
-- ENGINE_REDIS_CONTRACT.md — 12절 내용
+| 문서 | 개정 내용 |
+|---|---|
+| PROJECT_PLAN.md (rev.11) | 2.5 RQ-A·RQ-B, 3.4 시나리오, 4.2 반영 단계·ack 폐지, 4.3 형식·코너·persona, 4.4 무드 신청 폐지, 5.4 입력 상태 머신·선별기, 6장 요구사항(F-37·F-38 신설), 7.1 지연 정의, 8장 연구 설계, 9장 역할·계약 요약, 10장 리스크 |
+| ENGINE_ARCHITECTURE.md (v0.5) | 1~3장 범위·원칙·구조, 4.1~4.5 편성 관리자·라우팅·선별·형식·파이프라인·`GlueBank`, 4.7~4.8, 5장 데이터 모델(v2), 7장 계측 테이블, 8장 디렉토리, 9장 M3~M6, 10장 확인 6·12 무효·15 신설 |
+| persona.md | 행동 층 폐지 — 1절, 2.1~2.3(`ExperimentSpec`), 4절, 5~6절, 7절, 8절(8.1 폐지), 9절 |
+| ENGINE_REDIS_CONTRACT.md | **10장 v2 개정안 신설** (백엔드 합의 전 — 1~9장 v1은 그대로) |
+| context-memory.md | 5절 입력 기록 필드, 관련 참조 |
 
 ---
 
