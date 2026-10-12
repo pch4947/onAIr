@@ -625,7 +625,7 @@ wsl redis-cli XADD engine:st_local_dev:in '*' type request.arrived contract_vers
 {"segment": {"...": "segment.submitted와 같은 형식"}, "before_segment_id": "seg_9be9401b85d7"}
 ```
 
-- 백엔드가 `before_segment_id`가 이미 `MIXING` 이후면 거절하고, 엔진은 그 인용 세그먼트를 큐 끝에 붙이거나 버린다 — 거절 응답 이벤트 형식 `[미정]`.
+- 백엔드가 `before_segment_id`가 이미 `MIXING` 이후면 거절하고, 엔진은 그 인용 세그먼트를 **버린다**(늦게 나간 인용은 의미가 없다 — CORNER_DESIGN U13). 입력은 창이 남아 있으면 풀로 되돌린다. 거절 응답 이벤트 형식 `[미정]`.
 - **먼저 확인할 것**: 백엔드 큐가 제출 순서가 아닌 위치 삽입을 지원할 수 있는지. 불가하면 이 이벤트는 만들지 않고, RQ-B를 버퍼 크기 단일 변수로 줄인다(기획서 10장).
 
 ### 10.10 엔진 구현 순서

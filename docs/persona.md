@@ -5,7 +5,7 @@
 - 관련 문서: [PROJECT_PLAN.md](PROJECT_PLAN.md) (기획서 rev.11 — 4.2 요청 반영의 정의, 4.3 방송 형식·코너 모듈·DJ persona, 4.5 사람 DJ 대체 기준, 8장 연구 설계 초안), [CORNER_DESIGN.md](CORNER_DESIGN.md) (코너·입력 반영 설계), [ENGINE_ARCHITECTURE.md](ENGINE_ARCHITECTURE.md), [context-memory.md](context-memory.md) (기억 층 상세)
 - 표기: `[예시]` = 팀 합의 전 예시값, `[미정]` = 결정되지 않은 선택, **권장 이름** = 코드에 아직 없는 이름
 - 코드 기준: `main` + 페르소나 평가 작업 브랜치 (2026-10-08 확인).
-- **개정 (2026-10-12)**: 코너·입력 반영 재설계([CORNER_DESIGN.md](CORNER_DESIGN.md), 팀 합의 전)에 맞춰 **행동 층을 폐지**했다 — 1절, 2.2절, 5·6·8절.
+- **개정 (2026-10-12)**: 코너·입력 반영 재설계([CORNER_DESIGN.md](CORNER_DESIGN.md), 팀 합의 완료)에 맞춰 **행동 층을 폐지**했다 — 1절, 2.2절, 5·6·8절.
 - **결정 (2026-10-08, 팀 회의)**: 방 생성은 **제한된 선택지 폼**으로 받고, 엔진이 **LLM으로 persona 초안 여러 개를 만들어** 호스트가 고르고 고친다(3절). persona 저장소는 **백엔드 신규 DB**(2.4절), 스키마는 **Pydantic 공용 모델**(2.3절), `station.created`는 persona 본문을 싣는다([ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md) 3.3절).
 
 ## 현재 구현 상태
@@ -322,7 +322,7 @@ AI VTuber 팬덤 연구(Neuro-sama)에서 팬의 83%가 "일관된 성격"을 �
 | persona (표현 층) | **프리셋 하나로 고정** — 모든 실험용 방이 같은 `persona_id`를 참조한다 (목소리 포함, 9.1절) | 호스트가 자유롭게 설정 |
 | 형식·코너 구성 | **사연토크 하나로 고정**, 코너 구성 고정 | 호스트가 선택 |
 | 참여 강도 | 고정 | 호스트가 선택 |
-| 실험 조건 (`experiment`) | **조건별로 다르게** — 선별 기준, 창 길이 W, 결합 방식, 집계 언급 on/off (2.3절 `ExperimentSpec`) | 없음 — 기본값(관련성 우선, 선결합) `[미정]` |
+| 실험 조건 (`experiment`) | **조건별로 다르게** — 선별 기준, 창 길이 W, 결합 방식, 집계 언급 on/off (2.3절 `ExperimentSpec`) | 없음 — 기본값은 화제 관련성 우선 + 선결합 (CORNER_DESIGN U12) |
 
 - 근거: 기획서 8장 초안 (`[확정 전]`). 조건 수와 프리셋 내용은 8장 확정 시 정한다 `[미정]`.
 - 실험 조건은 세션(방송) 단위로 고정하고 방송 중 바꾸지 않는다 (ENGINE_ARCHITECTURE 확인 8). `ExperimentSpec`을 `frozen`으로 두는 이유다.
