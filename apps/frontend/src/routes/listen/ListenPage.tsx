@@ -6,21 +6,20 @@ import { Sidebar } from '@/app/Sidebar'
 import { useLivePlayback } from '@/player/useLivePlayback'
 import { useRealtimeConnection } from '@/realtime/useRealtimeConnection'
 import { useRealtimeStore } from '@/realtime/store'
-import { getBroadcastState, submitRequest } from '@/shared/api'
+import { getBroadcastState, getRequests, submitRequest } from '@/shared/api'
+import { useCurrentUser } from '@/shared/useCurrentUser'
 import { ExperimentSurveyModal } from '@/routes/listen/ExperimentSurveyModal'
 import { SongRequestModal } from '@/routes/listen/SongRequestModal'
-import { CHAT_MESSAGES, MY_REQUEST_STATUSES, STATION_INFO } from '@/routes/listen/mock'
-import type { ChatMessage, RequestStatusVariant } from '@/routes/listen/mock'
+import { SongQueueModal } from '@/routes/listen/SongQueueModal'
+import { EmojiIcon, MusicNoteIcon, SendIcon, SongRequestAddIcon } from '@/routes/listen/icons'
+import { STATUS_VARIANT, STATUS_VARIANT_CLASS, isPendingStatus } from '@/routes/listen/requestStatus'
+import { STATION_INFO } from '@/routes/listen/mock'
 import type { ConnectionStatus } from '@/realtime/client'
 import type { StreamStatus } from '@/shared/types'
 
-const STATUS_VARIANT_CLASS: Record<RequestStatusVariant, string> = {
-  generating: 'bg-status-generating',
-  queued: 'bg-status-queued',
-  played: 'bg-status-played',
-  rejected: 'bg-status-rejected',
-  muted: 'bg-status-muted',
-}
+const REQUESTS_POLL_INTERVAL_MS = 3000
+const CHAT_MAX_LENGTH = 200
+const EMOJI_OPTIONS = ['😀', '😂', '😍', '😢', '😮', '👍', '🎉', '🔥', '❤️', '🙏']
 
 const CONNECTION_STATUS_LABEL: Record<ConnectionStatus, string> = {
   connecting: '연결 중',
@@ -39,14 +38,21 @@ const BROADCAST_STATE_POLL_INTERVAL_MS = 3000
 export function ListenPage() {
   const [isSurveyOpen, setIsSurveyOpen] = useState(false)
   const [isSongRequestOpen, setIsSongRequestOpen] = useState(false)
+  const [isEmojiPickerOpen, setIsEmojiPickerOpen] = useState(false)
+  const [isQueueOpen, setIsQueueOpen] = useState(false)
   const [chatInput, setChatInput] = useState('')
-  const [sentMessages, setSentMessages] = useState<ChatMessage[]>([])
   useRealtimeConnection()
   const connectionStatus = useRealtimeStore((state) => state.connectionStatus)
+  const { data: currentUser } = useCurrentUser()
   const broadcastStateQuery = useQuery({
     queryKey: ['broadcast-state'],
     queryFn: getBroadcastState,
     refetchInterval: BROADCAST_STATE_POLL_INTERVAL_MS,
+  })
+  const requestsQuery = useQuery({
+    queryKey: ['requests'],
+    queryFn: getRequests,
+    refetchInterval: REQUESTS_POLL_INTERVAL_MS,
   })
 
   const stream = broadcastStateQuery.data?.stream
@@ -54,18 +60,23 @@ export function ListenPage() {
   const hlsPath = import.meta.env.VITE_HLS_URL || stream?.hlsUrl
   const hlsUrl = stream?.status === 'ready' && hlsPath ? new URL(hlsPath, apiBase).href : null
   const { audioRef, isPlaying, error: playbackError, togglePlay } = useLivePlayback(hlsUrl)
-  const submitRequestMutation = useMutation({
-    mutationFn: submitRequest,
-    onSuccess: (_, prompt) => {
-      setSentMessages((prev) => [...prev, { id: crypto.randomUUID(), author: '나', text: prompt }])
-    },
-  })
+  const submitRequestMutation = useMutation({ mutationFn: submitRequest })
+
+  const allRequests = requestsQuery.data?.requests ?? []
+  const chatMessages = allRequests.map((item) => ({
+    id: item.id,
+    author: item.listenerId === currentUser?.id ? '나' : item.listenerId,
+    text: item.prompt,
+    kind: item.kind,
+    status: item.status,
+  }))
+  const songQueue = allRequests.filter((item) => item.kind === 'mood' && isPendingStatus(item.status))
 
   const handleSendChat = (event: React.FormEvent) => {
     event.preventDefault()
     const trimmed = chatInput.trim()
     if (!trimmed) return
-    submitRequestMutation.mutate(trimmed)
+    submitRequestMutation.mutate({ prompt: trimmed, listenerId: currentUser?.id, kind: 'story' })
     setChatInput('')
   }
 
@@ -149,30 +160,43 @@ export function ListenPage() {
               </p>
             </div>
           </div>
-
-          <div className="flex flex-col gap-2.5 rounded-md border border-border bg-surface px-4 py-3.5">
-            <p className="text-sm font-semibold text-text">내 요청 상태</p>
-            <div className="flex flex-wrap gap-2.5">
-              {MY_REQUEST_STATUSES.map((item) => (
-                <span
-                  key={item.id}
-                  className={`rounded-xl px-2.5 py-1 text-[11px] font-semibold text-white ${STATUS_VARIANT_CLASS[item.variant]}`}
-                >
-                  {item.text}
-                  {item.visibleToSelfOnly ? ' (본인에게만 표시)' : ''}
-                </span>
-              ))}
-            </div>
-          </div>
         </section>
 
         <section className="flex h-full w-[360px] shrink-0 flex-col gap-3 rounded-md border border-border bg-surface p-4">
-          <ul className="flex flex-1 flex-col gap-2.5 overflow-y-auto rounded-md bg-field-bg p-3 text-[11px] text-text">
-            {[...CHAT_MESSAGES, ...sentMessages].map((message) => (
-              <li key={message.id}>
-                {message.author}: {message.text}
-              </li>
-            ))}
+          <header className="flex items-center justify-between">
+            <p className="text-sm font-semibold text-text">채팅</p>
+            <span className="text-[11px] text-text-muted">
+              👁 {STATION_INFO.viewerCount.toLocaleString()}
+            </span>
+          </header>
+
+          <ul className="flex flex-1 flex-col gap-2 overflow-y-auto rounded-md bg-field-bg p-3 text-[11px] text-text">
+            {chatMessages.map((message) =>
+              message.kind === 'mood' ? (
+                <li
+                  key={message.id}
+                  className="flex flex-col gap-1 rounded-md border border-primary/30 bg-primary/10 px-3 py-2"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-1 font-semibold text-primary">
+                      <MusicNoteIcon className="size-3.5 shrink-0" />
+                      {message.author} 님의 신청곡
+                    </span>
+                    <span
+                      className={`shrink-0 rounded-xl px-2 py-0.5 text-[10px] font-semibold text-white ${STATUS_VARIANT_CLASS[STATUS_VARIANT[message.status] ?? 'queued']}`}
+                    >
+                      {message.status.toUpperCase()}
+                    </span>
+                  </div>
+                  <p className="text-text">{message.text}</p>
+                </li>
+              ) : (
+                <li key={message.id} className="flex items-baseline gap-1.5">
+                  <span className="shrink-0 font-semibold text-text-muted">{message.author}</span>
+                  <span>{message.text}</span>
+                </li>
+              ),
+            )}
           </ul>
           {submitRequestMutation.isPending && (
             <p className="text-[11px] text-text-muted">전송 중...</p>
@@ -180,31 +204,76 @@ export function ListenPage() {
           {submitRequestMutation.isError && (
             <p className="text-[11px] text-danger">전송에 실패했어요, 다시 시도해주세요</p>
           )}
-          {submitRequestMutation.isSuccess && (
-            <p className="text-[11px] text-status-played">사연이 접수됐어요</p>
-          )}
-          <form onSubmit={handleSendChat} className="flex items-center gap-2">
-            <input
-              type="text"
-              value={chatInput}
-              onChange={(event) => setChatInput(event.target.value)}
-              className="h-9 flex-1 rounded-full border border-border bg-[#f2f2f2] px-3.5 text-[13px] text-text"
-            />
-            <button
-              type="submit"
-              className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-white"
+          <div className="relative">
+            {isEmojiPickerOpen && (
+              <div className="absolute bottom-full left-0 mb-2 grid grid-cols-5 gap-1 rounded-md border border-border bg-surface p-2 shadow-lg">
+                {EMOJI_OPTIONS.map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    onClick={() => {
+                      setChatInput((prev) => (prev + emoji).slice(0, CHAT_MAX_LENGTH))
+                      setIsEmojiPickerOpen(false)
+                    }}
+                    className="flex size-7 items-center justify-center rounded text-base hover:bg-field-bg"
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            )}
+            <form
+              onSubmit={handleSendChat}
+              className="flex items-center gap-2 rounded-lg border border-border bg-[#f2f2f2] px-3 py-1.5"
             >
-              ➤
-            </button>
+              <input
+                type="text"
+                value={chatInput}
+                onChange={(event) => setChatInput(event.target.value)}
+                maxLength={CHAT_MAX_LENGTH}
+                placeholder="메시지 보내기"
+                className="h-8 min-w-0 flex-1 bg-transparent text-[13px] text-text placeholder:text-field-placeholder outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => setIsEmojiPickerOpen((prev) => !prev)}
+                aria-label="이모지"
+                className="shrink-0 text-text-muted"
+              >
+                <EmojiIcon className="size-5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsSongRequestOpen(true)}
+                aria-label="신청곡"
+                className="shrink-0 text-text-muted"
+              >
+                <SongRequestAddIcon className="size-5" />
+              </button>
+              <div className="h-5 w-px shrink-0 bg-border" />
+              <button
+                type="submit"
+                className="flex shrink-0 items-center gap-1 text-[13px] font-semibold text-primary"
+              >
+                <SendIcon className="size-4" />
+                전송
+              </button>
+            </form>
+          </div>
+
+          <div className="flex items-center justify-between">
             <button
               type="button"
-              onClick={() => setIsSongRequestOpen(true)}
-              aria-label="신청곡"
-              className="flex size-9 shrink-0 items-center justify-center rounded-full bg-text-muted text-white"
+              onClick={() => setIsQueueOpen(true)}
+              className="flex items-center gap-1 rounded-full bg-primary px-2.5 py-1 text-[10px] font-semibold text-white"
             >
-              🎙
+              <MusicNoteIcon className="size-3" />
+              대기 {songQueue.length}
             </button>
-          </form>
+            <span className="text-[10px] text-text-muted">
+              {chatInput.length}/{CHAT_MAX_LENGTH}
+            </span>
+          </div>
         </section>
       </main>
 
@@ -220,9 +289,14 @@ export function ListenPage() {
       {isSongRequestOpen && (
         <SongRequestModal
           onClose={() => setIsSongRequestOpen(false)}
-          onSubmitted={(text) =>
-            setSentMessages((prev) => [...prev, { id: crypto.randomUUID(), author: '나', text }])
-          }
+          listenerId={currentUser?.id}
+        />
+      )}
+      {isQueueOpen && (
+        <SongQueueModal
+          queue={songQueue}
+          currentUserId={currentUser?.id}
+          onClose={() => setIsQueueOpen(false)}
         />
       )}
     </div>

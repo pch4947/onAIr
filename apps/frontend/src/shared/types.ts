@@ -19,6 +19,7 @@ export interface RequestRecord {
   id: string
   listenerId: string
   prompt: string
+  kind: 'story' | 'mood'
   status: string
   createdAt: string
 }
