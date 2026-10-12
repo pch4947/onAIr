@@ -327,7 +327,7 @@ export function ListenPage() {
       {isSongRequestOpen && (
         <SongRequestModal
           onClose={() => setIsSongRequestOpen(false)}
-          listenerId={currentUser?.id}
+          stationId={stationId}
         />
       )}
       {isQueueOpen && (
