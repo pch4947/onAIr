@@ -26,12 +26,14 @@ log = logging.getLogger(__name__)
 
 
 class HlsPublisher:
-    def __init__(self, redis, settings):
+    def __init__(self, redis, settings, replay_sessions=None):
         self.redis, self.settings = redis, settings
+        self.replay_sessions = replay_sessions
         self.prefix = f"backend:{settings.station_id}"
         self.directory = settings.hls_dir / settings.station_id
         self.entries = deque()
         self.retired = deque()
+        self.vod_entries = []
         # Only published chunks are indexed; keep retired entries during the TS grace period.
         self.fragment_metadata = {}
         self.fallback_fragments = set()
@@ -44,6 +46,7 @@ class HlsPublisher:
         self.task = None
         self.next_publish = 0.0
         self.session = uuid.uuid4().hex
+        self.started = False
         self.journal = None
         self.ownership = None
         self.maintenance = None
@@ -77,6 +80,14 @@ class HlsPublisher:
                 await asyncio.to_thread(write_fallback, self.fallback_source)
         self.maintenance = asyncio.create_task(self.maintain(), name='broadcast-maintenance')
         self.task = asyncio.create_task(self.run(), name="hls-publisher")
+        self.started = True
+        if self.replay_sessions:
+            # 일시적인 Redis 장애가 앱 기동 자체를 막으면 안 됨; 다시듣기 세션 기록이 없어도
+            # 라이브 송출은 정상 동작한다 (Redis 재시도는 maintain()이 별도로 처리).
+            try:
+                await self.replay_sessions.start(self.session, time.time())
+            except (RedisError, TimeoutError):
+                log.warning('Failed to record replay session start for %s; Redis unavailable', self.session)
 
     async def stop(self):
         for task in (self.task, self.maintenance, self.preparation):
@@ -86,6 +97,26 @@ class HlsPublisher:
             if task:
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+        if self.started:
+            # 아직 라이브/유예기간 중이던 것까지 archive해서 stop 시점에 방송 끝부분이 날아가지 않게 함.
+            # 여기서부터는 어떤 것도 예외를 던지면 안 됨: 아래의 세션/저널/소유권 정리와
+            # 호출자 쪽 정리(Redis 클라이언트 종료 등)가 반드시 끝까지 실행돼야 하기 때문.
+            for name, duration, discontinuity in self.entries:
+                self.archive_segment(name, duration, discontinuity)
+            self.entries.clear()
+            for _, (name, duration, discontinuity) in self.retired:
+                self.archive_segment(name, duration, discontinuity)
+            self.retired.clear()
+            if self.vod_entries:
+                try:
+                    self.write_vod_manifest(final=True)
+                except OSError:
+                    log.exception('Failed to finalize VOD manifest for session %s', self.session)
+            if self.replay_sessions:
+                try:
+                    await self.replay_sessions.end(self.session, time.time())
+                except (RedisError, TimeoutError):
+                    log.warning('Failed to record replay session end for %s; Redis unavailable', self.session)
         if self.journal:
             self.journal.close()
             self.journal = None
@@ -146,7 +177,7 @@ class HlsPublisher:
             old = self.entries.popleft()
             self.sequence += 1
             self.discontinuities += int(old[2])
-            self.retired.append((time.monotonic() + 60, old[0]))
+            self.retired.append((time.monotonic() + 60, old))
         lines = ["#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-TARGETDURATION:5",
                  f"#EXT-X-MEDIA-SEQUENCE:{self.sequence}",
                  f"#EXT-X-DISCONTINUITY-SEQUENCE:{self.discontinuities}"]
@@ -168,11 +199,40 @@ class HlsPublisher:
             self.fallback_fragments.add(name)
         self.ready = sum(e[1] for e in self.entries) >= 15
         while self.retired and self.retired[0][0] <= time.monotonic():
-            _, filename = self.retired.popleft()
-            (self.directory / filename).unlink(missing_ok=True)
+            _, (filename, duration, discontinuity) = self.retired.popleft()
+            self.archive_segment(filename, duration, discontinuity)
             self.fragment_metadata.pop(filename, None)
             self.fallback_fragments.discard(filename)
             self.fragment_times.pop(filename, None)
+
+    def archive_segment(self, name, duration, discontinuity):
+        # 라이브 윈도우 밖으로 복사가 아닌 이동(move)을 해서 영구적으로 커지기만 하는 VOD 아카이브로 옮김.
+        # 최선 노력(best-effort): archive가 실패해도 라이브 퍼블리셔는 절대 멈추면 안 됨(write_vod_manifest 참고).
+        source = self.directory / name
+        if not source.is_file():
+            return
+        try:
+            vod_dir = self.directory / "vod" / self.session
+            vod_dir.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source), str(vod_dir / name))
+            self.vod_entries.append((name, duration, discontinuity))
+            self.write_vod_manifest(final=False)
+        except OSError:
+            log.exception('VOD archiving failed for %s; live playback continues', name)
+
+    def write_vod_manifest(self, final):
+        vod_dir = self.directory / "vod" / self.session
+        lines = ["#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-TARGETDURATION:5",
+                 f"#EXT-X-PLAYLIST-TYPE:{'VOD' if final else 'EVENT'}"]
+        for filename, seconds, discontinuity in self.vod_entries:
+            if discontinuity:
+                lines.append("#EXT-X-DISCONTINUITY")
+            lines += [f"#EXTINF:{seconds:.6f},", filename]
+        if final:
+            lines.append("#EXT-X-ENDLIST")
+        temporary = vod_dir / "index.m3u8.tmp"
+        temporary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        os.replace(temporary, vod_dir / "index.m3u8")
 
     def playback_metadata(self, fragment):
         # Never substitute the latest publisher.current for an unknown/old client fragment.

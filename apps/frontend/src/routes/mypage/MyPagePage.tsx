@@ -2,45 +2,21 @@
 
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { Sidebar } from '@/app/Sidebar'
 import { BoardPostCollection } from '@/routes/mypage/BoardPostCollection'
+import { ReplayCollection } from '@/routes/mypage/ReplayCollection'
 import { clearAccessToken } from '@/shared/authToken'
-import { getLikedBoardPosts, getMyBoardPosts } from '@/shared/api'
-import { MY_BROADCAST_REPLAYS, MYPAGE_TABS, NOTIFICATIONS, SAVED_REPLAYS } from '@/routes/mypage/mock'
-import type { ReplayItem } from '@/routes/mypage/mock'
+import { getBookmarkedReplays, getBroadcastState, getLikedBoardPosts, getMyBoardPosts, getMyStationReplays } from '@/shared/api'
+import { MYPAGE_TABS, NOTIFICATIONS } from '@/routes/mypage/mock'
 import type { MyPageTab } from '@/routes/mypage/mock'
-
-function ReplayList({ items, thumbnailClassName }: { items: ReplayItem[]; thumbnailClassName: string }) {
-  return (
-    <ul className="flex flex-col gap-3">
-      {items.map((item) => (
-        <li
-          key={item.id}
-          className="flex items-center justify-between gap-4 rounded-md border border-field-border bg-field-bg px-4 py-3.5"
-        >
-          <div className="flex items-center gap-3.5">
-            <div className={`size-12 shrink-0 rounded-md ${thumbnailClassName}`} />
-            <div className="flex flex-col gap-1">
-              <p className="text-sm font-semibold text-[#1a1a1f]">{item.title}</p>
-              <p className="text-xs text-text-muted">{item.meta}</p>
-            </div>
-          </div>
-          <button
-            type="button"
-            className="shrink-0 rounded-md bg-primary px-3.5 py-2 text-xs font-semibold text-white"
-          >
-            ▶ 다시보기
-          </button>
-        </li>
-      ))}
-    </ul>
-  )
-}
 
 export function MyPagePage() {
   const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState<MyPageTab>('notifications')
   const activeTabConfig = MYPAGE_TABS.find((tab) => tab.id === activeTab) ?? MYPAGE_TABS[0]
+  const broadcastStateQuery = useQuery({ queryKey: ['broadcast-state'], queryFn: getBroadcastState })
+  const stationId = broadcastStateQuery.data?.stationId
 
   return (
     <div className="flex min-h-screen">
@@ -118,11 +94,27 @@ export function MyPagePage() {
         )}
 
         {activeTab === 'myBroadcastReplays' && (
-          <ReplayList items={MY_BROADCAST_REPLAYS} thumbnailClassName="bg-[#292933]" />
+          stationId ? (
+            <ReplayCollection
+              queryKey="my-station-replays"
+              fetcher={(params) => getMyStationReplays(stationId, params)}
+              emptyText="아직 내가 진행한 방송 다시듣기가 없어요"
+              deleteMode="destroy"
+            />
+          ) : broadcastStateQuery.isError ? (
+            <p className="text-[13px] text-danger">방송 정보를 불러오지 못했어요</p>
+          ) : (
+            <p className="text-[13px] text-text-muted">불러오는 중...</p>
+          )
         )}
 
         {activeTab === 'savedReplays' && (
-          <ReplayList items={SAVED_REPLAYS} thumbnailClassName="bg-[#33384d]" />
+          <ReplayCollection
+            queryKey="bookmarked-replays"
+            fetcher={getBookmarkedReplays}
+            emptyText="아직 저장한 방송 다시듣기가 없어요"
+            deleteMode="unbookmark"
+          />
         )}
       </main>
     </div>

@@ -6,12 +6,12 @@ import { Sidebar } from '@/app/Sidebar'
 import { useLivePlayback } from '@/player/useLivePlayback'
 import { useRealtimeConnection } from '@/realtime/useRealtimeConnection'
 import { useRealtimeStore } from '@/realtime/store'
-import { getBroadcastState, getRequests, submitRequest } from '@/shared/api'
+import { bookmarkReplay, getBroadcastState, getRequests, submitRequest } from '@/shared/api'
 import { useCurrentUser } from '@/shared/useCurrentUser'
 import { ExperimentSurveyModal } from '@/routes/listen/ExperimentSurveyModal'
 import { SongRequestModal } from '@/routes/listen/SongRequestModal'
 import { SongQueueModal } from '@/routes/listen/SongQueueModal'
-import { EmojiIcon, MusicNoteIcon, SendIcon, SongRequestAddIcon } from '@/routes/listen/icons'
+import { EmojiIcon, MusicNoteIcon, ReplaySaveIcon, SendIcon, SongRequestAddIcon } from '@/routes/listen/icons'
 import { STATUS_VARIANT, STATUS_VARIANT_CLASS, isPendingStatus } from '@/routes/listen/requestStatus'
 import { STATION_INFO } from '@/routes/listen/mock'
 import type { ConnectionStatus } from '@/realtime/client'
@@ -61,6 +61,7 @@ export function ListenPage() {
   const hlsUrl = stream?.status === 'ready' && hlsPath ? new URL(hlsPath, apiBase).href : null
   const { audioRef, isPlaying, error: playbackError, togglePlay } = useLivePlayback(hlsUrl)
   const submitRequestMutation = useMutation({ mutationFn: submitRequest })
+  const bookmarkLiveMutation = useMutation({ mutationFn: (sessionId: string) => bookmarkReplay(sessionId) })
 
   const allRequests = requestsQuery.data?.requests ?? []
   const chatMessages = allRequests.map((item) => ({
@@ -94,6 +95,24 @@ export function ListenPage() {
                   LIVE
                 </span>
                 <span className="text-[13px] font-semibold text-white">{STATION_INFO.name}</span>
+                <button
+                  type="button"
+                  onClick={() => stream?.sessionId && bookmarkLiveMutation.mutate(stream.sessionId)}
+                  disabled={!stream?.sessionId || bookmarkLiveMutation.isPending}
+                  className="flex items-center gap-1 rounded-full bg-black/45 px-2.5 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
+                >
+                  <ReplaySaveIcon className="size-3.5" />
+                  {bookmarkLiveMutation.isPending
+                    ? '저장 중...'
+                    : bookmarkLiveMutation.isSuccess
+                      ? '저장됨'
+                      : '다시듣기 저장'}
+                </button>
+                {bookmarkLiveMutation.isError && (
+                  <span className="text-[11px] text-danger">
+                    저장 실패: {(bookmarkLiveMutation.error as Error).message}
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-2 text-[11px] text-nav-inactive">
                 <span>{CONNECTION_STATUS_LABEL[connectionStatus]}</span>
@@ -110,14 +129,7 @@ export function ListenPage() {
               </div>
             )}
 
-            <button
-              type="button"
-              className="absolute right-3.5 top-[60px] flex size-8 items-center justify-center rounded-2xl bg-black/45 text-[15px] text-white"
-            >
-              🔖
-            </button>
-
-            <div className="absolute inset-0 flex items-center justify-center">
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
               <div className="flex size-[120px] items-center justify-center rounded-xl bg-album">
                 <span className="text-4xl text-thumbnail-icon">♪</span>
               </div>

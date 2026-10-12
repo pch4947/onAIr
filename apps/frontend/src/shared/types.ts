@@ -6,11 +6,13 @@ export interface StreamInfo {
   currentSegment: unknown | null
   updatedAt: string
   hlsUrl?: string
+  sessionId?: string
   error?: string | null
 }
 
 export interface BroadcastStateResponse {
   stream: StreamInfo
+  stationId: string
   pendingRequestCount: number
   oldestRequestAgeSeconds: number
 }
@@ -114,4 +116,15 @@ export interface BoardComment {
 export interface LikeStatus {
   likeCount: number
   liked: boolean
+}
+
+export interface ReplaySession {
+  id: string
+  startedAt: string
+  endedAt: string | null
+  durationSeconds: number
+  ongoing: boolean
+  vodUrl: string
+  bookmarkCount: number
+  bookmarked: boolean
 }
