@@ -121,10 +121,10 @@ class MusicIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 root = Path(temp)
                 settings = Settings('127.0.0.1', 3000, station_id=station, audio_dir=root / 'audio',
                     hls_dir=root / 'hls', ffmpeg=os.environ['ONAIR_FFMPEG'], hls_enabled=True,
-                    broadcast_delay_seconds=1, fallback_mode='silence')
+                    broadcast_delay_seconds=1, fallback_mode='silence', lavalink_password='test')
                 service = MusicService(redis, settings)
                 original = run_process
-                async def local_download(args, timeout):
+                async def local_download(args, timeout, **kwargs):
                     if args[0] == sys.executable:
                         directory = Path(args[4])
                         await original([settings.ffmpeg, '-nostdin', '-v', 'error', '-f', 'lavfi',

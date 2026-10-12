@@ -2,6 +2,8 @@
 import asyncio
 import hashlib
 import json
+import logging
+import os
 from pathlib import Path
 import re
 import shutil
@@ -19,6 +21,7 @@ from .messaging.contracts import Segment, validate_audio
 from .stations import User
 
 router = APIRouter(prefix='/api/stations')
+logger = logging.getLogger(__name__)
 
 
 def youtube_id(value):
@@ -76,9 +79,9 @@ return ARGV[3]
 """
 
 
-async def run_process(args, timeout):
+async def run_process(args, timeout, *, env=None):
     process = await asyncio.create_subprocess_exec(
-        *args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        *args, env=env, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
     try:
         async with asyncio.timeout(timeout):
             await process.wait()
@@ -108,8 +111,23 @@ class MusicService:
             raise HTTPException(409, 'Idempotency-Key already used for another video')
         with tempfile.TemporaryDirectory(prefix='onair-youtube-') as temp:
             root = Path(temp)
-            await run_process([sys.executable, '-m', 'app.youtube_worker', video_id, temp,
-                               str(self.settings.youtube_max_seconds)], 120)
+            if not self.settings.lavalink_password:
+                raise HTTPException(503, 'Lavalink is not configured')
+            env = os.environ | {'ONAIR_LAVALINK_URL': self.settings.lavalink_url,
+                                'ONAIR_LAVALINK_PASSWORD': self.settings.lavalink_password}
+            if Path(self.settings.ffmpeg).is_absolute():
+                env.setdefault('ONAIR_FFPROBE', str(Path(self.settings.ffmpeg).with_name(
+                    'ffprobe.exe' if os.name == 'nt' else 'ffprobe')))
+            try:
+                await run_process([sys.executable, '-m', 'app.youtube_worker', video_id, temp,
+                                   str(self.settings.youtube_max_seconds)], 120, env=env)
+            except HTTPException:
+                failure = root / 'error.json'
+                code = json.loads(failure.read_text())['code'] if failure.exists() else 'worker_failed'
+                logger.warning('YouTube preparation failed: %s', code)
+                if code in ('service_unavailable', 'service_auth', 'media_tools_unavailable'):
+                    raise HTTPException(503, 'Lavalink unavailable; contact the administrator') from None
+                raise
             metadata = json.loads((root / 'result.json').read_text(encoding='utf-8'))
             source = (root / metadata.pop('source')).resolve()
             if source.parent != root.resolve() or not source.is_file():

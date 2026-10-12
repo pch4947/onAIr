@@ -1,0 +1,28 @@
+server:
+  address: 127.0.0.1
+  port: 2333
+lavalink:
+  server:
+    password: "${ONAIR_LAVALINK_PASSWORD}"
+    sources:
+      youtube: false
+      http: false
+      local: false
+plugins:
+  youtube:
+    enabled: true
+    allowSearch: false
+    clients: [WEB, TV]
+    clientOptions:
+      WEB:
+        playback: false
+    oauth:
+      enabled: true
+      refreshToken: "${ONAIR_YOUTUBE_REFRESH_TOKEN}"
+    remoteCipher:
+      url: "${ONAIR_CIPHER_URL}"
+      userAgent: onair
+logging:
+  level:
+    root: INFO
+    dev.lavalink.youtube.http.YoutubeOauth2Handler: WARN

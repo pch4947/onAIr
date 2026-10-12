@@ -1,0 +1,18 @@
+[Unit]
+Description=onAIr internal Lavalink audio service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/onair-lavalink
+EnvironmentFile=/home/ubuntu/onair-lavalink/service.env
+ExecStart=/usr/bin/java -Xms64m -Xmx384m -jar Lavalink.jar
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
