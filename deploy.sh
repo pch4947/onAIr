@@ -12,11 +12,14 @@
 #
 # 서비스 이름은 환경변수로 바꿀 수 있습니다 (없는 서비스는 건너뜀):
 #   SERVICES="onair-backend onair-engine" bash deploy.sh
+# 프론트 정적 파일을 서빙하는 경로(Caddy root)도 바꿀 수 있습니다:
+#   WEB_ROOT=/var/www/onair bash deploy.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BRANCH="${BRANCH:-main}"
 SERVICES="${SERVICES:-onair-backend onair-engine}"
+WEB_ROOT="${WEB_ROOT:-/var/www/onair}"
 
 FULL=0
 PULL=1
@@ -92,6 +95,11 @@ if [[ ! -d apps/frontend/dist ]] || changed '^apps/frontend/'; then
   log "frontend: npm run build"
   (cd apps/frontend && npm run build)
 fi
+
+# Caddy는 레포의 dist가 아니라 WEB_ROOT를 서빙하므로 매번 동기화 (변경분만 복사됨)
+log "frontend: dist -> $WEB_ROOT"
+sudo mkdir -p "$WEB_ROOT"
+sudo rsync -a --delete apps/frontend/dist/ "$WEB_ROOT/"
 
 # .env 누락 경고 (git에 없으므로 pull로 생기지 않음)
 for d in apps/backend apps/engine apps/frontend; do
