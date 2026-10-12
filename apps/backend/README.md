@@ -3,20 +3,20 @@
 ## YouTube 링크 음원 송출 (단일 방송 MVP)
 
 방송 소유자가 `POST /api/stations/{station_id}/tracks`로 YouTube 링크 한 개를 등록하면,
-yt-dlp 다운로드 → MP3 변환 → 기존 Redis 큐 → FFmpeg HLS 송출 순서로 처리합니다.
+Lavalink(OAuth + remoteCipher) 다운로드 → MP3 변환 → 기존 Redis 큐 → FFmpeg HLS 송출 순서로 처리합니다.
 기존 대기열 뒤에 추가하며 현재 음원을 중단하지 않습니다. 프론트 입력 UI, 제목 검색,
 방 생성의 `first_song`, 엔진 곡 소개/`track.queued`/`track.started` 연동은 아직 포함하지 않습니다.
 
 ### 준비
 
 - `apps/backend`에서 `.venv\Scripts\python.exe -m pip install -e .`로 의존성을 갱신합니다.
-- FFmpeg와 Node.js를 PATH에 설치합니다. FFmpeg는 `ONAIR_FFMPEG` 절대경로도 지원합니다.
-  yt-dlp의 YouTube JS 처리는 Node.js를 사용합니다. Node.js 버전 요구사항은
-  [yt-dlp 공식 안내](https://github.com/yt-dlp/yt-dlp#dependencies)를 확인합니다.
+- FFmpeg와 Java 17 이상, Lavalink를 준비합니다. 백엔드에는 Node.js가 필요하지 않습니다.
+- [Lavalink 운영 가이드](../../docs/BACKEND_LAVALINK.md)에 따라 OAuth와 서명 서비스를 설정합니다.
+  `ONAIR_LAVALINK_URL`, `ONAIR_LAVALINK_PASSWORD`를 백엔드 환경에 지정합니다.
 - Redis, 백엔드(`--workers 1`), 엔진을 실행하고 로그인한 계정으로 방송을 생성합니다.
   방송 상태가 `started`, `ONAIR_HLS_ENABLED=1`이어야 합니다.
 - 기본 최대 길이는 600초이며 `ONAIR_YOUTUBE_MAX_SECONDS`로 1~3600초 범위에서 조정합니다.
-  라이브·예정 방송·연령 제한·길이 불명 영상은 거부합니다. 다운로드는 최대 100 MiB입니다.
+  라이브·길이 불명 영상은 거부합니다. 영상별 접근 제한은 Lavalink/YouTube 응답에 따릅니다. 다운로드는 최대 100 MiB입니다.
 
 ### PowerShell 호출
 
@@ -46,7 +46,7 @@ Invoke-RestMethod -Method Post -Uri "$base/api/stations/$station/tracks" `
 
 오류: 401 로그인 필요, 403 소유자 아님, 404 방송 없음, 409 방송 미시작/키 충돌,
 422 링크 형식 오류, 429 다운로드 처리 중, 502 영상 제한·다운로드/변환 실패,
-503 Redis/도구/저장소 사용 불가, 504 시간 초과. 제한 영상의 인증 우회는 하지 않습니다.
+503 Redis/도구/저장소 사용 불가, 504 시간 초과. 실패한 다운로드는 큐에 넣지 않으며 기존 방송과 폴백을 유지합니다.
 YouTube 측 변경이나 네트워크 제한으로 다운로드가 실패할 수 있습니다.
 
 오디오와 재시도 메타데이터는 `ONAIR_AUDIO_DIR/{station_id}/youtube/`에 보관합니다.

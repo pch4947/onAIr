@@ -3,7 +3,7 @@
 import os
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -29,6 +29,8 @@ class Settings:
     engine_api_url: str = "http://127.0.0.1:8100"
     engine_token: str | None = None
     youtube_max_seconds: int = 600
+    lavalink_url: str = 'http://127.0.0.1:2333'
+    lavalink_password: str | None = field(default=None, repr=False)
 
 
 def load_settings() -> Settings:
@@ -69,4 +71,6 @@ def load_settings() -> Settings:
                     jwt_secret=os.environ.get("ONAIR_JWT_SECRET", Settings.jwt_secret),
                     engine_api_url=os.environ.get("ONAIR_ENGINE_API_URL", Settings.engine_api_url),
                     engine_token=os.environ.get("ONAIR_ENGINE_TOKEN"),
-                    youtube_max_seconds=youtube_max_seconds)
+                    youtube_max_seconds=youtube_max_seconds,
+                    lavalink_url=os.environ.get('ONAIR_LAVALINK_URL', Settings.lavalink_url).rstrip('/'),
+                    lavalink_password=os.environ.get('ONAIR_LAVALINK_PASSWORD'))
