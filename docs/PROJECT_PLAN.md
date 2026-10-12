@@ -752,7 +752,7 @@ L_reflect와 `quote_age`는 **실험 조건에 따라** 달라지는 실험 결�
 
 | 방향 | 규격 |
 |---|---|
-| 대본 → 백엔드 | 세그먼트 `{audio, id, duration, corner_type, kind, priority, reorderable, input_refs, reflection_level, music_ref}` / 방송 시작 결과 / persona 초안 / 입력 상태 통보 / 현재 코너 변경 / 투표 열기 |
+| 대본 → 백엔드 | 세그먼트 `{audio, id, duration, corner_type, kind, priority, reorderable, input_refs, reflection_levels, music_ref}` / 방송 시작 결과 / persona 초안 / 입력 상태 통보 / 현재 코너 변경 / 투표 열기 |
 | 백엔드 → 대본 | 방 생성(형식·코너·참여 강도·persona·실험 조건) / 입력 도착(종류·닉네임) / 다음 곡·곡 재생 시작 / 게시판 사연 후보 / 투표 결과 / D_total 기준값 미만 시 `BUFFER_LOW` 백프레셔 / 세그먼트 상태 전이 / 세그먼트 재생 시작(`segment.started`) |
 | 백엔드 → 프론트 | HLS 플레이리스트 + 세그먼트 메타(`broadcast_start`) + WebSocket(현재 코너·입력 계약 요약, 입력 처리 상태, 투표, 서버 시각) |
 

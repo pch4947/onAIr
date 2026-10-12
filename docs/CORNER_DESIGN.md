@@ -577,10 +577,10 @@ while 방송 중:
 | `station.created` | B→E | `format: music\|talk\|news`, `corners: [...]`(talk), `news_sections: [...]`(news), `intensity: low\|mid\|high`, `experiment: {...}`(실험 세션만) 추가. persona의 `behavior` 제거 |
 | `request.arrived` | B→E | `kind: chat\|message\|song_request` 로 변경(`story`·`mood` 폐지), `nickname` 추가 |
 | `request.state` | E→B | state 값을 9.3절 상태로 교체: `pooled` `inboxed` `collected` `held` `not_on_air` `selected` `reflected` `expired` `rejected` |
-| `segment.submitted` | E→B | `request_ref` 단일 값 → `input_refs: [...]`(인용 여러 건), `reflection_level` 추가. ack 세그먼트(`kind: ack`) 폐지 |
+| `segment.submitted` | E→B | `request_ref` 단일 값 → `input_refs: [...]`(인용 여러 건), 입력별 `reflection_levels` 추가. ack 세그먼트(`kind: ack`) 폐지 |
 | `segment.started` | B→E | **신설** — 서버 방송 시간상 세그먼트 재생 시작. `REFLECTED` 확정과 `L_reflect`·`quote_age` 계산에 쓴다. `PLAYED`는 기존 의미(재생 완료)를 유지한다 (PR #99 백엔드 리뷰 반영) |
-| `corner.changed` | E→B | **신설** — 현재 코너, 그 코너의 입력 계약 요약. UI가 "지금은 채팅이 인용될 수 있는 시간" 등을 표시 |
-| `vote.open` / `vote.result` | E→B / B→E | **신설** — 투표 주제·선택지·창 길이 / 집계 결과 |
+| `corner.changed` | E→B | **신설** — 현재 코너, 그 코너의 입력 계약 요약. UI가 "지금은 채팅이 인용될 수 있는 시간" 등을 표시. 엔진 편성 시점이 아니라 그 코너 첫 세그먼트의 재생 시작 시점에 활성화 |
+| `vote.open` / `vote.result` | E→B / B→E | **신설** — 투표 주제·선택지·기준 세그먼트·창 길이 / 집계 결과. 창은 기준 세그먼트의 재생 시작부터 |
 | `segment.insert_before` | E→B | **신설 `[실험 조건 후보]`** — 지연 결합(5.1.2절)용. GENERATED 세그먼트 앞에 인용 세그먼트 삽입 |
 | `board.story` | B→E | 변경 없음. `tags`에 양자택일형 고민 표시 추가 `[미정]` |
 

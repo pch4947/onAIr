@@ -195,7 +195,7 @@ GenerationJob
   → [3] 인용 검사        고른 입력이 대본에 실제로 들어갔는지 문자열 대조 — 빠진 입력은 풀로 되돌린다(창이 남아 있을 때)
   → [4] L2 출력 검사     생성된 대본 텍스트에 금칙어/정규식 재검사 (뉴스 형식은 주관 표현 규칙 추가)
   → [5] TTS 호출        대본 → 오디오 파일
-  → [6] 패키징          duration 실측, 메타데이터(input_refs, reflection_level) 부여 → 제출기로
+  → [6] 패키징          duration 실측, 메타데이터(input_refs, reflection_levels) 부여 → 제출기로
 ```
 
 - 각 단계는 인터페이스로 분리하고, LLM/TTS는 provider 어댑터(`LlmClient`, `TtsClient`)로 격리한다. 더미 어댑터(고정 텍스트 반환, 미리 녹음된 wav 반환)를 처음부터 유지해 API 키 없이도 전체 파이프라인을 돌릴 수 있게 한다(테스트·부하 실험·발표장 폴백 겸용).
@@ -261,7 +261,7 @@ GenerationJob
   "priority": 50,
   "reorderable": true,
   "input_refs": ["req_abc123", "req_abc130"],  // 이 멘트가 반영한 입력들 (v1의 request_ref 단일 값 대체). 게시판 사연은 story_id
-  "reflection_level": 2,            // 이 멘트가 그 입력들에 대해 도달한 반영 단계 (0~4). 입력이 없으면 0
+  "reflection_levels": {"req_abc123": 2, "req_abc130": 3},  // 입력별 반영 단계 (1~4). 입력이 없으면 {}
   "music_ref": "yt:dQw4w9WgXcQ",     // 이 멘트 바로 다음에 틀 곡 — 백엔드가 track.queued로 알려준 track_ref (4.8절)
   "created_at": 1789496813.26       // Unix 초 (계약 결정 2026-10-08)
 }
@@ -275,7 +275,7 @@ GenerationJob
 | `request.arrived` | 입력 id, **종류(`chat`\|`message`\|`song_request`)**, 본문, 요청자 ref, **닉네임**, 신청곡이면 곡 정보 (v2) | InputRouter: L0 검사 → 계약 조회 → 풀·inbox·보류 적재, 라우팅 결과를 `request.state`로 통보 |
 | `backpressure` | D_total 현재값, 임계값, 심각도 | 버퍼 계산의 기준을 백엔드 실측 D_total로 바꾼다(#61 구현) |
 | `state.transition` | 세그먼트 id, 새 상태(MIXING/PUBLISHED/PLAYED), 시각 | 재배치 가능 집합에서 제거, 방송 맥락 갱신(`PUBLISHED`), 계측(`PLAYED` = 재생 완료) |
-| `segment.started` | 세그먼트 id, 서버 방송 시간상 재생 시작 시각 (v2 신설) | 그 세그먼트의 `input_refs`를 REFLECTED로 확정, `L_reflect`·`quote_age` 기록 |
+| `segment.started` | 세그먼트 id, 서버 방송 시간상 재생 시작 시각 (v2 신설, 모든 세그먼트) | 받은 시점에 그 세그먼트의 `input_refs`를 REFLECTED로 확정. `L_reflect`·`quote_age`는 페이로드의 `started_at`으로 기록. 같은 세그먼트 재전달은 무시 (계약 10.6절) |
 | `track.queued` / `track.started` | 다음에 틀 곡 정보 / 곡 재생 시작 시각 | 곡 소개 멘트 소재 / 곡 종료 시각을 버퍼 계산에 반영, 곡 끝나면 HELD 재라우팅 (4.8절) |
 | `board.story` / `board.story.withdrawn` | 게시판 사연 / 다른 방에서 읽힌 사연 | L0 검사 → `story_corner`의 inbox 적재 / 제거 |
 | `vote.result` | 투표 id, 선택지별 집계 (v2 신설) | 수집 창을 닫고 결과를 다음 단계 소재로 |
@@ -286,8 +286,8 @@ GenerationJob
 | 통보 | 용도 |
 |---|---|
 | `request.state` | 입력 상태 전이 (v2: `pooled` `inboxed` `collected` `held` `not_on_air` `selected` `reflected` `expired` `rejected`). 요청자 UI 피드백(F-15)의 원천 |
-| `corner.changed` (v2 신설) | 현재 코너와 그 코너의 입력 계약 요약. 프론트가 "지금은 채팅이 인용될 수 있는 시간" 등을 표시하고, 늦게 들어온 청취자에게 현재 코너를 알린다 |
-| `vote.open` (v2 신설) | 투표 주제·선택지·창 길이. 백엔드가 UI에 띄우고 집계한다 |
+| `corner.changed` (v2 신설) | 현재 코너와 그 코너의 입력 계약 요약 + 그 코너 첫 세그먼트 id. 백엔드가 그 세그먼트 재생 시작 때 활성화해 프론트가 "지금은 채팅이 인용될 수 있는 시간" 등을 표시하고, 늦게 들어온 청취자에게 현재 코너를 알린다 (계약 10.7절) |
+| `vote.open` (v2 신설) | 투표 주제·선택지·기준 세그먼트·창 길이. 백엔드가 기준 세그먼트 재생 시작 때 열고 집계한다 (계약 10.8절) |
 | `engine.health` (주기 하트비트: 버퍼 잔량 초, 진행 중 생성 수, 최근 지연 P95, 현재 코너·단계, 풀·inbox 크기) | 운영자 콘솔(F-14)·백엔드 감시용 |
 
 ---
