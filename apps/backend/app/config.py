@@ -28,6 +28,7 @@ class Settings:
     jwt_secret: str = "dev-insecure-secret-change-me"
     engine_api_url: str = "http://127.0.0.1:8100"
     engine_token: str | None = None
+    youtube_max_seconds: int = 600
 
 
 def load_settings() -> Settings:
@@ -51,6 +52,9 @@ def load_settings() -> Settings:
     if fallback_mode not in {"music", "silence"}:
         raise ValueError("ONAIR_FALLBACK_MODE must be music or silence")
     fallback = os.environ.get("ONAIR_FALLBACK_AUDIO")
+    youtube_max_seconds = int(os.environ.get('ONAIR_YOUTUBE_MAX_SECONDS', '600'))
+    if not 1 <= youtube_max_seconds <= 3600:
+        raise ValueError('ONAIR_YOUTUBE_MAX_SECONDS must be between 1 and 3600')
     return Settings(host=os.environ.get("HOST", "127.0.0.1"), port=port,
                     fallback_mode=fallback_mode, fallback_audio=Path(fallback).resolve() if fallback else None,
                     buffer_low_seconds=positive_seconds("ONAIR_BUFFER_LOW_SECONDS", "15"),
@@ -64,4 +68,5 @@ def load_settings() -> Settings:
                     ffmpeg=os.environ.get("ONAIR_FFMPEG", "ffmpeg"),
                     jwt_secret=os.environ.get("ONAIR_JWT_SECRET", Settings.jwt_secret),
                     engine_api_url=os.environ.get("ONAIR_ENGINE_API_URL", Settings.engine_api_url),
-                    engine_token=os.environ.get("ONAIR_ENGINE_TOKEN"))
+                    engine_token=os.environ.get("ONAIR_ENGINE_TOKEN"),
+                    youtube_max_seconds=youtube_max_seconds)

@@ -16,6 +16,7 @@ from .stations import StationStore
 from .board import BoardStore, CommentStore, LikeStore
 from .replays import ReplaySessionStore
 from .api import PresenceStore
+from .music import MusicService
 
 
 @asynccontextmanager
@@ -24,6 +25,7 @@ async def redis_lifespan(app):
     client = Redis.from_url(app.state.settings.redis_url, decode_responses=True,
                             socket_connect_timeout=2, socket_timeout=2)
     app.state.redis = client
+    app.state.music = MusicService(client, app.state.settings)
     app.state.requests = RequestStore(client, app.state.settings.station_id)
     app.state.users = UserStore(client)
     app.state.stations = StationStore(client, app.state.settings.station_id)

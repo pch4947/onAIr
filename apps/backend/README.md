@@ -1,5 +1,70 @@
 # onAIr Backend — FastAPI / Redis / HLS
 
+## YouTube 링크 음원 송출 (단일 방송 MVP)
+
+방송 소유자가 `POST /api/stations/{station_id}/tracks`로 YouTube 링크 한 개를 등록하면,
+yt-dlp 다운로드 → MP3 변환 → 기존 Redis 큐 → FFmpeg HLS 송출 순서로 처리합니다.
+기존 대기열 뒤에 추가하며 현재 음원을 중단하지 않습니다. 프론트 입력 UI, 제목 검색,
+방 생성의 `first_song`, 엔진 곡 소개/`track.queued`/`track.started` 연동은 아직 포함하지 않습니다.
+
+### 준비
+
+- `apps/backend`에서 `.venv\Scripts\python.exe -m pip install -e .`로 의존성을 갱신합니다.
+- FFmpeg와 Node.js를 PATH에 설치합니다. FFmpeg는 `ONAIR_FFMPEG` 절대경로도 지원합니다.
+  yt-dlp의 YouTube JS 처리는 Node.js를 사용합니다. Node.js 버전 요구사항은
+  [yt-dlp 공식 안내](https://github.com/yt-dlp/yt-dlp#dependencies)를 확인합니다.
+- Redis, 백엔드(`--workers 1`), 엔진을 실행하고 로그인한 계정으로 방송을 생성합니다.
+  방송 상태가 `started`, `ONAIR_HLS_ENABLED=1`이어야 합니다.
+- 기본 최대 길이는 600초이며 `ONAIR_YOUTUBE_MAX_SECONDS`로 1~3600초 범위에서 조정합니다.
+  라이브·예정 방송·연령 제한·길이 불명 영상은 거부합니다. 다운로드는 최대 100 MiB입니다.
+
+### PowerShell 호출
+
+`$token`은 `/api/auth/login`에서 받은 **방송 소유자의 accessToken**으로 설정합니다.
+주소·방송 ID는 현재 환경에 맞춥니다. 토큰을 저장소에 기록하지 않습니다.
+
+```powershell
+$base = 'http://127.0.0.1:3000'
+$station = 'st_local_dev'
+$videoUrl = Read-Host 'YouTube 링크'
+$retryKey = [guid]::NewGuid().ToString()
+$headers = @{ Authorization = "Bearer $token"; 'Idempotency-Key' = $retryKey }
+$body = @{ url = $videoUrl } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "$base/api/stations/$station/tracks" `
+  -Headers $headers -ContentType 'application/json' -Body $body -TimeoutSec 260
+```
+
+성공하면 `202`와 `segment_id`, `track`, `status: queued`, `hls_url`을 반환합니다.
+응답은 다운로드·변환·큐 저장 이후 반환되며 재생 시작을 의미하지 않습니다.
+같은 요청 재시도에는 **같은 `$retryKey`와 링크**를 사용합니다. 최초 접수 응답을 반환하며
+재생을 중복 등록하지 않습니다. 같은 키로 다른 곡을 보내면 409입니다.
+같은 곡을 의도적으로 다시 재생하려면 새 키를 사용합니다.
+
+프론트 `/listen`에서 기존 방송을 재생하거나 `hls_url`을 HLS 플레이어로 열어 확인합니다.
+큐 대기 시간과 방송 버퍼만큼 지연됩니다. 다운로드와 MP3 변환은 각각 120초 제한이며,
+실패·취소 시 해당 자식 프로세스를 종료하고 불완전 파일은 큐에 넣지 않습니다.
+
+오류: 401 로그인 필요, 403 소유자 아님, 404 방송 없음, 409 방송 미시작/키 충돌,
+422 링크 형식 오류, 429 다운로드 처리 중, 502 영상 제한·다운로드/변환 실패,
+503 Redis/도구/저장소 사용 불가, 504 시간 초과. 제한 영상의 인증 우회는 하지 않습니다.
+YouTube 측 변경이나 네트워크 제한으로 다운로드가 실패할 수 있습니다.
+
+오디오와 재시도 메타데이터는 `ONAIR_AUDIO_DIR/{station_id}/youtube/`에 보관합니다.
+아직 자동 보존기간 정리가 없으므로 운영 시 디스크 사용량 관리가 필요합니다.
+계약 변경 전 독립 송출 검증용 API이며 엔진은 이 곡의 시작·종료를 직접 통보받지 않습니다.
+
+### 검증
+
+```powershell
+.venv\Scripts\python.exe -m unittest discover -s tests -p test_music.py -v
+# Redis와 FFmpeg가 준비된 경우 (ONAIR_FFMPEG도 설정)
+$env:ONAIR_INTEGRATION_TEST = '1'
+.venv\Scripts\python.exe -m unittest discover -s tests -p test_music.py -v
+```
+
+통합 테스트는 외부 다운로드만 로컬 테스트 음원으로 대체하고 실제 MP3 변환·Redis 큐·HLS
+발행·TS 디코딩을 확인합니다. 실제 YouTube 접근 성공 여부는 위 API로 별도 확인합니다.
+
 방송 생성·보이스·persona API 연결은 [단일 방송 생성 가이드](../../docs/BACKEND_STATION_CREATION.md)를 참고합니다.
 공용 스키마 의존성이 추가되어 최초 설치 및 업데이트 시 저장소 루트에서
 `apps/backend/.venv/Scripts/python.exe -m pip install -e packages/onair_schema -e apps/backend`를 실행합니다.
