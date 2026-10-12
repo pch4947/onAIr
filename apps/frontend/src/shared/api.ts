@@ -6,6 +6,7 @@ import type {
   BoardPost,
   BroadcastStateResponse,
   LikeStatus,
+  RequestRecord,
   SubmitRequestResponse,
 } from '@/shared/types'
 
@@ -19,16 +20,28 @@ export async function getBroadcastState(): Promise<BroadcastStateResponse> {
   return res.json() as Promise<BroadcastStateResponse>
 }
 
-export async function submitRequest(prompt: string): Promise<SubmitRequestResponse> {
+export async function submitRequest(input: {
+  prompt: string
+  listenerId?: string
+  kind?: 'story' | 'mood'
+}): Promise<SubmitRequestResponse> {
   const res = await fetch(`${API_BASE}/api/requests`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt }),
+    body: JSON.stringify({ prompt: input.prompt, listenerId: input.listenerId, kind: input.kind }),
   })
   if (!res.ok) {
     throw new Error(`POST /api/requests failed: ${res.status}`)
   }
   return res.json() as Promise<SubmitRequestResponse>
+}
+
+export async function getRequests(): Promise<{ requests: RequestRecord[] }> {
+  const res = await fetch(`${API_BASE}/api/requests`)
+  if (!res.ok) {
+    throw new Error(`GET /api/requests failed: ${res.status}`)
+  }
+  return res.json() as Promise<{ requests: RequestRecord[] }>
 }
 
 export async function signup(email: string, password: string, name: string): Promise<AuthResponse> {

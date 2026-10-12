@@ -10,10 +10,10 @@ const textInputClass =
 
 interface SongRequestModalProps {
   onClose: () => void
-  onSubmitted: (text: string) => void
+  listenerId?: string
 }
 
-export function SongRequestModal({ onClose, onSubmitted }: SongRequestModalProps) {
+export function SongRequestModal({ onClose, listenerId }: SongRequestModalProps) {
   const [link, setLink] = useState('')
   const submitSongRequestMutation = useMutation({ mutationFn: submitRequest })
 
@@ -24,11 +24,8 @@ export function SongRequestModal({ onClose, onSubmitted }: SongRequestModalProps
 
     const prompt = `신청곡: ${trimmedLink}`
 
-    submitSongRequestMutation.mutate(prompt, {
-      onSuccess: () => {
-        onSubmitted(prompt)
-        onClose()
-      },
+    submitSongRequestMutation.mutate({ prompt, listenerId, kind: 'mood' }, {
+      onSuccess: () => onClose(),
     })
   }
 
