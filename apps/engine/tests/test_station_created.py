@@ -125,6 +125,8 @@ def test_missing_topic_falls_back_to_concept(tmp_path):
     (lambda p: p.update(broadcast_minutes=120), "invalid_payload", "broadcast_minutes"),
     (lambda p: p["persona"].pop("persona_id"), "invalid_payload", "persona_id"),
     (lambda p: p["persona"].update(voice="voice-en-9"), "unknown_voice", "voice-en-9"),
+    (lambda p: p.update(format="news", corners=["topic_talk", "story_corner"]),
+     "invalid_payload", "corners"),
 ])
 def test_bad_station_created_is_rejected(tmp_path, mutate, reason, detail):
     manager, transports = _manager(tmp_path)
@@ -150,7 +152,39 @@ def test_llm_without_key_is_rejected(tmp_path, monkeypatch):
     assert "ANTHROPIC_API_KEY" in body["detail"]
 
 
-def test_ack_prerender_failure_is_rejected(tmp_path, monkeypatch):
+def test_format_fields_reach_the_station(tmp_path):
+    manager, transports = _manager(tmp_path)
+    payload = {**PAYLOAD, "format": "news", "news_sections": ["it", "sports"], "intensity": "high"}
+
+    async def scenario():
+        await manager.handle_event(_created(payload=payload))
+        engine = manager.stations["st_a"]
+        await _until(lambda: transports["st_a"].segments)
+        await manager.close_station("st_a")
+        return engine
+
+    engine = asyncio.run(scenario())
+    assert engine.config.format == "news"
+    assert engine.config.news_sections == ["it", "sports"]
+    assert engine.config.intensity == "high"
+    assert transports["st_a"].segments[0].corner_type == "opening"
+
+
+def test_v1_payload_without_format_runs_talk_with_default_corners(tmp_path):
+    manager, _ = _manager(tmp_path)
+
+    async def scenario():
+        await manager.handle_event(_created())  # 백엔드가 형식 선택(#102)을 붙이기 전의 페이로드
+        engine = manager.stations["st_a"]
+        await manager.close_station("st_a")
+        return engine
+
+    engine = asyncio.run(scenario())
+    assert engine.config.format == "talk"
+    assert engine.config.corners == ["story_corner", "topic_talk"]
+
+
+def test_glue_prerender_failure_is_rejected(tmp_path, monkeypatch):
     class BrokenTts:
         file_ext = ".mp3"
         cache_namespace = "broken"

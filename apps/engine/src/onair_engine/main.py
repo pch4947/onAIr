@@ -47,7 +47,12 @@ def load_config(path: Path) -> tuple[StationConfig, EngineSettings]:
         station_id=st["id"],
         profile=load_profile(st["profile"]),
         broadcast_minutes=int(st.get("broadcast_minutes", 60)),
-        policy_name=raw.get("policy", {}).get("name", "naive_fifo"),
+        format=st.get("format", "talk"),
+        corners=st.get("corners"),
+        news_sections=st.get("news_sections"),
+        intensity=st.get("intensity", "mid"),
+        topic=st.get("topic"),
+        first_song=st.get("first_song"),
         recent_segments=int(raw.get("context", {}).get("recent_segments", 8)),
     )
     pipe = raw.get("pipeline", {})
@@ -63,6 +68,7 @@ def load_config(path: Path) -> tuple[StationConfig, EngineSettings]:
         audio_dir=Path(tr.get("audio_dir", "var/audio")),
         sqlite_path=Path(tel.get("sqlite_path", "var/engine_metrics.sqlite")),
         safety_rules_path=Path(pipe.get("safety_rules", "config/safety_rules.yaml")),
+        formats_dir=Path(pipe.get("formats_dir", "config/formats")),
         llm=pipe.get("llm", "dummy"),
         llm_model=pipe.get("llm_model"),
         llm_base_url=pipe.get("llm_base_url"),
@@ -139,6 +145,8 @@ def cli(argv: list[str] | None = None) -> None:
                         help="기동 2초 후 주입할 가짜 청취자 요청 (반복 지정 가능)")
     parser.add_argument("--persona", type=Path, default=None, metavar="FILE",
                         help="설정 파일의 station.profile을 persona 파일로 덮어쓴다")
+    parser.add_argument("--format", choices=["music", "talk", "news"], default=None,
+                        help="설정 파일의 station.format을 덮어쓴다 (config/formats/*.yaml)")
     add_llm_args(parser)
     parser.add_argument("--tts", choices=["dummy", "google", "edge", "cartesia"], default=None,
                         help="설정 파일의 pipeline.tts를 덮어쓴다")
@@ -169,6 +177,9 @@ def cli(argv: list[str] | None = None) -> None:
     config, settings = load_config(args.config)
     if args.persona:
         config.profile = load_profile(args.persona)
+    if args.format and args.format != config.format:
+        # 호스트 선택(코너·분야)은 형식마다 다르다 — 형식을 바꾸면 그 형식의 기본값을 쓴다
+        config.format, config.corners, config.news_sections = args.format, None, None
     apply_llm_args(settings, args)
     if args.tts:
         settings.tts = args.tts

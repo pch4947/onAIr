@@ -7,8 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from onair_engine.catalog import Catalog
-from onair_engine.corners import build_corners
 from onair_engine.domain import (
     GenerationJob,
     ListenerRequest,
@@ -33,7 +31,6 @@ from onair_engine.pipeline.llm import (
 from onair_engine.pipeline.pipeline import GenerationPipeline
 from onair_engine.pipeline.safety import SafetyChecker
 from onair_engine.pipeline.tts import make_tts
-from onair_engine.sources.rss import RssCollector
 from onair_engine.telemetry import Telemetry
 
 RULES = Path(__file__).resolve().parent.parent / "config" / "safety_rules.yaml"
@@ -173,7 +170,6 @@ class FlakyLlm:
 def _pipeline(tmp_path, llm) -> GenerationPipeline:
     return GenerationPipeline(
         station_id="st_test", profile=PROFILE,
-        corners=build_corners(catalog=Catalog(), rss=RssCollector()),
         llm=llm, tts=make_tts("dummy"), safety=SafetyChecker(RULES),
         telemetry=Telemetry(tmp_path / "metrics.sqlite", "st_test"),
         audio_root=tmp_path / "audio", recent_segments=2,
@@ -181,7 +177,8 @@ def _pipeline(tmp_path, llm) -> GenerationPipeline:
 
 
 def _opening_job():
-    return GenerationJob(job_id="job_t", corner_type="opening", material=Material())
+    return GenerationJob(job_id="job_t", corner_type="opening", step="opening_greeting",
+                         material=Material())
 
 
 def test_pipeline_retries_once_then_succeeds(tmp_path):
@@ -216,9 +213,10 @@ def test_pipeline_feeds_recent_scripts_back_as_context(tmp_path):
 
 
 def test_failed_request_is_requeued_once_then_rejected(tmp_path):
-    config = StationConfig(station_id="st_test", profile=PROFILE, broadcast_minutes=1)
+    config = StationConfig(station_id="st_test", profile=PROFILE, broadcast_minutes=30)
     settings = EngineSettings(audio_dir=tmp_path / "audio",
-                              sqlite_path=tmp_path / "metrics.sqlite", safety_rules_path=RULES)
+                              sqlite_path=tmp_path / "metrics.sqlite", safety_rules_path=RULES,
+                              target_buffer_sec=1e9)
 
     class Capture:
         def __init__(self):
@@ -236,10 +234,12 @@ def test_failed_request_is_requeued_once_then_rejected(tmp_path):
     transport = Capture()
     engine = StationEngine(config, settings, transport)
     engine.scheduler.pipeline.llm = FlakyLlm(fail_times=99)  # 제공자 전면 장애
+    # 인용 간 최소 간격을 없애 되돌린 요청이 바로 다음 인용 차례에 다시 들어가게 한다
+    engine.scheduler.intensity = engine.scheduler.intensity.model_copy(update={"quote_gap_sec": 0})
 
     async def scenario() -> ListenerRequest:
         req = await engine.submit_request("story", "요즘 잠이 안 와요", "tester")
-        await engine.run(max_segments=4)
+        await engine.run(max_segments=8)
         return req
 
     req = asyncio.run(scenario())
@@ -247,9 +247,9 @@ def test_failed_request_is_requeued_once_then_rejected(tmp_path):
     assert states[-1] == RequestState.REJECTED
     assert states.count(RequestState.QUEUED) == 1  # 되돌림은 한 번
     assert RequestState.GENERATED not in states
-    assert [s.kind for s in transport.segments].count(SegmentKind.ACK) == 1
-    assert all(s.corner_type == "filler" for s in transport.segments
-               if s.kind != SegmentKind.ACK), "장애 중에도 filler로 방송은 이어진다"
+    # 요청별 접수 확인(ack)은 없다 (CORNER_DESIGN D5). 사전 렌더 접착 요소 외에는 전부 대체 filler다
+    assert all(s.kind == SegmentKind.FILLER for s in transport.segments
+               if "/glue/" not in s.audio_ref), "장애 중에도 filler로 방송은 이어진다"
 
 
 def _openai_reply(content, finish_reason="stop", refusal=None):

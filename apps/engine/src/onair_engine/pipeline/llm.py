@@ -20,8 +20,9 @@ from typing import Protocol
 
 from .. import __version__
 from ..catalog import mood_ko
+from ..corners.steps import STEP_KINDS
 from ..domain import Prompt, Script
-from ..prompt_data import STORY
+from ..prompt_data import CHAT, STORY, TOPIC
 
 DEFAULT_CLAUDE_MODEL = "claude-haiku-4-5"  # 짧은 멘트는 지연이 우선이다. 품질 비교는 llm_model로
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
@@ -55,30 +56,61 @@ def _raw(reply: _Reply, provider: str) -> str:
     return reply.text
 
 
-# 더미 대본 — TTS로 실제로 읽혀도 방송처럼 들리도록 쓴 코너별 고정 문장.
+# 더미 대본 — TTS로 실제로 읽혀도 방송처럼 들리도록 쓴 단계별 고정 문장 (단계 유형: corners/steps.py).
 # 슬롯({dj}, {title} 등)은 프롬프트에서 추출해 채운다 (_slots 참고).
 # 슬롯 값의 받침 유무를 모르므로 슬롯 바로 뒤에는 조사(은/는, 이/가, 예요/이에요)를 붙이지 않는다.
 _TEMPLATES: dict[str, list[str]] = {
-    "opening": [
+    "opening_greeting": [
         ("안녕하세요, {concept}의 {dj}입니다. 오늘도 이 시간을 함께해 주셔서 고마워요. "
          "편하게 들으면서 하던 일 이어가세요."),
         "{concept}, 지금 시작합니다. DJ {dj}입니다. 잠깐 숨 한 번 고르고, 천천히 같이 가봐요.",
         "반가워요, {dj}입니다. 오늘 하루는 어떠셨나요? 지금부터 조용히 곁에 있을게요.",
     ],
-    "briefing": [
-        "잠깐 소식 하나 전해드릴게요. {headline}. 자세한 내용은 원문 출처에서 확인해 보세요.",
-        "요즘 이런 이야기가 있더라고요. {headline}. 다음 곡 듣기 전에 한 번쯤 생각해 볼 만하죠.",
+    "topic_intro": [
+        "오늘 함께 이야기할 주제는 이거예요. {topic}. 편하게 생각 나누면서 들어 주세요.",
+    ],
+    "corner_preview": [
+        "오늘 순서 잠깐 알려 드릴게요. 이야기와 음악이 차례로 이어집니다. 끝까지 함께해 주세요.",
+    ],
+    "talk_open": [
+        "오늘 이야기 하나 꺼내 볼게요. {topic}. 여러분은 어떠세요?",
+    ],
+    "talk": [
+        "이 이야기 조금 더 해 볼게요. 생각해 보면 정답이 있는 문제는 아닌 것 같아요.",
+        "저는 요즘 이런 생각을 자주 해요. 너무 잘하려고 애쓰지 않아도 괜찮다는 거요.",
+    ],
+    "artist_talk": [
+        "다음 곡은 {artist}의 노래예요. 목소리만 들어도 분위기가 확 달라지는 아티스트죠.",
     ],
     "music_intro": [
         "이번 곡은 {artist}의 {title}입니다. {mood} 분위기라 지금 시간에 잘 어울릴 거예요.",
         "잠깐 쉬어가는 의미로 한 곡 준비했어요. {artist}, {title}. 이어서 들려드릴게요.",
         "{mood} 곡 하나 골라봤어요. {artist}의 {title}, 함께 들어요.",
     ],
-    "request_reply": [
+    "story": [
         ("사연 하나 읽어드릴게요. {story}. 이렇게 보내주셨어요. 그런 날도 있죠. "
          "이 시간만큼은 너무 애쓰지 말고 편하게 쉬어가셨으면 좋겠어요."),
-        ("보내주신 이야기 잘 받았어요. {story}. 마음이 전해져요. "
-         "지금 이 방송을 듣는 모두가 함께라는 걸 기억해 주세요."),
+    ],
+    "text_read": [
+        "문자 하나 볼게요. {story}. 고마워요, 잘 읽었어요.",
+    ],
+    "game_round": [
+        "자, 이번 고민이에요. {story}. 투표 열어 둘게요, 여러분의 선택을 보여 주세요.",
+    ],
+    "news_headline": [
+        "오늘의 주요 소식입니다. {headline}. 자세한 내용 이어서 전해 드리겠습니다.",
+    ],
+    "news_item": [
+        "소식 전해 드립니다. {headline}. 자세한 내용은 원문 출처에서 확인하실 수 있습니다.",
+    ],
+    "news_recap": [
+        "지금까지 전해 드린 소식 정리해 드렸습니다. 잠시 음악 듣고 다시 찾아오겠습니다.",
+    ],
+    "closing_lookback": [
+        "오늘 방송도 어느새 마무리할 시간이네요. 함께해 주셔서 정말 고마웠어요.",
+    ],
+    "closing_farewell": [
+        "마지막 곡 들려드리면서 인사할게요. {artist}의 {title}. 지금까지 {dj}였습니다.",
     ],
     "filler": [
         "지금 이 순간도 충분히 잘 해내고 계신 거예요. 곧 다음 곡 이어갈게요.",
@@ -86,46 +118,55 @@ _TEMPLATES: dict[str, list[str]] = {
         "물 한 모금 마시고 오세요. 저 {dj}, 여기 그대로 있을게요.",
     ],
 }
-
-# 실 LLM처럼 프롬프트만 받으므로 코너 종류는 코너 프롬프트 문구로 판별한다.
-# corners/*.py의 프롬프트 문구를 바꾸면 여기도 맞춰야 한다 (test_smoke가 어긋남을 검출).
-_CORNER_MARKERS = [
-    ("오프닝", "opening"),
-    ("브리핑", "briefing"),
-    ("곡을 소개", "music_intro"),
-    ("사연에 답", "request_reply"),
-    ("브릿지", "filler"),
-]
+# 인용할 채팅이 있으면 앞에 붙인다 — 파이프라인 인용 검사를 통과해야 한다
+_QUOTE_TEMPLATE = "{quote}, 이렇게 보내 주신 분이 있네요. 고마워요. "
 
 _PROFILE_RE = re.compile(r"\[(?P<concept>.+?)\]의 DJ (?P<dj>.+?)다\.")
-_TRACK_RE = re.compile(r"곡: (?P<title>.+?) — (?P<artist>.+?) \(무드: (?P<mood>.+?)\)")
-_STORY_RE = re.compile(rf'<data label="{STORY}">\n(?P<story>.*?)\n</data>', re.DOTALL)
-_DATA_RE = re.compile(r'<data label="[^"]*">\n.*?\n</data>', re.DOTALL)
+_TRACK_RE = re.compile(r"곡: (?P<title>.+?) — (?P<artist>.+?)(?: \(무드: (?P<mood>.+?)\))?$",
+                       re.MULTILINE)
 _HEADLINE_RE = re.compile(r"^- (?P<headline>.+?): ", re.MULTILINE)
+_DATA_RE = re.compile(r'<data label="[^"]*">\n.*?\n</data>', re.DOTALL)
 
-def detect_corner(user_prompt: str) -> str | None:
-    # 데이터 블록은 빼고 지시문만 본다 — "오프닝 멘트 해줘" 같은 사연으로 코너를 오판하지 않게
+
+def _block(label: str) -> re.Pattern:
+    return re.compile(rf'<data label="{label}">\n(?P<body>.*?)\n</data>', re.DOTALL)
+
+
+_STORY_RE, _TOPIC_RE, _CHAT_RE = _block(STORY), _block(TOPIC), _block(CHAT)
+
+
+def detect_step(user_prompt: str) -> str | None:
+    """프롬프트의 단계 유형 — 지시문 속 marker 구절로 알아본다 (corners/steps.py STEP_KINDS).
+
+    데이터 블록은 빼고 지시문만 본다 — "오프닝 멘트 해줘" 같은 사연으로 단계를 오판하지 않게.
+    """
     instructions = _DATA_RE.sub("", user_prompt)
-    return next((corner for marker, corner in _CORNER_MARKERS if marker in instructions), None)
+    return next((name for name, kind in STEP_KINDS.items() if kind.marker in instructions), None)
 
 
 def _slots(prompt: Prompt) -> dict[str, str]:
     slots = {
         "dj": "DJ", "concept": "우리 방송",
         "title": "다음 곡", "artist": "오늘의 아티스트", "mood": "잔잔한",
-        "story": "오늘 하루 이야기", "headline": "오늘의 소식",
+        "story": "오늘 하루 이야기", "headline": "오늘의 소식", "topic": "오늘의 이야기",
     }
     for regex, text in [(_PROFILE_RE, prompt.system), (_TRACK_RE, prompt.user),
-                        (_STORY_RE, prompt.user), (_HEADLINE_RE, prompt.user)]:
+                        (_HEADLINE_RE, prompt.user)]:
         if m := regex.search(text):
-            slots.update({k: v.strip() for k, v in m.groupdict().items()})
+            slots.update({k: v.strip() for k, v in m.groupdict().items() if v})
+    if m := _STORY_RE.search(prompt.user):
+        # 사연·문자 블록은 "닉네임: x" 줄로 시작한다 — 본문만 읽는다
+        body = m["body"].split("\n", 1)[-1] if m["body"].startswith("닉네임:") else m["body"]
+        slots["story"] = body.strip()
+    if m := _TOPIC_RE.search(prompt.user):
+        slots["topic"] = m["body"].strip()
     slots["mood"] = mood_ko(slots["mood"])
     slots["story"] = slots["story"][:60]
     return slots
 
 
 class DummyLlmClient:
-    """코너별 고정 대본 반환 — API 키 없이 파이프라인 관통·청취 테스트·발표장 폴백용."""
+    """단계별 고정 대본 반환 — API 키 없이 파이프라인 관통·청취 테스트·발표장 폴백용."""
 
     def __init__(self, delay_sec: float = 0.2, seed: int | None = None):
         self.delay_sec = delay_sec
@@ -133,9 +174,12 @@ class DummyLlmClient:
 
     async def generate(self, prompt: Prompt) -> Script:
         await asyncio.sleep(self.delay_sec)  # 생성 지연 흉내
-        corner = detect_corner(prompt.user) or "filler"
-        template = self._rng.choice(_TEMPLATES[corner])
-        return Script(text=template.format_map(_slots(prompt)))
+        step = detect_step(prompt.user) or "filler"
+        text = self._rng.choice(_TEMPLATES[step]).format_map(_slots(prompt))
+        if m := _CHAT_RE.search(prompt.user):
+            quote = m["body"].split("\n", 1)[0].strip()[:60]
+            text = _QUOTE_TEMPLATE.format(quote=quote) + text
+        return Script(text=text)
 
     async def complete(self, prompt: Prompt, *, max_tokens: int) -> str:
         await asyncio.sleep(self.delay_sec)

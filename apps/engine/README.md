@@ -1,9 +1,9 @@
 # onAIr 대본 엔진 (`apps/engine`)
 
-편성 관리자가 코너 편성표에 따라 LLM 대본을 생성하고 TTS 오디오를 백엔드에 제출하는 파트입니다.
+편성 관리자가 방송 형식(음악·사연토크·뉴스)의 클락과 코너 정의에 따라 LLM 대본을 생성하고 TTS 오디오를 백엔드에 제출하는 파트입니다.
 
-- 설계 문서: [docs/ENGINE_ARCHITECTURE.md](../../docs/ENGINE_ARCHITECTURE.md)
-- 현재 상태: **M1 진행 중** — 실 LLM(Claude/Gemini) → TTS(Google) → Redis 전송까지 종단 관통. 더미 어댑터는 키 없는 테스트·폴백용으로 유지.
+- 설계 문서: [docs/ENGINE_ARCHITECTURE.md](../../docs/ENGINE_ARCHITECTURE.md), [docs/CORNER_DESIGN.md](../../docs/CORNER_DESIGN.md)
+- 현재 상태: **M3 — 형식·클락·코너 구조** (#105). 청취자 입력 라우팅·선별기는 M4 — 그 전까지 요청은 채팅 인용을 허용하는 코너의 다음 멘트에 인용됩니다(과도기). 요청별 접수 확인(ack) 멘트는 없습니다. 더미 어댑터는 키 없는 테스트·폴백용으로 유지.
 
 ## 시작하기
 
@@ -35,20 +35,23 @@ onair-engine --config config/station.example.yaml --max-segments 6 --demo-reques
 
 - 세그먼트 제출이 `SUBMIT {...}` JSON 라인으로 출력됩니다 (백엔드 계약 확정 전까지의 stdout 더미).
 - 생성된 오디오는 `var/audio/`, 계측 로그는 `var/engine_metrics.sqlite`에 쌓입니다.
-- `--max-segments` 없이 실행하면 설정된 방송 시간 동안 계속 돕니다 (Ctrl+C로 종료).
+- `--max-segments` 없이 실행하면 엔딩까지 진행한 뒤 끝납니다 (Ctrl+C로 중단).
+- 로컬 실행도 실제 시간에 맞춰 만듭니다 — 곡 소개 멘트 뒤에는 그 곡 길이(더미 곡 약 3분)만큼 버퍼가 차므로 다음 멘트까지 기다립니다.
 - 생성된 대본은 `SCRIPT seg_xxx [코너] 대본...` 라인으로 함께 출력됩니다.
-- 요청 답변(request_reply)은 10번째 세그먼트 전후에 나오므로 요청 흐름을 보려면 `--max-segments 15` 이상을 주세요.
+- 방송 형식은 설정 파일 `station.format` 또는 `--format music|talk|news`로 고릅니다. 코너와 순환 틀은 [config/formats/](config/formats/)에 있습니다 — 코너를 고치거나 더할 때 코드는 건드리지 않습니다.
+- 데모 요청은 채팅 인용을 허용하는 첫 단계(사연토크면 오프닝의 코너 예고)에서 인용됩니다. 뉴스 형식은 청취자 입력을 방송에 반영하지 않습니다.
+- 사연 코너(게시판 사연)·문자 소개(사연 보내기)는 M4, DJ 대 청취자 게임(투표)은 M5부터 진행됩니다. 그 전에는 사연 코너가 주제 토크로 대체되고 나머지는 건너뜁니다. 뉴스 형식은 RSS 수집(M2 미구현)이 붙어야 기사 코너가 나갑니다.
 
 ### 더미 대본을 실제 음성으로 듣기
 
-더미 LLM은 코너별로 방송처럼 들리는 고정 대본을 반환합니다. `--tts edge`를 주면 Microsoft Edge 온라인 TTS(API 키 불필요, 인터넷 필요)가 대본을 한국어로 읽어 mp3로 저장합니다.
+더미 LLM은 단계별로 방송처럼 들리는 고정 대본을 반환합니다. `--tts edge`를 주면 Microsoft Edge 온라인 TTS(API 키 불필요, 인터넷 필요)가 대본을 한국어로 읽어 mp3로 저장합니다.
 
 ```bash
 pip install -e ".[tts]"
 onair-engine --tts edge --max-segments 15 --demo-request "요즘 잠이 안 와요"
 ```
 
-- 오디오: `var/audio/st_local_dev/seg_xxx.mp3` (ack는 `ack/ack_N.mp3`)
+- 오디오: `var/audio/st_local_dev/seg_xxx.mp3` (코너 콜 같은 접착 문구는 `glue/`)
 - 보이스 변경: 설정 파일 `pipeline.tts_voice` (기본 `ko-KR-SunHiNeural`, 남성 `ko-KR-InJoonNeural`)
 - API 키 없이 듣는 청취 테스트용 어댑터입니다. 비공식 엔드포인트이므로 운영에는 쓰지 않습니다 (운영은 Cartesia).
 
@@ -120,7 +123,8 @@ onair-engine --llm claude --tts google --transport redis --demo-request "요즘 
 - 대본은 그대로 TTS에 들어가므로 시스템 프롬프트가 마크다운·이모지·지문·화자 표기를 금지하고, 새어 나온 것은 `clean_script`가 지웁니다. 출력 한도에서 잘리면 마지막 완결 문장까지만 씁니다.
 - 부적합 판단(L1)은 `REJECT`로 통일합니다. 제공자 안전 필터 차단(Gemini `blockReason`, Claude `refusal`)도 같게 다룹니다.
 - 최근 N개 대본(`context.recent_segments`)을 시스템 프롬프트에 붙여 같은 인사·표현 반복을 막습니다.
-- **실패 처리**: LLM/TTS 호출은 1회 재시도하고, 재실패하면 더미의 고정 filler 대본으로 대체해 방송을 잇습니다. 요청 답변이 대체되면 요청을 `queued`로 한 번 되돌리고(ack는 다시 보내지 않음), 또 실패하면 `rejected`로 통보합니다. 계측 `generation_log`에 `error`/`fallback` 단계가 남습니다.
+- **실패 처리**: LLM/TTS 호출은 1회 재시도하고, 재실패하면 더미의 고정 filler 대본으로 대체해 방송을 잇습니다(곡 소개였다면 곡 `music_ref`는 그대로 싣습니다). 인용한 요청이 대체되거나 대본에 인용이 빠지면 요청을 `queued`로 한 번 되돌리고, 또 실패하면 `rejected`로 통보합니다. 계측 `generation_log`에 `error`/`fallback`/`quote` 단계가 남습니다.
+- **제출 순서**: 생성은 병렬(`max_concurrent_generations`)이지만 제출은 편성 순서대로 합니다 — 코너 콜이 앞 코너의 마지막 멘트보다 먼저 나가지 않습니다.
 
 ### DJ persona
 
@@ -150,7 +154,7 @@ python -m onair_engine.eval --persona config/personas/dodo.yaml --llm claude --j
 
 - 모든 TTS 출력은 `audio.CachedTts`를 거칩니다.
   - **원자적 쓰기**: `.이름.랜덤.tmp.확장자`로 쓴 뒤 교체합니다. 백엔드는 완성된 파일만 봅니다.
-  - **캐시**: `pipeline.tts_cache_dir`(기본 `var/tts_cache`)에 텍스트 단위로 저장합니다. ack·filler처럼 반복되는 문장은 API를 다시 호출하지 않습니다.
+  - **캐시**: `pipeline.tts_cache_dir`(기본 `var/tts_cache`)에 텍스트 단위로 저장합니다. 접착 문구·filler처럼 반복되는 문장은 API를 다시 호출하지 않습니다.
   - **길이 실측**: `duration_ms`는 파일에서 잰 값입니다 (mutagen).
 - 파일 정리 책임과 보존 기간은 [Redis 계약 문서](../../docs/ENGINE_REDIS_CONTRACT.md) 5.1절에 있습니다.
 
@@ -177,7 +181,7 @@ onair-engine --transport redis --serve
 ```
 
 - `engine:control`의 `station.created`마다 방을 하나씩 띄웁니다 (설정 파일의 `station`은 쓰지 않음). 페이로드 검증은 [packages/onair_schema](../../packages/onair_schema/) `StationCreated`로 합니다.
-- 검증·보이스 확인·ack 사전 렌더링을 통과하면 `station.started`(확정 주제), 아니면 `station.rejected`(`reason`, `detail`)를 그 방의 `:out`으로 보냅니다. 넣어 보는 명령은 계약 문서 3.3절에 있습니다.
+- 검증·형식 설정·보이스 확인·접착 요소 사전 렌더링을 통과하면 `station.started`(확정 주제), 아니면 `station.rejected`(`reason`, `detail`)를 그 방의 `:out`으로 보냅니다. 넣어 보는 명령은 계약 문서 3.3절에 있습니다.
 - `pipeline.tts: cartesia`면 `persona.voice`가 Cartesia 한국어 보이스 목록에 있는지 확인합니다.
 - 받은 `station.created` 원문은 계측 SQLite `station_log`에 persona 사본으로 남습니다.
 - 엔진 REST(아래)도 함께 열립니다.
@@ -216,20 +220,21 @@ ruff check .
 ```
 src/onair_engine/
 ├── main.py           # 엔트리포인트 (설정 로드 → run_local)
-├── manager.py        # EngineManager — 다중 스테이션 수명주기 (M3에서 이벤트 연동)
+├── manager.py        # EngineManager — 다중 스테이션 수명주기, 스테이션 이벤트 라우팅
 ├── engine.py         # StationEngine — 스테이션 1개의 컴포넌트 조립
-├── domain.py         # 데이터 모델 (제출 페이로드, 정책 입출력 등 — 계약 대상)
-├── scheduler/        # 편성 관리자, 러닝오더, 정책(naive_fifo — A/B/C는 8장 확정 후)
-├── corners/          # MVP 코너 5종 (opening/briefing/music_intro/request_reply/filler)
-├── pipeline/         # 프롬프트→LLM(L1)→L2→TTS→패키징, 더미 어댑터 포함
-├── ack.py            # 접수 확인 단축 경로 (사전 렌더 캐시)
-├── catalog.py        # 음원 카탈로그 (엔진 소유)
+├── domain.py         # 데이터 모델 (제출 페이로드 — 계약 대상, 판단 기록)
+├── format/           # 형식·코너·단계 정의(spec), config/formats 로더, 클락
+├── corners/          # 단계별 프롬프트 빌더(steps), 코너 진행 상태(run), persona 시스템 프롬프트(base)
+├── scheduler/        # 편성 관리자 — 버퍼 관리, 순서 보장 제출, 과도기 인용
+├── pipeline/         # 프롬프트→LLM(L1)→인용 검사→L2→TTS→패키징, 더미 어댑터 포함
+├── glue.py           # 접착 요소(코너 콜·마무리) 사전 렌더 — 기존 ack 캐시 대체
+├── catalog.py        # 로컬 개발·테스트용 더미 곡 목록 (곡 선정은 백엔드 — track.queued)
 ├── sources/rss.py    # RSS 수집기 (M2 실구현)
 ├── transport.py      # 백엔드 어댑터 (stdout 더미 / redis는 계약 확정 후)
-└── telemetry.py      # SQLite 계측 (generation_log, request_log, decision_log)
+└── telemetry.py      # SQLite 계측 (generation_log, request_log, decision_log, corner_log)
 ```
 
 ## 다음 단계
 
-설계 문서 9장 단계별 구현 계획(M0~M4)과 10장 확인 필요 사항을 참고하세요.
+설계 문서 9장 단계별 구현 계획(M3~M6)과 10장 확인 필요 사항을 참고하세요.
 제공자는 확정됐습니다(확인 3) — LLM `gpt-6-luna`(openai), TTS Cartesia. `generation_log`의 llm/tts 단계 지연은 버퍼 기준값(F-31) 실측에 씁니다.

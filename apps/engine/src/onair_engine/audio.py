@@ -23,7 +23,7 @@ def temp_path_for(path: Path) -> Path:
 class CachedTts:
     """TtsClient를 감싸 원자적 쓰기 + 텍스트 단위 캐시 + 길이 실측을 더한다.
 
-    ack·filler처럼 같은 문장이 반복되면 API를 다시 호출하지 않는다 (비용·지연 절감).
+    접착 문구·filler처럼 같은 문장이 반복되면 API를 다시 호출하지 않는다 (비용·지연 절감).
     캐시는 엔진 전용이며 백엔드와 공유하는 오디오 루트 밖에 둔다.
     """
 

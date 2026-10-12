@@ -1,0 +1,60 @@
+# 사연토크 형식 — 말 : 곡 = 5 : 5 [예시]. docs/CORNER_DESIGN.md 6·7절.
+format: talk
+label: 사연토크
+guide: 채팅은 언제든 편하게 보내 주시고, 길게 들려주고 싶은 이야기는 사연 보내기로 보내 주세요.
+
+# $main은 호스트가 고른 본 코너(2~3개)를 번갈아 놓는다
+host_corners: [story_corner, text_corner, topic_talk, dj_vs_listeners]
+default_main: [story_corner, topic_talk]   # 호스트가 고르지 않았을 때 — onair_schema DEFAULT_TALK_CORNERS와 같게
+cycle: [$main, music_intro, text_corner, music_intro, $main, music_intro]
+
+corners:
+  story_corner:
+    title: 사연 읽는 시간
+    budget_sec: [120, 300]
+    call: "{title}입니다. 오늘 도착한 사연 펼쳐 볼게요."
+    close: "{title}이었습니다."
+    requires: {board_story: 1}   # 게시판 사연은 M4(board.story 수신)부터 들어온다
+    fallback: topic_talk
+    steps:
+      - kind: glue
+        glue: call
+      - kind: story              # 사연 낭독 + DJ 이야기
+        items: board_story
+        repeat: 2
+      - kind: glue
+        glue: close
+    contract: {board_story: feature, chat: steer, message: defer}
+
+  text_corner:
+    title: 문자 소개
+    budget_sec: [60, 180]
+    call: "{title} 시간이에요. 보내 주신 이야기 읽어 볼게요."
+    close: "{title}였습니다. 계속 보내 주세요."
+    requires: {message: 2}       # 2건이 안 되면 이번 차례는 건너뛴다. message는 M4부터
+    steps:
+      - kind: glue
+        glue: call
+      - kind: text_read          # 문자 낭독 + 짧은 리액션
+        items: message
+        repeat: text_count
+      - kind: glue
+        glue: close
+    contract: {message: read, chat: quote}
+
+  dj_vs_listeners:
+    title: DJ 대 청취자
+    budget_sec: [180, 360]
+    call: "{title}! 제 선택과 여러분의 선택, 오늘은 누가 이길까요."
+    close: "오늘 {title}는 여기까지예요."
+    requires: {vote: 1}          # 투표(vote.open/result)는 M5부터
+    fallback: topic_talk
+    steps:
+      - kind: glue
+        glue: call
+      - kind: game_round
+        items: vote
+        repeat: 3
+      - kind: glue
+        glue: close
+    contract: {vote: solicit, chat: quote}

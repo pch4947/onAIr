@@ -1,12 +1,10 @@
-"""Corner 인터페이스 — 편성 확장점 (설계 문서 4.3, 확인 2 결정).
+"""모든 단계가 같이 쓰는 시스템 프롬프트 — persona 블록 (docs/persona.md 4절).
 
-기획서 4.2(코너 구성)가 확정되면 구현체를 교체/추가한다. 엔진 본체는 수정하지 않는다.
+코너·단계별 지시는 user 프롬프트에만 둔다 (corners/steps.py).
 """
 from __future__ import annotations
 
-from typing import ClassVar, Protocol
-
-from ..domain import Material, Prompt, ScheduleContext, StationProfile
+from ..domain import StationProfile
 from ..prompt_data import DATA_RULES, EXAMPLES, data_block
 
 # L1 생성단 안전 지시 — 별도 LLM 호출 없이 대본 생성 프롬프트에 내장한다 (설계 문서 4.6)
@@ -31,15 +29,21 @@ RADIO_CRAFT = (
 )
 
 
-def system_prompt(profile: StationProfile) -> str:
+# 뉴스 형식 — 주관 금지를 프롬프트로도 건다. 결정적으로 지키는 것은 L2 규칙이다 (CORNER_DESIGN 6.4절)
+PLAIN_RULES = "의견·평가·감정 표현 없이 사실만 전한다. 농담이나 입버릇을 쓰지 않는다."
+
+
+def system_prompt(profile: StationProfile, *, plain: bool = False) -> str:
     """persona 블록 조립 — docs/persona.md 4절 순서 (정체성 → 말투·예시 → 금지 → 출력 형식 → L1).
 
-    코너와 무관하게 같은 문자열이 나온다. 코너별 지시는 user 프롬프트에만 둔다.
+    코너와 무관하게 같은 문자열이 나온다. plain(주관 금지 코너)이면 입버릇을 빼고 PLAIN_RULES를 붙인다.
     """
     # 첫 문장 형식은 더미 LLM의 슬롯 추출(_PROFILE_RE)이 의존한다
     parts = [f"당신은 라디오 스테이션 [{profile.concept}]의 DJ {profile.dj_name}다.",
              f"말투는 {profile.tone}."]
-    if profile.signature_phrases:
+    if plain:
+        parts.append(PLAIN_RULES)
+    elif profile.signature_phrases:
         phrases = ", ".join(profile.signature_phrases)
         parts.append(f"입버릇은 {phrases}. 어울릴 때만 가끔 쓰고 매 멘트마다 넣지 않는다.")
     if profile.forbidden:
@@ -53,13 +57,3 @@ def system_prompt(profile: StationProfile) -> str:
                    f"문장과 내용은 그대로 가져다 쓰지 않는다.\n{data_block(EXAMPLES, examples)}")
     return prompt
 
-
-class Corner(Protocol):
-    corner_type: ClassVar[str]
-    expected_duration_sec: ClassVar[tuple[int, int]]  # 편성 관리자의 시간 계산용
-
-    async def gather(self, ctx: ScheduleContext) -> Material | None:
-        """소재 수집. None이면 이번 차례를 진행할 수 없음 — 스케줄러가 filler로 대체한다."""
-        ...
-
-    def build_prompt(self, material: Material, profile: StationProfile) -> Prompt: ...

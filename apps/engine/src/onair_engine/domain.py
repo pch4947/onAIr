@@ -1,7 +1,7 @@
 """도메인 모델 — 설계 문서 5장 데이터 모델의 코드 표현.
 
-세그먼트 제출 페이로드(5.1)와 정책 입출력(4.2)이 여기 정의된다.
-스키마 변경은 백엔드 파트와의 계약 합의 없이 하지 않는다.
+세그먼트 제출 페이로드(5.1)와 편성 관리자의 판단 기록이 여기 정의된다.
+제출 페이로드(SegmentSubmission) 변경은 백엔드 파트와의 계약 합의 없이 하지 않는다.
 """
 from __future__ import annotations
 
@@ -28,8 +28,9 @@ def to_audio_ref(audio_root: Path | str, path: Path | str) -> str:
 class SegmentKind(StrEnum):
     SPEECH = "speech"
     MUSIC = "music"
-    ACK = "ack"
     FILLER = "filler"
+    # 접착 요소(코너 콜 등). 백엔드가 받을 수 있게 되기 전(#103)까지는 SPEECH로 보낸다 — glue.py
+    GLUE = "glue"
 
 
 class RequestState(StrEnum):
@@ -65,7 +66,11 @@ class StationConfig:
     station_id: str
     profile: StationProfile
     broadcast_minutes: int
-    policy_name: str = "naive_fifo"
+    # 방송 형식과 호스트 선택 (CORNER_DESIGN 8절, 계약 v2 10.2절) — config/formats/{format}.yaml
+    format: str = "talk"
+    corners: list[str] | None = None  # talk: 본 코너. None이면 형식 기본값
+    news_sections: list[str] | None = None  # news: 분야. None이면 형식 기본값
+    intensity: str = "mid"  # 참여 강도 low | mid | high
     recent_segments: int = 8  # 방송 맥락 = 최근 N개 세그먼트 요약 (확인 10 결정)
     # 아래는 station.created로 오는 방 속성 (계약 3.3절). 로컬 설정 파일 실행에서는 비어 있다
     persona_id: str | None = None
@@ -78,7 +83,7 @@ class StationConfig:
 @dataclass
 class ListenerRequest:
     request_id: str
-    kind: str  # "story" | "mood"
+    kind: str  # v1 계약: "story" | "mood" | "song"
     body: str
     requester_ref: str
     received_at: float
@@ -87,12 +92,18 @@ class ListenerRequest:
 
 @dataclass
 class Material:
-    """코너가 수집한 소재 (RSS 아이템, 요청 본문, 곡 정보 등)."""
+    """단계 하나의 소재 — 코너가 꺼낸 항목과, 편성 관리자가 고른 청취자 입력."""
 
-    text: str = ""
-    request: ListenerRequest | None = None
-    track_id: str | None = None
-    extra: dict = field(default_factory=dict)
+    items: list[dict] = field(default_factory=list)  # 기사·사연·문자 등 (corners/run.py 출처별 형식)
+    track: dict | None = None  # 곡 소개면 그 곡 — 계약 3.4절 track. music_ref가 된다
+    quotes: list[ListenerRequest] = field(default_factory=list)  # 인용할 청취자 입력
+    topic: str | None = None  # 지금 화제 (Thread.topic)
+    label: str | None = None  # 뉴스 분야처럼 코너를 다른 소재로 돌릴 때의 이름
+    extra: dict = field(default_factory=dict)  # 단계별 부가 정보 (코너 예고 목록, 참여 안내 등)
+
+    @property
+    def track_ref(self) -> str | None:
+        return self.track["track_ref"] if self.track else None
 
 
 @dataclass
@@ -110,9 +121,11 @@ class Script:
 class GenerationJob:
     job_id: str
     corner_type: str
+    step: str  # 단계 유형 — corners/steps.py
     material: Material
     priority: int = 50
     reorderable: bool = True
+    plain: bool = False  # 주관 표현 금지 코너 — persona의 유머·입버릇을 끈다 (CORNER_DESIGN 6.4절)
 
 
 @dataclass
@@ -134,28 +147,25 @@ class SegmentSubmission:
 
 @dataclass
 class ScheduleContext:
-    """정책 판단 입력 스냅샷 (설계 문서 4.2).
-
-    실험에서 독립/매개 변수가 될 수 있는 값을 전부 담는 것이 목표.
-    """
+    """편성 관리자의 판단 입력 스냅샷 (ENGINE_ARCHITECTURE 4.1절). decision_log에 그대로 남는다."""
 
     now: float
     pending_requests: list[ListenerRequest]
     generated_buffer_sec: float
     inflight_generations: int
     backpressure: bool
-    order_position: int
-    next_slot: str
-    recent_arrival_rate: float = 0.0  # TODO(M4): 최근 창 기반 요청 도착률 실측
+    corner: str | None  # 진행 중인 코너
+    step_index: int  # 그 코너에서 다음에 할 단계
+    remaining_sec: float  # 지금까지 낸 오디오가 끝나는 시각부터 방송 종료까지
     # generated_buffer_sec의 근거 — "backend"(backpressure 보고 기준) | "engine"(자체 추정)
     buffer_source: str = "engine"
 
 
 @dataclass
 class Decision:
-    """정책 출력. ack 송출/생략은 1급 필드다 — 생략 결정도 기록된다 (RQ2)."""
+    """편성 관리자의 출력. 무엇을 만들었는지와 어떤 청취자 입력을 넣었는지 기록한다."""
 
-    action: str  # "generate" | "wait"
+    action: str  # "generate" | "glue" | "wait" | "idle"(엔딩까지 끝남)
     corner_type: str | None = None
-    request: ListenerRequest | None = None
-    send_ack: bool = False
+    step: str | None = None
+    quotes: list[str] = field(default_factory=list)  # 이 멘트에 넣은 입력의 request_id

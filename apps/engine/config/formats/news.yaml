@@ -1,0 +1,76 @@
+# 뉴스 형식 — 말 : 곡 = 7 : 3 [예시]. 청취자 입력을 방송에 반영하지 않는다 (CORNER_DESIGN D3).
+# 주관 표현 금지 — subjectivity: none이면 persona의 유머·입버릇을 끈다. 뉴스 L2 규칙은 M5.
+format: news
+label: 뉴스
+guide: ""   # 청취자 반영이 없으므로 방송에서 안내하지 않는다 (U7) — UI가 corner.changed로 표시
+
+# $section:<코너> — 호스트가 고른 분야마다 그 코너를 한 번씩, 사이에 브릿지 곡
+cycle: [headline, $section:section, recap, music_intro]
+default_sections: [general, it]   # onair_schema DEFAULT_NEWS_SECTIONS와 같게
+section_names: {general: 종합, economy: 경제, it: IT, sports: 스포츠, culture: 문화}
+
+corners:
+  opening:
+    title: 오프닝
+    budget_sec: [20, 60]
+    subjectivity: none
+    steps:
+      - kind: opening_greeting
+      - kind: corner_preview
+    contract: {chat: closed, message: closed, board_story: closed, song_request: closed}
+
+  closing:
+    title: 엔딩
+    budget_sec: [20, 60]
+    subjectivity: none
+    steps:
+      - kind: closing_farewell
+        items: track
+    contract: {chat: closed, message: closed, board_story: closed, song_request: closed}
+
+  music_intro:
+    title: 곡 소개
+    budget_sec: [5, 20]
+    subjectivity: none
+    steps:
+      - kind: music_intro
+        items: track
+    contract: {chat: closed, message: closed, board_story: closed, song_request: closed}
+
+  headline:
+    title: 헤드라인
+    budget_sec: [20, 60]
+    subjectivity: none
+    requires: {news: 1}
+    steps:
+      - kind: news_headline
+        items: news
+        take: 3
+    contract: {chat: closed, message: closed, board_story: closed, song_request: closed}
+
+  section:
+    title: 분야별 브리핑
+    budget_sec: [40, 150]
+    subjectivity: none
+    requires: {news: 1}
+    steps:
+      - kind: news_item
+        items: news
+        repeat: 3
+    contract: {chat: closed, message: closed, board_story: closed, song_request: closed}
+
+  recap:
+    title: 정리
+    budget_sec: [15, 45]
+    subjectivity: none
+    requires: {covered_news: 1}
+    steps:
+      - kind: news_recap
+    contract: {chat: closed, message: closed, board_story: closed, song_request: closed}
+
+  filler:
+    title: 브릿지
+    budget_sec: [5, 15]
+    subjectivity: none
+    steps:
+      - kind: filler
