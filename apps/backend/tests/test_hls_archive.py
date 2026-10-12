@@ -1,10 +1,11 @@
 """HlsPublisher의 VOD 아카이빙: 윈도우 밖으로 밀려난(retired) 세그먼트를 삭제하지 않고
 세션별 영구 manifest로 옮기며, stop()은 아직 라이브였던 것까지 마무리하고 flush한다."""
 from pathlib import Path
+import asyncio
 import sys
 import tempfile
 import unittest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from redis.exceptions import ConnectionError
 
@@ -151,3 +152,65 @@ class StartResilienceTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(publisher.started)
             finally:
                 await publisher.stop()
+
+
+class VodRegressionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stop_preserves_archived_retired_then_live_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            publisher = make_publisher(directory)
+            publisher.started = True
+            names = ['archived.ts', 'retired1.ts', 'retired2.ts', 'live.ts']
+            for name in names:
+                (publisher.directory / name).write_bytes(b'audio')
+            publisher.archive_segment(names[0], 4, True)
+            publisher.retired.extend([(9999, (names[1], 3, False)),
+                                      (9999, (names[2], 2, True))])
+            publisher.entries.append((names[3], 1, False))
+            await publisher.stop()
+            manifest = (publisher.directory / 'vod' / publisher.session / 'index.m3u8').read_text()
+            self.assertEqual([line for line in manifest.splitlines() if line.endswith('.ts')], names)
+            self.assertEqual(manifest.count('#EXT-X-DISCONTINUITY'), 2)
+            self.assertTrue(manifest.endswith('#EXT-X-ENDLIST\n'))
+            for name in names:
+                self.assertTrue((publisher.directory / 'vod' / publisher.session / name).is_file())
+
+    async def test_maintenance_retries_original_session_after_redis_recovers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = AsyncMock()
+            store.start.side_effect = [ConnectionError('offline'), None]
+            publisher = make_publisher(directory, store)
+            publisher.replay_started_at = 1234.5
+            publisher.journal = Mock(flush=AsyncMock())
+            pipe = AsyncMock()
+            pipe.__aenter__.return_value = pipe
+            pipe.lrange = Mock()
+            pipe.hgetall = Mock()
+            pipe.execute.return_value = ([], {})
+            publisher.redis = Mock(pipeline=Mock(return_value=pipe))
+            await publisher.register_replay()
+            self.assertFalse(publisher.replay_registered)
+            await publisher.register_replay()
+            self.assertEqual(store.start.await_count, 1)  # retry interval
+            publisher.replay_retry_at = 0
+            with patch('app.streaming.hls.asyncio.sleep', new=AsyncMock(side_effect=asyncio.CancelledError)):
+                with self.assertRaises(asyncio.CancelledError):
+                    await publisher.maintain()
+            self.assertTrue(publisher.replay_registered)
+            self.assertEqual(store.start.await_count, 2)
+            for call in store.start.await_args_list:
+                self.assertEqual(call.args, (publisher.session, 1234.5))
+            await publisher.register_replay()
+            self.assertEqual(store.start.await_count, 2)
+
+    async def test_registration_timeout_remains_retryable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = AsyncMock()
+            store.start.side_effect = TimeoutError
+            publisher = make_publisher(directory, store)
+            publisher.replay_started_at = 1000
+            await publisher.register_replay()
+            self.assertFalse(publisher.replay_registered)
+            store.start.side_effect = None
+            publisher.replay_retry_at = 0
+            await publisher.register_replay()
+            self.assertTrue(publisher.replay_registered)

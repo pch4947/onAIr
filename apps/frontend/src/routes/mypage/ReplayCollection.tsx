@@ -27,21 +27,25 @@ export function ReplayCollection({ queryKey, fetcher, emptyText, deleteMode }: R
   const replays = query.data?.replays ?? []
   const totalPages = Math.max(1, Math.ceil((query.data?.total ?? 0) / PAGE_SIZE))
 
-  const removeFromList = (replay: ReplaySession) => {
-    queryClient.setQueryData<{ replays: ReplaySession[]; total: number }>([queryKey, page], (old) =>
-      old ? { ...old, replays: old.replays.filter((r) => r.id !== replay.id), total: old.total - 1 } : old,
-    )
+  // Reconcile the selected page when a refetch reports a smaller collection.
+  if (query.data && page > totalPages) setPage(totalPages)
+
+  const removeFromList = () => {
+    // Both lists and all cached pages must reflect deletion/bookmark changes.
+    if (replays.length === 1 && page > 1) setPage(page - 1)
+    void queryClient.invalidateQueries({ queryKey: ['my-station-replays'] })
+    void queryClient.invalidateQueries({ queryKey: ['bookmarked-replays'] })
   }
 
   const unbookmarkDeleteMutation = useMutation({
     mutationFn: (replay: ReplaySession) => unbookmarkReplay(replay.id),
-    onSuccess: (_, replay) => removeFromList(replay),
+    onSuccess: () => removeFromList(),
   })
 
   const destroyDeleteMutation = useMutation({
     mutationFn: (replay: ReplaySession) => deleteReplay(replay.id),
-    onSuccess: (_, replay) => {
-      removeFromList(replay)
+    onSuccess: () => {
+      removeFromList()
       setConfirmTarget(null)
     },
     onError: () => setConfirmTarget(null),
@@ -60,7 +64,7 @@ export function ReplayCollection({ queryKey, fetcher, emptyText, deleteMode }: R
     return <p className="text-[13px] text-danger">목록을 불러오지 못했어요</p>
   }
 
-  if (!query.isLoading && replays.length === 0) {
+  if (!query.isLoading && replays.length === 0 && page === 1) {
     return <p className="text-[13px] text-text-muted">{emptyText}</p>
   }
 

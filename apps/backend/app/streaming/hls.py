@@ -47,6 +47,9 @@ class HlsPublisher:
         self.next_publish = 0.0
         self.session = uuid.uuid4().hex
         self.started = False
+        self.replay_started_at = None
+        self.replay_registered = False
+        self.replay_retry_at = 0.0
         self.journal = None
         self.ownership = None
         self.maintenance = None
@@ -78,16 +81,23 @@ class HlsPublisher:
             else:
                 self.fallback_source = self.directory / 'fallback.wav'
                 await asyncio.to_thread(write_fallback, self.fallback_source)
-        self.maintenance = asyncio.create_task(self.maintain(), name='broadcast-maintenance')
-        self.task = asyncio.create_task(self.run(), name="hls-publisher")
         self.started = True
-        if self.replay_sessions:
-            # 일시적인 Redis 장애가 앱 기동 자체를 막으면 안 됨; 다시듣기 세션 기록이 없어도
-            # 라이브 송출은 정상 동작한다 (Redis 재시도는 maintain()이 별도로 처리).
-            try:
-                await self.replay_sessions.start(self.session, time.time())
-            except (RedisError, TimeoutError):
-                log.warning('Failed to record replay session start for %s; Redis unavailable', self.session)
+        self.replay_started_at = time.time()
+        self.task = asyncio.create_task(self.run(), name="hls-publisher")
+        await self.register_replay()
+        self.maintenance = asyncio.create_task(self.maintain(), name='broadcast-maintenance')
+
+    async def register_replay(self):
+        if (not self.replay_sessions or self.replay_registered
+                or self.replay_started_at is None or time.monotonic() < self.replay_retry_at):
+            return
+        self.replay_retry_at = time.monotonic() + 5
+        try:
+            async with asyncio.timeout(3):
+                await self.replay_sessions.start(self.session, self.replay_started_at)
+            self.replay_registered = True
+        except (RedisError, TimeoutError):
+            log.warning('Replay registration deferred for %s; retrying', self.session)
 
     async def stop(self):
         for task in (self.task, self.maintenance, self.preparation):
@@ -101,12 +111,13 @@ class HlsPublisher:
             # 아직 라이브/유예기간 중이던 것까지 archive해서 stop 시점에 방송 끝부분이 날아가지 않게 함.
             # 여기서부터는 어떤 것도 예외를 던지면 안 됨: 아래의 세션/저널/소유권 정리와
             # 호출자 쪽 정리(Redis 클라이언트 종료 등)가 반드시 끝까지 실행돼야 하기 때문.
-            for name, duration, discontinuity in self.entries:
-                self.archive_segment(name, duration, discontinuity)
-            self.entries.clear()
+            # Retired chunks precede the current live window in broadcast order.
             for _, (name, duration, discontinuity) in self.retired:
                 self.archive_segment(name, duration, discontinuity)
             self.retired.clear()
+            for name, duration, discontinuity in self.entries:
+                self.archive_segment(name, duration, discontinuity)
+            self.entries.clear()
             if self.vod_entries:
                 try:
                     self.write_vod_manifest(final=True)
@@ -114,7 +125,10 @@ class HlsPublisher:
                     log.exception('Failed to finalize VOD manifest for session %s', self.session)
             if self.replay_sessions:
                 try:
-                    await self.replay_sessions.end(self.session, time.time())
+                    self.replay_retry_at = 0.0
+                    await self.register_replay()
+                    async with asyncio.timeout(3):
+                        await self.replay_sessions.end(self.session, time.time())
                 except (RedisError, TimeoutError):
                     log.warning('Failed to record replay session end for %s; Redis unavailable', self.session)
         if self.journal:
@@ -292,6 +306,7 @@ class HlsPublisher:
 
     async def maintain(self):
         while True:
+            await self.register_replay()
             now = time.monotonic()
             while self.timeline and self.timeline[0][1] <= now:
                 self.timeline.popleft()
