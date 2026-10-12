@@ -15,6 +15,7 @@ from .users import UserStore
 from .stations import StationStore
 from .board import BoardStore, CommentStore, LikeStore
 from .replays import ReplaySessionStore
+from .api import PresenceStore
 
 
 @asynccontextmanager
@@ -34,6 +35,7 @@ async def redis_lifespan(app):
     app.state.replay_sessions = ReplaySessionStore(client, app.state.settings.station_id)
     app.state.replay_bookmarks = LikeStore(
         client, f"{station_prefix}:replay-bookmarks", f"{station_prefix}:user-bookmarked-replays")
+    app.state.presence = PresenceStore(client, app.state.settings.station_id)
     headers = {'Authorization': f'Bearer {app.state.settings.engine_token}'} if app.state.settings.engine_token else {}
     engine_http = httpx.AsyncClient(base_url=app.state.settings.engine_api_url,
                                    headers=headers, timeout=httpx.Timeout(30, connect=3), trust_env=False)
