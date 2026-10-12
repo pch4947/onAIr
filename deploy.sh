@@ -81,9 +81,9 @@ fi
 # 엔진
 FULL_FOR_NEW_VENV=0
 ensure_venv apps/engine
-if [[ $FULL_FOR_NEW_VENV -eq 1 ]] || changed '^(apps/engine/pyproject\.toml|packages/onair_schema/)'; then
+if [[ $FULL_FOR_NEW_VENV -eq 1 ]] || changed '^(apps/engine/pyproject\.toml|packages/onair_schema/|deploy\.sh$)'; then
   log "engine: pip install"
-  apps/engine/.venv/bin/python -m pip install -q -e packages/onair_schema -e "apps/engine[redis]"
+  apps/engine/.venv/bin/python -m pip install -q -e packages/onair_schema -e "apps/engine[redis,api]"
 fi
 
 # 프론트엔드 (VITE_* 환경변수는 빌드 시점에 박히므로 .env 수정 후엔 --full)
