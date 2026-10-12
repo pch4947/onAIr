@@ -17,9 +17,31 @@ GROUP = "backend"
 
 # Dedicated keys owned by this module, on the single Redis instance used by this MVP.
 ACCEPT = """
+local kinds = {'hash','list','hash','hash','hash','hash'}
+for i=1,6 do
+ local t = redis.call('TYPE', KEYS[i]).ok
+ if t ~= 'none' and t ~= kinds[i] then return redis.error_reply('Unexpected segment key type') end
+end
 local old = redis.call('HGET', KEYS[1], ARGV[1])
 if old then
   if old == ARGV[2] then return 0 else return -1 end
+end
+if ARGV[3] == '1' and ARGV[4] ~= '' then
+ local found = nil
+ local playing = redis.call('HGET', KEYS[4], 'playing')
+ for _, id in ipairs(redis.call('LRANGE', KEYS[2], 0, -1)) do
+  local meta = redis.call('HGET', KEYS[3], id)
+  if id ~= playing and meta and cjson.decode(meta).track.track_ref == ARGV[4] then
+   local state = redis.call('HGET', KEYS[6], id)
+   local terminal = state and cjson.decode(state).state
+   if terminal ~= 'PUBLISHED' and terminal ~= 'PLAYED' and terminal ~= 'FAILED' then found = id; break end
+  end
+ end
+ if not found then return -2 end
+ local frozen = redis.call('HGET', KEYS[4], 'frozen')
+ if frozen then return -3 end
+ redis.call('HSET', KEYS[4], 'frozen', found, 'next', found)
+ redis.call('HSET', KEYS[5], ARGV[1], found)
 end
 redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
 redis.call('RPUSH', KEYS[2], ARGV[1])
@@ -110,10 +132,14 @@ class EngineConsumer:
             except ValueError:
                 await self.quarantine(entry_id, fields, "invalid_audio_path_or_file")
                 return
-            result = await self.redis.eval(ACCEPT, 2, self.prefix + ":segments",
-                                           self.prefix + ":queue", event.id, encoded)
-            if result == -1:
-                await self.quarantine(entry_id, fields, "segment_id_conflict")
+            intro_ref = event.music_ref if event.kind in ('speech', 'glue') else None
+            result = await self.redis.eval(ACCEPT, 6, self.prefix + ":segments",
+                self.prefix + ":queue", self.prefix + ':tracks', self.prefix + ':track-plan',
+                self.prefix + ':intro-tracks', self.prefix + ':segment-states', event.id, encoded,
+                '1' if self.settings.track_intro_enabled else '0', intro_ref or '')
+            if result < 0:
+                await self.quarantine(entry_id, fields,
+                    'segment_id_conflict' if result == -1 else 'track_unavailable_or_reserved')
                 return
         elif isinstance(event, (StationStarted, StationRejected)):
             await StationStore(self.redis, self.settings.station_id).result(
