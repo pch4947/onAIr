@@ -177,4 +177,5 @@ def test_track_source_prefers_backend_queued_track():
     assert tracks.take() == peeked  # artist_talk이 미리 본 곡을 그대로 소개한다
     tracks.queue({"track_ref": "yt:abc", "title": "밤편지", "artist": "아이유", "duration_ms": 1})
     assert tracks.take()["track_ref"] == "yt:abc"
-    assert tracks.take()["track_ref"].startswith("cat_dummy")  # 다음 track.queued 전까지는 더미
+    dummy = tracks.take()
+    assert dummy["track_ref"].startswith("cat_dummy") and dummy["dummy"]  # 다음 track.queued 전까지는 더미

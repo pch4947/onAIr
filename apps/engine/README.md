@@ -36,7 +36,7 @@ onair-engine --config config/station.example.yaml --max-segments 6 --demo-reques
 - 세그먼트 제출이 `SUBMIT {...}` JSON 라인으로 출력됩니다 (백엔드 계약 확정 전까지의 stdout 더미).
 - 생성된 오디오는 `var/audio/`, 계측 로그는 `var/engine_metrics.sqlite`에 쌓입니다.
 - `--max-segments` 없이 실행하면 엔딩까지 진행한 뒤 끝납니다 (Ctrl+C로 중단).
-- 로컬 실행도 실제 시간에 맞춰 만듭니다 — 곡 소개 멘트 뒤에는 그 곡 길이(더미 곡 약 3분)만큼 버퍼가 차므로 다음 멘트까지 기다립니다.
+- 곡은 백엔드가 `track.queued`로 알려 준 곡을 소개합니다. 그 전(#104)에는 더미 곡 이름으로 소개 멘트만 만들고, 더미 곡은 `music_ref`로 보내지 않으며 방송 시간에도 넣지 않습니다. 백엔드 곡이 오면 그 곡 길이만큼 버퍼가 차므로 다음 멘트까지 기다립니다.
 - 생성된 대본은 `SCRIPT seg_xxx [코너] 대본...` 라인으로 함께 출력됩니다.
 - 방송 형식은 설정 파일 `station.format` 또는 `--format music|talk|news`로 고릅니다. 코너와 순환 틀은 [config/formats/](config/formats/)에 있습니다 — 코너를 고치거나 더할 때 코드는 건드리지 않습니다.
 - 데모 요청은 채팅 인용을 허용하는 첫 단계(사연토크면 오프닝의 코너 예고)에서 인용됩니다. 뉴스 형식은 청취자 입력을 방송에 반영하지 않습니다.

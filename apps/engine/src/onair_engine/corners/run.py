@@ -27,6 +27,7 @@ class Thread:
 class TrackSource:
     """다음에 틀 곡 — 백엔드가 track.queued로 알려준 곡, 없으면 로컬 더미 목록 (계약 3.4절).
 
+    더미 곡은 실제로 재생되지 않는다 — dummy 표시를 달아 music_ref와 방송 시간 계산에서 뺀다.
     백엔드는 다음 곡을 항상 하나 미리 정해 둔다. 엔진이 소개 멘트에 그 곡을 쓰면(take) 소비한 것이고,
     백엔드는 곡이 시작될 때 그다음 곡을 다시 보낸다. 그 전에 곡 소개 차례가 오면 더미 곡으로 메운다
     (백엔드가 track.queued를 보내기 전·로컬 실행 — #104).
@@ -59,7 +60,7 @@ class TrackSource:
         if t is None:
             return None
         return {"track_ref": t.track_id, "title": t.title, "artist": t.artist,
-                "duration_ms": t.duration_ms, "mood": t.mood}
+                "duration_ms": t.duration_ms, "mood": t.mood, "dummy": True}
 
 
 class MaterialSources:

@@ -163,7 +163,17 @@ def test_short_broadcast_reaches_closing_and_stops(tmp_path):
     asyncio.run(engine.run())  # max_segments 없이 — 엔딩을 마치면 스스로 끝난다
     corners = [s.corner_type for s in transport.segments]
     assert corners[0] == "opening" and corners[-1] == "closing"
-    assert transport.segments[-1].music_ref  # 마지막 곡
+
+
+def test_dummy_track_is_introduced_but_not_sent_or_timed(tmp_path):
+    # 백엔드가 track.queued를 보내기 전(#104) — 더미 곡은 실제로 재생되지 않는다.
+    # music_ref로 보내지 않고, 방송 시간에도 더하지 않는다 (더하면 엔딩이 일찍 온다)
+    engine, transport = _engine(tmp_path, format="music")
+    asyncio.run(engine.run(max_segments=5))
+    intros = [s for s in transport.segments if s.corner_type == "music_intro"]
+    assert intros and all(s.music_ref is None for s in intros)
+    s = engine.scheduler
+    assert s._produced_ms == sum(seg.duration_ms for seg in transport.segments)
 
 
 def test_glue_prerender_covers_format_corners(tmp_path):

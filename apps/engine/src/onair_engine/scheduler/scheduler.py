@@ -302,7 +302,7 @@ class Scheduler:
                     await self._requeue_or_reject(req)
         finally:
             self._inflight -= 1
-            # 실패해도 순번은 비워야 뒤 순번이 나간다
+            # 실패해도 순번은 비워야 뒤 순번이 나간다. 곡 길이는 백엔드가 실제로 틀 곡(music_ref)만 센다
             track_ms = int((job.material.track or {}).get("duration_ms") or 0)
             await self._complete(seq, sub, track_ms if sub and sub.music_ref else 0)
 

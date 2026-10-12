@@ -103,7 +103,10 @@ class Material:
 
     @property
     def track_ref(self) -> str | None:
-        return self.track["track_ref"] if self.track else None
+        """music_ref로 나갈 곡. 더미 곡은 백엔드가 틀 수 없으므로 싣지 않는다 (곡 소개 멘트만 나간다)."""
+        if not self.track or self.track.get("dummy"):
+            return None
+        return self.track["track_ref"]
 
 
 @dataclass
