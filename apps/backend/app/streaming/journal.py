@@ -78,7 +78,9 @@ class Journal:
             self.db.execute('INSERT INTO jobs VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET '
                             'status=excluded.status, payload=excluded.payload',
                             (segment['id'], state, json.dumps(segment)))
-            request_id = segment.get('request_ref') if segment.get('kind') == 'speech' and segment.get('corner_type') == 'request_reply' else None
+            # Quotes can belong to any speech corner, not just request_reply.
+            # Non-speech assets (including legacy ack) do not complete requests.
+            request_id = segment.get('request_ref') if segment.get('kind') == 'speech' else None
             self._enqueue('encoding.failed' if state == 'FAILED' else 'state.transition',
                           dict(segment_id=segment['id'], state=state, at=at), request_id or '', at)
 
