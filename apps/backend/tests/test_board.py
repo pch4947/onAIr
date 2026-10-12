@@ -2,7 +2,7 @@
 import json
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 from redis.exceptions import ConnectionError
@@ -132,7 +132,7 @@ class FakeSetPipeline:
                 results.append(call[2] in self.redis.sets.get(call[1], set()))
             elif call[0] == "zrevrange":
                 _, key, start, stop = call
-                members = sorted(self.redis.zsets.get(key, {}).items(), key=lambda kv: kv[1], reverse=True)
+                members = sorted(self.redis.zsets.get(key, {}).items(), key=lambda kv: (kv[1], kv[0]), reverse=True)
                 ids = [member for member, _ in members]
                 stop = len(ids) - 1 if stop == -1 else stop
                 results.append(ids[start:stop + 1])
@@ -192,14 +192,24 @@ class LikeStoreTests(unittest.IsolatedAsyncioTestCase):
 class LikeStoreUserIndexTests(unittest.IsolatedAsyncioTestCase):
     async def test_like_and_unlike_update_user_index_ordered_by_recency(self):
         store = LikeStore(FakeRedisSet(), "backend:board:post-likes", "backend:board:user-liked-posts")
-        await store.like("p1", "u1")
-        await store.like("p2", "u1")
+        with patch("app.board.time", SimpleNamespace(time=Mock(side_effect=[1000.0, 1001.0]))):
+            await store.like("p1", "u1")
+            await store.like("p2", "u1")
         ids, total = await store.liked_by("u1", 0, 10)
         self.assertEqual(total, 2)
         self.assertEqual(ids, ["p2", "p1"])
 
         await store.unlike("p2", "u1")
         self.assertEqual(await store.liked_by("u1", 0, 10), (["p1"], 1))
+
+    async def test_equal_timestamps_use_reverse_member_order(self):
+        store = LikeStore(FakeRedisSet(), "likes", "user-index")
+        with patch("app.board.time", SimpleNamespace(time=Mock(return_value=1000.0))):
+            for post_id in ("p1", "p3", "p2"):
+                await store.like(post_id, "u1")
+        # Redis ZREVRANGE breaks score ties by reverse lexicographical member order.
+        self.assertEqual(await store.liked_by("u1", 0, 10), (["p3", "p2", "p1"], 3))
+        self.assertEqual(await store.liked_by("u1", 1, 1), (["p2"], 3))
 
     async def test_liked_by_paginates(self):
         store = LikeStore(FakeRedisSet(), "prefix", "user-index")
@@ -274,8 +284,9 @@ class MyAndLikedPostsApiTests(unittest.IsolatedAsyncioTestCase):
             hmget=AsyncMock(side_effect=lambda key, ids: [raw.get(i) for i in ids])))
         app.state.post_likes = LikeStore(FakeRedisSet(), "backend:board:post-likes",
                                          "backend:board:user-liked-posts")
-        await app.state.post_likes.like("p1", "u1")
-        await app.state.post_likes.like("p2", "u1")
+        with patch("app.board.time", SimpleNamespace(time=Mock(side_effect=[1000.0, 1001.0]))):
+            await app.state.post_likes.like("p1", "u1")
+            await app.state.post_likes.like("p2", "u1")
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
             res = await client.get("/api/board/posts/liked")
             self.assertEqual(res.status_code, 200)
@@ -352,8 +363,9 @@ class MyAndLikedPostsApiTests(unittest.IsolatedAsyncioTestCase):
             hmget=AsyncMock(side_effect=lambda key, ids: [raw.get(i) for i in ids])))
         app.state.post_likes = LikeStore(FakeRedisSet(), "backend:board:post-likes",
                                          "backend:board:user-liked-posts")
-        for i in range(5):
-            await app.state.post_likes.like(f"l{i}", "u1")
+        with patch("app.board.time", SimpleNamespace(time=Mock(side_effect=range(1000, 1005)))):
+            for i in range(5):
+                await app.state.post_likes.like(f"l{i}", "u1")
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
             res = await client.get("/api/board/posts/liked", params={"offset": 4, "limit": 2})
             body = res.json()
