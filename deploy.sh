@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# onAIr VM 배포 스크립트 — 저장소 루트에서 `bash deploy.sh`
+#
+# 1. git pull (main)
+# 2. 바뀐 부분만 의존성 설치 / 프론트 빌드
+# 3. Redis 컨테이너 기동 확인
+# 4. systemd 서비스 재시작
+#
+# 옵션:
+#   --full   변경 여부와 상관없이 전부 설치·빌드
+#   --no-pull  pull 없이 설치·빌드·재시작만
+#
+# 서비스 이름은 환경변수로 바꿀 수 있습니다 (없는 서비스는 건너뜀):
+#   SERVICES="onair-backend onair-engine" bash deploy.sh
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BRANCH="${BRANCH:-main}"
+SERVICES="${SERVICES:-onair-backend onair-engine}"
+
+FULL=0
+PULL=1
+for arg in "$@"; do
+  case "$arg" in
+    --full) FULL=1 ;;
+    --no-pull) PULL=0 ;;
+    *) echo "알 수 없는 옵션: $arg" >&2; exit 2 ;;
+  esac
+done
+
+log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
+warn() { printf '\033[1;33m[warn] %s\033[0m\n' "$*"; }
+
+cd "$ROOT"
+
+# ---------------------------------------------------------------- 1. pull
+OLD_HEAD="$(git rev-parse HEAD)"
+if [[ $PULL -eq 1 ]]; then
+  log "git pull origin $BRANCH"
+  if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+    warn "VM에 커밋 안 된 수정이 있습니다. pull이 실패하면 'git status'로 확인하세요."
+  fi
+  git fetch origin "$BRANCH"
+  git checkout "$BRANCH"
+  git pull --ff-only origin "$BRANCH"
+fi
+NEW_HEAD="$(git rev-parse HEAD)"
+
+if [[ "$OLD_HEAD" == "$NEW_HEAD" ]]; then
+  echo "새 커밋 없음 ($NEW_HEAD)"
+  CHANGED=""
+else
+  echo "$OLD_HEAD -> $NEW_HEAD"
+  CHANGED="$(git diff --name-only "$OLD_HEAD" "$NEW_HEAD")"
+fi
+
+# 경로 패턴(정규식)에 해당하는 파일이 바뀌었거나 --full이면 true
+changed() { [[ $FULL -eq 1 ]] || grep -qE "$1" <<<"$CHANGED"; }
+
+# ---------------------------------------------------------------- 2. 의존성/빌드
+ensure_venv() {
+  local dir="$1"
+  if [[ ! -x "$dir/.venv/bin/python" ]]; then
+    log "$dir: venv 생성"
+    python3 -m venv "$dir/.venv"
+    FULL_FOR_NEW_VENV=1
+  fi
+}
+
+# 백엔드
+FULL_FOR_NEW_VENV=0
+ensure_venv apps/backend
+if [[ $FULL_FOR_NEW_VENV -eq 1 ]] || changed '^(apps/backend/pyproject\.toml|packages/onair_schema/)'; then
+  log "backend: pip install"
+  apps/backend/.venv/bin/python -m pip install -q -e packages/onair_schema -e apps/backend
+fi
+
+# 엔진
+FULL_FOR_NEW_VENV=0
+ensure_venv apps/engine
+if [[ $FULL_FOR_NEW_VENV -eq 1 ]] || changed '^(apps/engine/pyproject\.toml|packages/onair_schema/)'; then
+  log "engine: pip install"
+  apps/engine/.venv/bin/python -m pip install -q -e packages/onair_schema -e "apps/engine[redis]"
+fi
+
+# 프론트엔드 (VITE_* 환경변수는 빌드 시점에 박히므로 .env 수정 후엔 --full)
+if [[ ! -d apps/frontend/node_modules ]] || changed '^apps/frontend/package(-lock)?\.json$'; then
+  log "frontend: npm ci"
+  (cd apps/frontend && npm ci)
+fi
+if [[ ! -d apps/frontend/dist ]] || changed '^apps/frontend/'; then
+  log "frontend: npm run build"
+  (cd apps/frontend && npm run build)
+fi
+
+# .env 누락 경고 (git에 없으므로 pull로 생기지 않음)
+for d in apps/backend apps/engine apps/frontend; do
+  [[ -f "$d/.env" ]] || warn "$d/.env 없음 — $d/.env.example 참고해서 만들어주세요."
+done
+
+# ---------------------------------------------------------------- 3. Redis
+if command -v docker >/dev/null 2>&1; then
+  log "redis: docker compose up -d"
+  docker compose up -d redis
+else
+  warn "docker 없음 — Redis 기동 확인 생략"
+fi
+
+# ---------------------------------------------------------------- 4. 재시작
+log "서비스 재시작"
+restarted=0
+for svc in $SERVICES; do
+  if systemctl list-unit-files "$svc.service" --no-legend 2>/dev/null | grep -q "$svc"; then
+    sudo systemctl restart "$svc"
+    if systemctl is-active --quiet "$svc"; then
+      echo "  $svc: active"
+    else
+      warn "$svc 기동 실패 — journalctl -u $svc -n 50"
+    fi
+    restarted=1
+  else
+    warn "$svc.service 없음 — 건너뜀"
+  fi
+done
+if [[ $restarted -eq 0 ]]; then
+  warn "재시작한 서비스가 없습니다. 직접 띄운 프로세스라면 수동으로 재시작하세요."
+fi
+
+log "배포 완료 ($(git rev-parse --short HEAD))"

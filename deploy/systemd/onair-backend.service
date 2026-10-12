@@ -1,0 +1,17 @@
+[Unit]
+Description=onAIr backend (FastAPI)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__ROOT__/apps/backend
+# 설정은 apps/backend/.env에서 앱이 직접 읽음
+ExecStart=__ROOT__/apps/backend/.venv/bin/python -m app
+Restart=on-failure
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
