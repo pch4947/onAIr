@@ -1,0 +1,19 @@
+[Unit]
+Description=onAIr script engine (serve mode)
+After=network-online.target docker.service onair-backend.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__ROOT__/apps/engine
+# 키(OPENAI_API_KEY, CARTESIA_API_KEY)·Redis 주소는 apps/engine/.env에서 엔진이 직접 읽음
+# 보이스는 방마다 station.created의 persona.voice로 정해지므로 지정하지 않음
+ExecStart=__ROOT__/apps/engine/.venv/bin/onair-engine --serve --transport redis \
+    --llm openai --llm-model gpt-6-luna --tts cartesia
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
