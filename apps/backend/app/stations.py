@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from onair_schema import Persona, PersonaForm, StationCreated
 from onair_schema.persona import text
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from redis.exceptions import RedisError
 
 from .auth import get_current_user
@@ -57,7 +57,33 @@ class StationInput(BaseModel):
     persona: Persona
     topic: text(60) | None = None
     policy: Literal['naive_fifo'] = 'naive_fifo'
+    format: Literal['music', 'talk', 'news'] = Field(default='talk', description='M3 engine required for format selection')
+    corners: list[Literal['story_corner', 'text_corner', 'topic_talk', 'dj_vs_listeners']] | None = Field(
+        default=None, min_length=2, max_length=3, description='Talk format only; omitted uses engine defaults')
+    news_sections: list[Literal['general', 'economy', 'it', 'sports', 'culture']] | None = Field(
+        default=None, min_length=2, max_length=3, description='News format only; omitted uses engine defaults')
+    intensity: Literal['low', 'mid', 'high'] = Field(default='mid', description='Ignored by the engine for news')
     # Music playback is not implemented yet; do not silently accept a first_song.
+
+    @model_validator(mode='after')
+    def validate_format_options(self):
+        for name, expected in (('corners', 'talk'), ('news_sections', 'news')):
+            values = getattr(self, name)
+            if values is not None:
+                if self.format != expected:
+                    raise ValueError(f'{name} is only valid for {expected}')
+                if len(set(values)) != len(values):
+                    raise ValueError(f'{name} must not contain duplicates')
+        return self
+
+    def format_options(self):
+        names = {'format', 'corners', 'news_sections', 'intensity'}
+        if not self.model_fields_set & names:
+            return {}
+        return self.model_dump(include=names)
+
+    def legacy_fields(self):
+        return self.model_dump(exclude={'format', 'corners', 'news_sections', 'intensity'})
 
 
 class DraftInput(BaseModel):
@@ -77,9 +103,12 @@ class StationStore:
         self.key = f'backend:{station_id}:station'
 
     async def create(self, body, owner, retry_key):
-        fingerprint = hashlib.sha256(body.model_dump_json().encode()).hexdigest()
+        # Preserve fingerprints and wire shape for clients that omit M3 fields.
+        fields = body.legacy_fields() | body.format_options()
+        fingerprint = hashlib.sha256(json.dumps(fields, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
         persona = body.persona.model_copy(update={'persona_id': 'psn_' + uuid4().hex})
-        payload = StationCreated(**{**body.model_dump(), 'persona': persona}).model_dump()
+        payload = StationCreated(**{**body.legacy_fields(), 'persona': persona}).model_dump(
+            exclude={'format', 'corners', 'news_sections', 'intensity', 'experiment'}) | body.format_options()
         now = time.time()
         record = dict(station_id=self.station_id, owner_id=owner, status='preparing',
                       created_at=now, updated_at=now, config=payload,

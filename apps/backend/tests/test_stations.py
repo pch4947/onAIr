@@ -8,6 +8,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock
 import uuid
+import hashlib
+from pydantic import ValidationError
 
 import httpx
 from redis.asyncio import Redis
@@ -25,6 +27,41 @@ BODY = {'broadcast_minutes': 30, 'persona': {
     'style': {'formality': 'polite', 'energy': 'low', 'humor': 'rare'},
     'voice': 'dummy-feminine', 'dj_name': '새벽', 'concept': '스터디 방송',
     'tone': '차분한 존댓말', 'examples': ['안녕하세요.', '반가워요.', '쉬어 가요.']}}
+
+
+class FormatInputTests(unittest.TestCase):
+    def test_defaults_preserve_legacy_wire_and_fingerprint(self):
+        body = StationInput(**BODY)
+        self.assertEqual(body.format, 'talk')
+        self.assertEqual(body.format_options(), {})
+        self.assertEqual(body.legacy_fields(), BODY | {'topic': None, 'policy': 'naive_fifo'} | {
+            'persona': body.persona.model_dump()})
+        from pydantic import BaseModel
+        from onair_schema import Persona
+        class OldInput(BaseModel):
+            broadcast_minutes: int
+            persona: Persona
+            topic: str | None = None
+            policy: str = 'naive_fifo'
+        self.assertEqual(json.dumps(body.legacy_fields(), ensure_ascii=False, separators=(',', ':')),
+                         OldInput(**BODY).model_dump_json())
+
+    def test_formats_match_engine_m3_options(self):
+        for fields in [{'format': 'music', 'intensity': 'low'},
+                       {'format': 'talk', 'corners': ['story_corner', 'topic_talk'], 'intensity': 'high'},
+                       {'format': 'news', 'news_sections': ['general', 'it']}]:
+            body = StationInput(**(BODY | fields))
+            self.assertEqual(body.format_options()['format'], fields['format'])
+            self.assertNotIn('experiment', body.format_options())
+
+    def test_mismatched_duplicate_unknown_or_experiment_fields_rejected(self):
+        for fields in [{'format': 'music', 'corners': ['story_corner', 'topic_talk']},
+                       {'news_sections': ['general', 'it']},
+                       {'corners': ['story_corner', 'story_corner']},
+                       {'corners': ['topic_talk']}, {'corners': ['unknown', 'topic_talk']},
+                       {'format': 'news', 'news_sections': ['it', 'it']}, {'experiment': None}]:
+            with self.subTest(fields=fields), self.assertRaises(ValidationError):
+                StationInput(**(BODY | fields))
 
 
 class StationApiTests(unittest.IsolatedAsyncioTestCase):
@@ -97,6 +134,21 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipUnless(os.environ.get('ONAIR_INTEGRATION_TEST') == '1', 'Requires Redis')
 class StationRedisTests(unittest.IsolatedAsyncioTestCase):
+    async def test_format_selection_is_saved_and_forwarded_once(self):
+        body = StationInput(**(BODY | {'format': 'news', 'news_sections': ['general', 'it']}))
+        first = await self.store.create(body, 'u1', 'format-retry')
+        second = await self.store.create(body, 'u1', 'format-retry')
+        self.assertEqual(first, second)
+        entries = [fields for _, fields in await self.redis.xrange('engine:control')
+                   if fields.get('station_id') == self.station]
+        self.assertEqual(len(entries), 1)
+        payload = json.loads(entries[0]['payload'])
+        self.assertEqual(payload['format'], 'news')
+        self.assertEqual(payload['news_sections'], ['general', 'it'])
+        self.assertEqual(payload['intensity'], 'mid')
+        self.assertNotIn('experiment', payload)
+        self.assertEqual(first['config'], payload)
+
     async def asyncSetUp(self):
         self.station = 'st_creation_' + uuid.uuid4().hex
         # Separate logical DB: never clean or consume the user's engine:control stream.

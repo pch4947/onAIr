@@ -45,6 +45,25 @@ FastAPI 형식 오류는 `detail` 배열로 원래 형태를 유지한다.
 `voice` 예시는 dummy TTS용이다. 실제 TTS에서는 해당 제공자의 유효한 ID를 사용한다.
 `persona_id`는 전송하지 않는다. `first_song`은 아직 재생 경로가 없어 422로 거부한다.
 
+### 방송 형식 선택 (#102 백엔드)
+
+같은 본문에 다음 선택 필드를 추가할 수 있다. FastAPI `/docs`에도 필드와 enum이 노출된다.
+
+| 필드 | 허용 값 / 제한 |
+| --- | --- |
+| `format` | `music`, `talk`, `news`; 기본 `talk` |
+| `corners` | talk만; story_corner/text_corner/topic_talk/dj_vs_listeners 중 중복 없이 2~3개 |
+| `news_sections` | news만; general/economy/it/sports/culture 중 중복 없이 2~3개 |
+| `intensity` | low/mid/high; 기본 mid, news에서는 엔진이 무시 |
+
+`corners`·`news_sections`를 생략하면 엔진 기본 편성을 사용한다. `experiment`는 호스트 API에서
+받지 않으며 전달하지 않는다(422). 프론트 화면은 별도 작업이다.
+
+선택 필드가 하나도 없는 기존 요청은 기존 v1 페이로드와 재시도 지문을 유지한다.
+선택 필드가 있는 요청은 `station.created`에 추가 필드를 전달한다. 이 요청으로 방송을 시작하려면
+엔진 M3(PR #108)의 공용 스키마·엔진 변경이 먼저 배포되어야 한다. 현재 v1 엔진은 새 필드를
+거부할 수 있으므로 백엔드 API 준비만으로 전체 형식 선택 기능이 완료되는 것은 아니다.
+
 ## 전달과 상태
 
 1. 스키마 검증 → 최종 persona·방송 설정 저장 + `engine:control`에 `station.created` 발행.
