@@ -31,6 +31,7 @@ class Settings:
     youtube_max_seconds: int = 600
     lavalink_url: str = 'http://127.0.0.1:2333'
     lavalink_password: str | None = field(default=None, repr=False)
+    bgm_audio: Path | None = None
 
 
 def load_settings() -> Settings:
@@ -73,4 +74,6 @@ def load_settings() -> Settings:
                     engine_token=os.environ.get("ONAIR_ENGINE_TOKEN"),
                     youtube_max_seconds=youtube_max_seconds,
                     lavalink_url=os.environ.get('ONAIR_LAVALINK_URL', Settings.lavalink_url).rstrip('/'),
-                    lavalink_password=os.environ.get('ONAIR_LAVALINK_PASSWORD'))
+                    lavalink_password=os.environ.get('ONAIR_LAVALINK_PASSWORD'),
+                    bgm_audio=Path(os.environ['ONAIR_BGM_AUDIO']).expanduser().resolve()
+                    if os.environ.get('ONAIR_BGM_AUDIO') else None)

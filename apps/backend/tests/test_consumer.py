@@ -69,6 +69,20 @@ class ConsumerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await self.consumer.handle(entry_id, fields)
         return entry_id, fields
 
+    async def test_glue_shared_file_and_duplicate_delivery(self):
+        root = self.settings.audio_dir / self.station
+        root.mkdir()
+        (root / 'one.wav').write_bytes(b'shared glue')
+        first = {**payload(self.station), 'kind': 'glue', 'request_ref': 'req_glue'}
+        entry_id, fields = await self.deliver(first)
+        await self.consumer.handle(entry_id, fields)
+        await self.deliver({**first, 'id': 'seg_two'})
+        self.assertEqual(await self.redis.lrange(self.consumer.prefix + ':queue', 0, -1),
+                         ['seg_one', 'seg_two'])
+        self.assertTrue((root / 'one.wav').exists())
+        self.assertIsNone(await self.redis.hget(self.consumer.prefix + ':request-states', 'req_glue'))
+        self.assertEqual((await self.redis.xpending(self.consumer.stream, GROUP))['pending'], 0)
+
     async def test_real_engine_duplicate_and_restart(self):
         from onair_engine.domain import StationConfig, StationProfile
         from onair_engine.engine import EngineSettings

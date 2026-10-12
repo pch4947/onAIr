@@ -78,6 +78,8 @@ class HlsPublisher:
         if self.settings.fallback_mode == 'music':
             if self.settings.fallback_audio:
                 self.fallback_source = self.settings.fallback_audio
+            elif self.settings.bgm_audio:
+                self.fallback_source = self.settings.bgm_audio
             else:
                 self.fallback_source = self.directory / 'fallback.wav'
                 await asyncio.to_thread(write_fallback, self.fallback_source)
@@ -139,7 +141,7 @@ class HlsPublisher:
             self.ownership = None
         self.ready = False
 
-    async def encode(self, source: Path | None):
+    async def encode(self, source: Path | None, *, bgm_duration=None):
         # Only completed encodes are exposed; staging is outside the HTTP directory.
         with tempfile.TemporaryDirectory(prefix="onair-hls-") as staging:
             output = Path(staging)
@@ -148,7 +150,17 @@ class HlsPublisher:
                 args += ["-i", str(source)]
             else:
                 args += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", "4"]
-            args += ["-map", "0:a:0", "-vn", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
+            if bgm_duration is not None:
+                args += ['-stream_loop', '-1', '-i', str(self.settings.bgm_audio),
+                    '-filter_complex',
+                    '[0:a]loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000[voice];'
+                    '[1:a]aresample=48000,volume=0.177828,afade=t=in:d=0.3,'
+                    f'afade=t=out:st={max(0, bgm_duration - 0.3):.6f}:d=0.3[bed];'
+                    '[voice][bed]amix=inputs=2:duration=first:normalize=0,'
+                    'alimiter=limit=0.95:level=0[out]', '-map', '[out]', '-t', str(bgm_duration)]
+            else:
+                args += ['-map', '0:a:0', '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11']
+            args += ["-vn",
                      "-ar", "48000", "-ac", "2", "-c:a", "aac", "-b:a", "128k",
                      "-f", "hls", "-hls_time", "4", "-hls_list_size", "0",
                      "-hls_segment_filename", str(output / "chunk_%05d.ts"), str(output / "local.m3u8")]
@@ -300,7 +312,7 @@ class HlsPublisher:
             return None
         chosen = candidates[0]
         for row in candidates[1:]:
-            if (row.kind == 'ack' or row.corner_type == 'request_reply') and row.priority < chosen.priority:
+            if (row.kind == 'ack' or (row.kind == 'speech' and row.corner_type == 'request_reply')) and row.priority < chosen.priority:
                 chosen = row
         return chosen
 
@@ -368,7 +380,10 @@ class HlsPublisher:
             started = time.monotonic()
             source = await asyncio.to_thread(validate_audio, self.settings.audio_dir, segment)
             try:
-                chunks = await self.encode(source)
+                if self.settings.bgm_audio and segment.kind in ('speech', 'ack', 'filler', 'glue'):
+                    chunks = await self.encode(source, bgm_duration=segment.duration_ms / 1000)
+                else:
+                    chunks = await self.encode(source)
             except TimeoutError as exc:
                 raise ValueError('Audio encoding timed out') from exc
             self.journal.measure(segment.id, 'encode', (time.monotonic() - started) * 1000)

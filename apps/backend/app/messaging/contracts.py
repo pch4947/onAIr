@@ -17,7 +17,7 @@ class Segment(BaseModel):
     audio_ref: Annotated[str, Field(min_length=1, max_length=1024)]
     duration_ms: Annotated[int, Field(gt=0)]
     corner_type: Text
-    kind: Literal["speech", "music", "ack", "filler"]
+    kind: Literal["speech", "music", "ack", "filler", "glue"]
     priority: Annotated[int, Field(ge=0, le=100)]
     reorderable: bool
     request_ref: Text | None
