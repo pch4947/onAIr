@@ -10,7 +10,7 @@ import shutil
 import sys
 import tempfile
 import time
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import parse_qs, urlsplit
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -19,6 +19,7 @@ from redis.exceptions import RedisError
 
 from .messaging.contracts import Segment, validate_audio
 from .stations import User
+from .streaming.tracks import REGISTER
 
 router = APIRouter(prefix='/api/stations')
 logger = logging.getLogger(__name__)
@@ -51,6 +52,8 @@ def youtube_id(value):
 class TrackInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
     url: str = Field(max_length=2048)
+    source: Literal['playlist', 'request', 'vote'] = 'playlist'
+    request_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     @field_validator('url')
     @classmethod
@@ -61,8 +64,8 @@ class TrackInput(BaseModel):
 
 # Validate key types before any write: Lua errors do not roll back earlier writes.
 ENQUEUE = """
-local kinds = {'hash', 'hash', 'list', 'string'}
-for i=1,4 do
+local kinds = {'hash', 'hash', 'list', 'string', 'hash', 'hash', 'stream', 'hash', 'list'}
+for i=1,9 do
  local t = redis.call('TYPE', KEYS[i]).ok
  if t ~= 'none' and t ~= kinds[i] then return redis.error_reply('Unexpected music key type') end
 end
@@ -75,8 +78,7 @@ if old then return old end
 redis.call('HSET', KEYS[2], ARGV[1], ARGV[2])
 redis.call('RPUSH', KEYS[3], ARGV[1])
 redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
-return ARGV[3]
-"""
+""" + REGISTER + "return ARGV[3]"
 
 
 async def run_process(args, timeout, *, env=None):
@@ -144,13 +146,14 @@ class MusicService:
             manifest.write_text(json.dumps(metadata), encoding='utf-8')
         return audio, metadata
 
-    async def enqueue(self, video_id, owner, retry_key):
+    async def enqueue(self, video_id, owner, retry_key, source='playlist', request_id=None):
         segment_id = 'music_' + hashlib.sha256(f'{owner}:{retry_key}'.encode()).hexdigest()
         async def existing():
             raw = await self.redis.hget(self.prefix + ':music-submissions', segment_id)
             if raw:
                 result = json.loads(raw)
-                if result['track']['track_ref'] != 'yt:' + video_id:
+                if (result['track']['track_ref'] != 'yt:' + video_id
+                        or result.get('source', 'playlist') != source or result.get('request_id') != request_id):
                     raise HTTPException(409, 'Idempotency-Key already used for another video')
                 return result
         async with asyncio.timeout(3):
@@ -167,12 +170,18 @@ class MusicService:
                 request_ref=None, music_ref=track['track_ref'], created_at=time.time())
             validate_audio(self.settings.audio_dir, segment)
             result = dict(segment_id=segment_id, track=track, status='queued',
-                          hls_url=f'/hls/{self.settings.station_id}/index.m3u8')
+                          hls_url=f'/hls/{self.settings.station_id}/index.m3u8', source=source, request_id=request_id)
+            event_track = {**track, 'title': track['title'][:200], 'artist': track['artist'][:200]}
+            event = {'track': event_track, 'source': source}
+            if request_id:
+                event['request_id'] = request_id
             async with asyncio.timeout(3):
-                raw = await self.redis.eval(ENQUEUE, 4, self.prefix + ':music-submissions',
+                raw = await self.redis.eval(ENQUEUE, 9, self.prefix + ':music-submissions',
                     self.prefix + ':segments', self.prefix + ':queue', self.prefix + ':station',
+                    self.prefix + ':tracks', self.prefix + ':track-plan', f'engine:{self.settings.station_id}:in',
+                    self.prefix + ':playlist', self.prefix + ':playlist-order',
                     segment_id, json.dumps(segment.model_dump(), sort_keys=True, ensure_ascii=False),
-                    json.dumps(result), owner)
+                    json.dumps(result), owner, json.dumps(event), self.settings.station_id, str(time.time()))
             if raw == 'unavailable':
                 raise HTTPException(409, 'Station is no longer started')
             return json.loads(raw)
@@ -200,7 +209,10 @@ async def enqueue_track(station_id: str, body: TrackInput, request: Request, use
             raise HTTPException(403, 'Station owner required')
         if station['status'] != 'started':
             raise HTTPException(409, 'Station must be started')
-        return await request.app.state.music.enqueue(youtube_id(body.url), user['id'], idempotency_key)
+        if body.source == 'playlist' and body.request_id is None:
+            return await request.app.state.music.enqueue(youtube_id(body.url), user['id'], idempotency_key)
+        return await request.app.state.music.enqueue(youtube_id(body.url), user['id'], idempotency_key,
+                                                     body.source, body.request_id)
     except RedisError:
         raise HTTPException(503, 'Redis unavailable; retry with the same Idempotency-Key') from None
     except TimeoutError:

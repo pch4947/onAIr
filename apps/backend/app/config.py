@@ -32,6 +32,7 @@ class Settings:
     lavalink_url: str = 'http://127.0.0.1:2333'
     lavalink_password: str | None = field(default=None, repr=False)
     bgm_audio: Path | None = None
+    track_intro_enabled: bool = False
 
 
 def load_settings() -> Settings:
@@ -76,4 +77,5 @@ def load_settings() -> Settings:
                     lavalink_url=os.environ.get('ONAIR_LAVALINK_URL', Settings.lavalink_url).rstrip('/'),
                     lavalink_password=os.environ.get('ONAIR_LAVALINK_PASSWORD'),
                     bgm_audio=Path(os.environ['ONAIR_BGM_AUDIO']).expanduser().resolve()
-                    if os.environ.get('ONAIR_BGM_AUDIO') else None)
+                    if os.environ.get('ONAIR_BGM_AUDIO') else None,
+                    track_intro_enabled=os.environ.get('ONAIR_TRACK_INTRO_ENABLED', '0') == '1')

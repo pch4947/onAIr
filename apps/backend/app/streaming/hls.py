@@ -73,7 +73,8 @@ class HlsPublisher:
             raise RuntimeError("FFmpeg not found. Set ONAIR_FFMPEG to its executable path.")
         self.directory.mkdir(parents=True, exist_ok=True)
         self.ownership = StationLock(self.directory / 'publisher.lock')
-        self.journal = Journal(self.directory / 'broadcast.sqlite', self.settings.station_id)
+        self.journal = Journal(self.directory / 'broadcast.sqlite', self.settings.station_id,
+                               repeat_playlist=self.settings.track_intro_enabled)
         self.recovery.extend(self.journal.recover())
         if self.settings.fallback_mode == 'music':
             if self.settings.fallback_audio:
@@ -295,6 +296,19 @@ class HlsPublisher:
             pipe.lrange(self.prefix + ':queue', 0, -1)
             pipe.hgetall(self.prefix + ':segments')
             ids, records = await pipe.execute()
+        if self.settings.track_intro_enabled:
+            # A submitted introduction reserves its exact audio, even when a
+            # newer request/vote replaced the next-track announcement.
+            target = None
+            if self.current and self.current.get('kind') in ('speech', 'glue') and self.current.get('music_ref'):
+                target = await self.redis.hget(self.prefix + ':intro-tracks', self.current['id'])
+            if target:
+                if target in records and self.journal.status(target) not in ('PUBLISHED', 'PLAYED', 'FAILED'):
+                    return Segment.model_validate_json(records[target])
+                # A failed reservation must not terminate the entire station.
+                # Other speech can continue while the engine chooses another track.
+                return None
+            ids = [key for key in ids if key in records and json.loads(records[key])['kind'] != 'music']
         candidates = []
         for key in ids:
             if self.current and key == self.current['id']:
@@ -462,6 +476,8 @@ class HlsPublisher:
                 for index, (name, duration) in enumerate(chunks):
                     await asyncio.sleep(max(0, self.next_publish - time.monotonic()))
                     self.publish(name, duration, index == 0)
+                    if index == 0 and segment and segment['kind'] == 'music' and segment.get('music_ref'):
+                        self.journal.track_started(segment, time.time() + self.settings.broadcast_delay_seconds)
                     start = time.monotonic() + self.settings.broadcast_delay_seconds
                     self.timeline.append((start, start + duration, segment is not None))
                     self.next_publish = time.monotonic() + duration
