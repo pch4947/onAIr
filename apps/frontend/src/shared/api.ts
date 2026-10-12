@@ -6,6 +6,7 @@ import type {
   BoardPost,
   BroadcastStateResponse,
   LikeStatus,
+  ReplaySession,
   RequestRecord,
   SubmitRequestResponse,
 } from '@/shared/types'
@@ -181,3 +182,54 @@ export const likeComment = (commentId: string) =>
   toggleLike(`${API_BASE}/api/board/comments/${commentId}/like`, 'POST')
 export const unlikeComment = (commentId: string) =>
   toggleLike(`${API_BASE}/api/board/comments/${commentId}/like`, 'DELETE')
+
+async function fetchReplayPage(
+  path: string,
+  params: { offset?: number; limit?: number },
+): Promise<{ replays: ReplaySession[]; total: number }> {
+  const query = new URLSearchParams()
+  if (params.offset !== undefined) query.set('offset', String(params.offset))
+  if (params.limit !== undefined) query.set('limit', String(params.limit))
+  const qs = query.toString()
+  const res = await fetch(`${API_BASE}${path}${qs ? `?${qs}` : ''}`, {
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
+  })
+  if (!res.ok) {
+    throw new Error(`GET ${path} failed: ${res.status}`)
+  }
+  return (await res.json()) as { replays: ReplaySession[]; total: number }
+}
+
+export const getMyStationReplays = (stationId: string, params: { offset?: number; limit?: number } = {}) =>
+  fetchReplayPage(`/api/stations/${stationId}/replays/mine`, params)
+export const getBookmarkedReplays = (params: { offset?: number; limit?: number } = {}) =>
+  fetchReplayPage('/api/replays/bookmarked', params)
+
+async function toggleBookmark(sessionId: string, method: 'POST' | 'DELETE'): Promise<{
+  bookmarkCount: number
+  bookmarked: boolean
+}> {
+  const res = await fetch(`${API_BASE}/api/replays/${sessionId}/bookmark`, {
+    method,
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
+  })
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { detail?: string } | null
+    throw new Error(body?.detail || `${method} /api/replays/${sessionId}/bookmark failed: ${res.status}`)
+  }
+  return (await res.json()) as { bookmarkCount: number; bookmarked: boolean }
+}
+
+export const bookmarkReplay = (sessionId: string) => toggleBookmark(sessionId, 'POST')
+export const unbookmarkReplay = (sessionId: string) => toggleBookmark(sessionId, 'DELETE')
+
+export async function deleteReplay(sessionId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/replays/${sessionId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
+  })
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { detail?: string } | null
+    throw new Error(body?.detail || `DELETE /api/replays/${sessionId} failed: ${res.status}`)
+  }
+}

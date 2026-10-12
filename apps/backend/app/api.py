@@ -121,13 +121,14 @@ async def stream_state(request: Request, response: Response,
                            pattern=r"^[a-f0-9]{32}_[a-f0-9]{32}_[0-9]+\.ts$")] = None):
     response.headers["Cache-Control"] = "no-store"
     result = request.app.state.broadcast.snapshot()
+    result["stationId"] = request.app.state.settings.station_id
     result.update(await request_metrics(request))
     hls = request.app.state.hls
     if request.app.state.settings.hls_enabled:
         result["stream"] = {**result["stream"], "status": "ready" if hls.ready else "bootstrapping",
                             "currentSegment": None, "updatedAt": timestamp(),
                             "hlsUrl": f"/hls/{request.app.state.settings.station_id}/index.m3u8",
-                            "error": hls.error}
+                            "sessionId": hls.session, "error": hls.error}
         result['stream'].update(hls.buffer_snapshot())
         result['stream']['error'] = hls.error or hls.redis_error
     if fragment is not None:
