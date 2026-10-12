@@ -24,6 +24,27 @@ def segment(kind='speech'):
 
 
 class JournalTests(unittest.IsolatedAsyncioTestCase):
+    async def test_request_link_follows_ref_for_any_speech_corner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Journal(Path(directory) / 'journal.sqlite', 'st_test')
+            try:
+                for corner in ('opening', 'topic_talk', 'music_intro', 'request_reply'):
+                    for state in ('MIXING', 'PUBLISHED', 'PLAYED', 'FAILED'):
+                        with self.subTest(corner=corner, state=state):
+                            journal.transition({**segment(), 'corner_type': corner}, state)
+                            redis = AsyncMock()
+                            await journal.flush(redis)
+                            self.assertEqual(redis.eval.call_args.args[-1], 'req_one')
+                for kind, ref in (('speech', None), ('speech', ''), ('music', 'req_one'),
+                                  ('ack', 'req_one'), ('filler', 'req_one')):
+                    with self.subTest(kind=kind, ref=ref):
+                        journal.transition({**segment(kind), 'request_ref': ref}, 'PLAYED')
+                        redis = AsyncMock()
+                        await journal.flush(redis)
+                        self.assertEqual(redis.eval.call_args.args[-1], '')
+            finally:
+                journal.close()
+
     async def test_outbox_survives_failure_and_restart_ack_is_not_request_completion(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'journal.sqlite'

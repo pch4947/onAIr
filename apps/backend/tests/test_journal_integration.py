@@ -11,10 +11,49 @@ from redis.exceptions import ConnectionError
 
 from app.messaging.consumer import STATE
 from app.streaming.journal import Journal
+from app.requests import RequestStore
 
 
 @unittest.skipUnless(os.environ.get('ONAIR_INTEGRATION_TEST') == '1', 'Requires local Redis')
 class JournalIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_quoted_request_in_normal_corner_leaves_pending_after_played(self):
+        station = 'st_quote_' + uuid.uuid4().hex
+        prefix = f'backend:{station}'
+        client = Redis.from_url('redis://127.0.0.1:6379/0', decode_responses=True)
+        try:
+            store = RequestStore(client, station)
+            with tempfile.TemporaryDirectory() as directory:
+                journal = Journal(Path(directory) / 'broadcast.sqlite', station)
+                try:
+                    for corner in ('opening', 'topic_talk', 'music_intro'):
+                        request = await store.create('test quote', 'listener', 'chat')
+                        request_id = request['id']
+                        await client.hset(prefix + ':request-states', request_id,
+                            json.dumps(dict(request_id=request_id, state='generated')))
+                        segment = dict(id='seg_' + corner, kind='speech', corner_type=corner,
+                                       request_ref=request_id)
+                        journal.transition({**segment, 'id': 'ack_' + corner, 'kind': 'ack'}, 'PLAYED')
+                        await journal.flush(client)
+                        self.assertEqual((await store.get(request_id))['status'], 'generated')
+                        self.assertEqual((await store.metrics())['pendingRequestCount'], 1)
+                        for state in ('MIXING', 'PUBLISHED', 'PLAYED'):
+                            journal.transition(segment, state)
+                            await journal.flush(client)
+                            self.assertEqual((await store.get(request_id))['status'], state.lower())
+                        self.assertEqual((await store.metrics())['pendingRequestCount'], 0)
+                        history = [json.loads(row) for row in await client.lrange(
+                            prefix + ':request-history:' + request_id, 0, -1)]
+                        self.assertEqual([row['state'] for row in history if row.get('source') == 'broadcast'],
+                                         ['mixing', 'published', 'played'])
+                finally:
+                    journal.close()
+        finally:
+            for pattern in (prefix + ':*', f'engine:{station}:*'):
+                keys = [key async for key in client.scan_iter(match=pattern)]
+                if keys:
+                    await client.delete(*keys)
+            await client.aclose()
+
     async def test_lifecycle_retry_dedup_and_late_engine_event(self):
         station = 'st_journal_' + uuid.uuid4().hex
         prefix = f'backend:{station}'
