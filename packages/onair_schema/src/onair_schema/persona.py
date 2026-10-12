@@ -1,6 +1,7 @@
 """DJ persona — 표현 층 (docs/persona.md 2.1·2.3절).
 
-행동 층(BehaviorSpec)은 v1 페이로드에 넣지 않는다 — 정책 A/B/C 확정 후 추가하고 contract_version을 올린다.
+행동 층(BehaviorSpec)은 폐지했다 (2026-10-12) — 편성 설정은 persona가 아니라 방의 속성이다
+(station.created의 format·corners·intensity·experiment, docs/persona.md 2.2절).
 """
 from typing import Annotated, Literal
 
