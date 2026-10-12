@@ -1,9 +1,8 @@
-// FEATURE: 01/02_Listen_스트리밍 방송 화면 목업 데이터 (viewerCount 등 백엔드 미연동 항목만 유지)
+// FEATURE: 01/02_Listen_스트리밍 방송 화면 목업 데이터 (백엔드 미연동 항목만 유지)
 
 export interface StationInfo {
   name: string
   isLive: boolean
-  viewerCount: number
 }
 
 export interface Track {
@@ -23,7 +22,6 @@ export interface SurveyQuestion {
 export const STATION_INFO: StationInfo = {
   name: 'AI 라디오 스테이션',
   isLive: true,
-  viewerCount: 37,
 }
 
 export const PLAYLIST: Track[] = [

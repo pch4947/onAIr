@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Annotated, Literal
 import asyncio
 import json
+import time
 
 from fastapi import APIRouter, Body, Request, HTTPException, Query, Response, Header
 from redis.exceptions import RedisError
@@ -13,6 +14,27 @@ from .scheduler import decide_next_segment
 from .requests import IdempotencyConflict
 
 router = APIRouter(prefix="/api")
+
+PRESENCE_WINDOW_SECONDS = 30
+
+
+class PresenceStore:
+    """하트비트를 보낸 clientId를 ZSET에 시각순으로 저장; 윈도우보다 오래된 건 조회 시 정리한다."""
+
+    def __init__(self, redis, station_id):
+        self.redis = redis
+        self.key = f"backend:{station_id}:presence"
+
+    async def heartbeat(self, client_id: str, now: float) -> None:
+        await self.redis.zadd(self.key, {client_id: now})
+
+    async def count(self, now: float) -> int:
+        await self.redis.zremrangebyscore(self.key, 0, now - PRESENCE_WINDOW_SECONDS)
+        return await self.redis.zcard(self.key)
+
+
+class PresenceInput(BaseModel):
+    clientId: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
 @router.get('/requests/{request_id}/history')
@@ -115,6 +137,26 @@ async def request_metrics(request: Request, required=False):
                 "requestStatsAvailable": False}
 
 
+async def viewer_count(request: Request):
+    try:
+        async with asyncio.timeout(3):
+            return await request.app.state.presence.count(time.time())
+    except (RedisError, TimeoutError):
+        # Unknown, not zero — same convention as request_metrics above.
+        return None
+
+
+@router.post("/stations/{station_id}/presence", status_code=204)
+async def presence_heartbeat(station_id: str, body: PresenceInput, request: Request):
+    if station_id != request.app.state.settings.station_id:
+        raise HTTPException(404, "Station not found")
+    try:
+        async with asyncio.timeout(3):
+            await request.app.state.presence.heartbeat(body.clientId, time.time())
+    except (RedisError, TimeoutError):
+        raise HTTPException(503, "Redis unavailable") from None
+
+
 @router.get("/stream/state")
 async def stream_state(request: Request, response: Response,
                        fragment: Annotated[str | None, Query(max_length=128,
@@ -122,7 +164,10 @@ async def stream_state(request: Request, response: Response,
     response.headers["Cache-Control"] = "no-store"
     result = request.app.state.broadcast.snapshot()
     result["stationId"] = request.app.state.settings.station_id
-    result.update(await request_metrics(request))
+    # 둘 다 Redis 호출이라 순차 await하면 각자의 연결 타임아웃이 합산돼 버림; 동시에 실행.
+    viewers, metrics = await asyncio.gather(viewer_count(request), request_metrics(request))
+    result["viewerCount"] = viewers
+    result.update(metrics)
     hls = request.app.state.hls
     if request.app.state.settings.hls_enabled:
         result["stream"] = {**result["stream"], "status": "ready" if hls.ready else "bootstrapping",

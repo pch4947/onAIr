@@ -28,7 +28,8 @@ class PlaybackMetadataTests(unittest.IsolatedAsyncioTestCase):
             publisher.publish(second, 4, True)
             request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
                 broadcast=BroadcastState(), hls=publisher, settings=settings,
-                requests=SimpleNamespace(metrics=AsyncMock(return_value={})))))
+                requests=SimpleNamespace(metrics=AsyncMock(return_value={})),
+                presence=SimpleNamespace(count=AsyncMock(return_value=0)))))
             response = Response()
             result = await stream_state(request, response, first)
             self.assertEqual(result['stream']['currentSegment']['id'], 'opening')

@@ -13,6 +13,7 @@ export interface StreamInfo {
 export interface BroadcastStateResponse {
   stream: StreamInfo
   stationId: string
+  viewerCount: number | null
   pendingRequestCount: number
   oldestRequestAgeSeconds: number
 }

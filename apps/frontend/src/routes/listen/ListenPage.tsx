@@ -1,12 +1,12 @@
 // 01_Listen_스트리밍 방송 화면
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Sidebar } from '@/app/Sidebar'
 import { useLivePlayback } from '@/player/useLivePlayback'
 import { useRealtimeConnection } from '@/realtime/useRealtimeConnection'
 import { useRealtimeStore } from '@/realtime/store'
-import { bookmarkReplay, getBroadcastState, getRequests, submitRequest } from '@/shared/api'
+import { bookmarkReplay, getBroadcastState, getRequests, sendPresenceHeartbeat, submitRequest } from '@/shared/api'
 import { useCurrentUser } from '@/shared/useCurrentUser'
 import { ExperimentSurveyModal } from '@/routes/listen/ExperimentSurveyModal'
 import { SongRequestModal } from '@/routes/listen/SongRequestModal'
@@ -34,6 +34,20 @@ const STREAM_STATUS_LABEL: Record<StreamStatus, string> = {
 }
 
 const BROADCAST_STATE_POLL_INTERVAL_MS = 3000
+const PRESENCE_HEARTBEAT_INTERVAL_MS = 15000
+const PRESENCE_CLIENT_ID_KEY = 'onair_presence_client_id'
+
+function getOrCreatePresenceClientId(): string {
+  try {
+    const existing = sessionStorage.getItem(PRESENCE_CLIENT_ID_KEY)
+    if (existing) return existing
+    const generated = crypto.randomUUID()
+    sessionStorage.setItem(PRESENCE_CLIENT_ID_KEY, generated)
+    return generated
+  } catch {
+    return crypto.randomUUID()
+  }
+}
 
 export function ListenPage() {
   const [isSurveyOpen, setIsSurveyOpen] = useState(false)
@@ -41,6 +55,7 @@ export function ListenPage() {
   const [isEmojiPickerOpen, setIsEmojiPickerOpen] = useState(false)
   const [isQueueOpen, setIsQueueOpen] = useState(false)
   const [chatInput, setChatInput] = useState('')
+  const [presenceClientId] = useState(getOrCreatePresenceClientId)
   useRealtimeConnection()
   const connectionStatus = useRealtimeStore((state) => state.connectionStatus)
   const { data: currentUser } = useCurrentUser()
@@ -49,6 +64,16 @@ export function ListenPage() {
     queryFn: getBroadcastState,
     refetchInterval: BROADCAST_STATE_POLL_INTERVAL_MS,
   })
+  const stationId = broadcastStateQuery.data?.stationId
+
+  useEffect(() => {
+    if (!stationId) return
+    sendPresenceHeartbeat(stationId, presenceClientId).catch(() => {})
+    const timer = setInterval(() => {
+      sendPresenceHeartbeat(stationId, presenceClientId).catch(() => {})
+    }, PRESENCE_HEARTBEAT_INTERVAL_MS)
+    return () => clearInterval(timer)
+  }, [stationId, presenceClientId])
   const requestsQuery = useQuery({
     queryKey: ['requests'],
     queryFn: getRequests,
@@ -56,6 +81,7 @@ export function ListenPage() {
   })
 
   const stream = broadcastStateQuery.data?.stream
+  const viewerCount = broadcastStateQuery.data?.viewerCount
   const apiBase = import.meta.env.VITE_API_BASE_URL || window.location.origin
   const hlsPath = import.meta.env.VITE_HLS_URL || stream?.hlsUrl
   const hlsUrl = stream?.status === 'ready' && hlsPath ? new URL(hlsPath, apiBase).href : null
@@ -116,7 +142,7 @@ export function ListenPage() {
               </div>
               <div className="flex items-center gap-2 text-[11px] text-nav-inactive">
                 <span>{CONNECTION_STATUS_LABEL[connectionStatus]}</span>
-                <span>👁 {STATION_INFO.viewerCount}명 시청 중</span>
+                <span>👁 {viewerCount ?? '-'}명 시청 중</span>
               </div>
             </div>
 
@@ -178,7 +204,7 @@ export function ListenPage() {
           <header className="flex items-center justify-between">
             <p className="text-sm font-semibold text-text">채팅</p>
             <span className="text-[11px] text-text-muted">
-              👁 {STATION_INFO.viewerCount.toLocaleString()}
+              👁 {viewerCount?.toLocaleString() ?? '-'}
             </span>
           </header>
 

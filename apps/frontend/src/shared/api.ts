@@ -21,6 +21,17 @@ export async function getBroadcastState(): Promise<BroadcastStateResponse> {
   return res.json() as Promise<BroadcastStateResponse>
 }
 
+export async function sendPresenceHeartbeat(stationId: string, clientId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/stations/${stationId}/presence`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clientId }),
+  })
+  if (!res.ok) {
+    throw new Error(`POST /api/stations/${stationId}/presence failed: ${res.status}`)
+  }
+}
+
 export async function submitRequest(input: {
   prompt: string
   listenerId?: string
