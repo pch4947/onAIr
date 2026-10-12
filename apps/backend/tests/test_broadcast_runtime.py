@@ -36,7 +36,7 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
                             await journal.flush(redis)
                             self.assertEqual(redis.eval.call_args.args[-1], 'req_one')
                 for kind, ref in (('speech', None), ('speech', ''), ('music', 'req_one'),
-                                  ('ack', 'req_one'), ('filler', 'req_one')):
+                                  ('ack', 'req_one'), ('filler', 'req_one'), ('glue', 'req_one')):
                     with self.subTest(kind=kind, ref=ref):
                         journal.transition({**segment(kind), 'request_ref': ref}, 'PLAYED')
                         redis = AsyncMock()

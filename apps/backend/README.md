@@ -1,5 +1,16 @@
 # onAIr Backend — FastAPI / Redis / HLS
 
+## 코너 연결 멘트와 BGM
+
+`kind: glue`는 speech와 같은 멘트로 인코딩하며 `request_ref`가 있어도 요청 완료 상태로 연결하지 않습니다.
+기존 ack는 하위 호환을 위해 허용합니다. glue는 낮은 priority를 보내도 FIFO 순서를 앞당기지 않습니다.
+공유 glue 원본 파일은 재생 완료 시 삭제하지 않습니다.
+
+`ONAIR_BGM_AUDIO`에 준비한 로컬 연주곡 경로를 지정하면 speech·ack·filler·glue 아래에서
+BGM을 -15 dB로 낮춰 반복 믹싱하고 0.3초 페이드를 적용합니다. music에는 BGM을 섞지 않습니다.
+음악 폴백 모드에서 별도 `ONAIR_FALLBACK_AUDIO`가 없으면 같은 BGM을 멘트 사이 폴백으로 사용합니다.
+설정이 없으면 기존 송출을 유지합니다. 음원 선정은 팀에서 제공해야 하며 곡 위에 말하는 talk-over는 미지원입니다.
+
 ## YouTube 링크 음원 송출 (단일 방송 MVP)
 
 방송 소유자가 `POST /api/stations/{station_id}/tracks`로 YouTube 링크 한 개를 등록하면,
