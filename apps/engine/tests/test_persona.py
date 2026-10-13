@@ -2,8 +2,8 @@
 import asyncio
 from pathlib import Path
 
-from onair_engine.catalog import Catalog
-from onair_engine.corners import build_corners, system_prompt
+from onair_engine.corners import STEP_KINDS, build_prompt, system_prompt
+from onair_engine.corners.run import MaterialSources, TrackSource
 from onair_engine.domain import Material, StationProfile
 from onair_engine.main import load_config, load_profile
 from onair_engine.pipeline.llm import DummyLlmClient
@@ -35,18 +35,26 @@ def test_full_profile_blocks_in_persona_order():
     assert prompt.count("</data>") == 1 and prompt.endswith("</data>")
 
 
-def test_system_prompt_is_identical_across_corners():
-    corners = build_corners(catalog=Catalog(), rss=RssCollector())
-    systems = {c.build_prompt(Material(track_id="t", extra={"title": "a", "artist": "b",
-                                                           "mood": "c"}, text="- x: y"),
-                              FULL).system
-               for name, c in corners.items() if name != "request_reply"}
+def _material() -> Material:
+    track = {"track_ref": "t", "title": "a", "artist": "b", "duration_ms": 1}
+    return Material(items=[{"title": "x", "summary": "y", "source": "z", "nickname": "n",
+                            "body": "b", **track}], track=track, topic="주제")
+
+
+def test_system_prompt_is_identical_across_steps():
+    systems = {build_prompt(step, _material(), FULL).system for step in STEP_KINDS}
     assert len(systems) == 1
 
 
+def test_plain_steps_drop_signature_phrases():
+    # 뉴스 형식 — 주관 금지 코너는 입버릇을 빼고 사실만 전하라고 한다 (CORNER_DESIGN 6.4절)
+    plain = build_prompt("news_item", _material(), FULL, plain=True).system
+    assert "천천히 가요" not in plain and "사실만" in plain
+    assert "달빛" in plain  # 이름·말투는 그대로
+
+
 def test_dummy_still_reads_dj_name_from_full_prompt():
-    prompt = build_corners(catalog=Catalog(), rss=RssCollector())["filler"].build_prompt(
-        Material(), FULL)
+    prompt = build_prompt("filler", Material(), FULL)
     texts = {asyncio.run(DummyLlmClient(delay_sec=0, seed=s).generate(prompt)).text
              for s in range(20)}
     assert any("달빛" in t for t in texts)
@@ -66,14 +74,17 @@ def test_station_config_accepts_persona_path(monkeypatch):
     assert config.profile.dj_name == "새벽" and config.profile.examples
 
 
-def test_briefing_names_source_without_url():
+def test_news_names_source_without_url():
     rss = RssCollector([FeedItem("첫 서리", "영하권", "https://www.kma.go.kr/news/1")])
-    corner = build_corners(catalog=Catalog(), rss=rss)["briefing"]
-    material = asyncio.run(corner.gather(None))
-    assert "kma.go.kr" in material.text and "https://" not in material.text
+    sources = MaterialSources(tracks=TrackSource(), rss=rss)
+    items = sources.take("news", 3)
+    prompt = build_prompt("news_item", Material(items=items), MINIMAL)
+    assert "kma.go.kr" in prompt.user and "https://" not in prompt.user
+    assert sources.take("news", 3) == []  # 같은 기사를 두 번 전하지 않는다
 
 
 def test_music_intro_mood_in_korean():
-    corner = build_corners(catalog=Catalog(), rss=RssCollector())["music_intro"]
-    material = asyncio.run(corner.gather(None))
-    assert material.extra["mood"] == "차분한"  # 첫 더미 곡의 calm
+    track = TrackSource().take()
+    prompt = build_prompt("music_intro", Material(track=track), MINIMAL)
+    text = asyncio.run(DummyLlmClient(delay_sec=0, seed=0).generate(prompt)).text
+    assert "calm" not in text  # 첫 더미 곡의 calm은 한국어로 읽힌다

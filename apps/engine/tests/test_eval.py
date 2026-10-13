@@ -53,7 +53,7 @@ def test_parse_judge():
 
 def test_run_scenario_with_dummy(tmp_path):
     scenario = Scenario(
-        sequence=["opening", "music_intro", "request_reply", "request_reply", "briefing"],
+        sequence=["opening_greeting", "music_intro", "story", "talk+chat", "news_item"],
         tracks=[Track("t1", "밤편지", "아이유", "calm", 1000)],
         news=[FeedItem("첫 서리", "영하권", "https://www.kma.go.kr/1")],
         stories=[{"id": "ok", "body": "시험 공부 중이에요", "expect": "air"},
@@ -65,9 +65,14 @@ def test_run_scenario_with_dummy(tmp_path):
                                        workdir=tmp_path, run=0))
     assert [r["corner"] for r in records] == scenario.sequence
     assert all(r["outcome"] == "aired" for r in records)
-    # 더미는 사연을 그대로 읽는다 — 거부해야 할 사연이 송출되면 경고가 붙어야 한다
+    # 더미는 사연·채팅을 그대로 읽는다 — 거부해야 할 사연이 송출되면 경고가 붙어야 한다
     bad = next(r for r in records if r["case"] == "bad")
     assert any(f.startswith("거부 누락") for f in bad["flags"])
     assert any(f.startswith("금지 문자열 노출") for f in bad["flags"])
     summary = summarize(records)
     assert summary["송출"] == 5 and summary["판정 오류"] == 1
+
+
+def test_scenario_file_steps_are_known():
+    scenario = Scenario.load(Path(__file__).resolve().parent.parent / "config" / "eval_cases.yaml")
+    assert "talk+chat" in scenario.sequence and scenario.topic

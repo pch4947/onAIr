@@ -97,3 +97,30 @@ def test_error_detail_is_short():
         StationCreated.model_validate(bad)
     detail = error_detail(exc.value)
     assert detail.count(";") == 2 and "외" in detail
+
+
+def test_format_fields_default_for_v1_payload():
+    created = StationCreated.model_validate(PAYLOAD)  # 형식 선택(#102) 전의 페이로드
+    assert created.format == "talk" and created.intensity == "mid"
+    assert created.talk_corners() == ["story_corner", "topic_talk"]
+    assert created.experiment is None
+
+
+@pytest.mark.parametrize("extra, loc", [
+    ({"format": "news", "corners": ["topic_talk", "story_corner"]}, "corners"),
+    ({"format": "talk", "news_sections": ["it", "sports"]}, "news_sections"),
+    ({"corners": ["topic_talk", "topic_talk"]}, "같은 코너"),
+    ({"corners": ["topic_talk"]}, "corners"),
+    ({"corners": ["weather", "topic_talk"]}, "corners"),
+    ({"intensity": "max"}, "intensity"),
+])
+def test_format_fields_are_checked(extra, loc):
+    with pytest.raises(ValidationError) as exc:
+        StationCreated.model_validate({**PAYLOAD, **extra})
+    assert loc in str(exc.value)
+
+
+def test_experiment_condition():
+    created = StationCreated.model_validate({**PAYLOAD, "experiment": {
+        "condition": "relevance_early", "selector": "relevance"}})
+    assert created.experiment.window_sec == 90 and created.experiment.binding == "early"

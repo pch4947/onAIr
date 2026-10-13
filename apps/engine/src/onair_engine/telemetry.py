@@ -1,6 +1,6 @@
 """계측 — 상태 전이·생성 지연·정책 결정 기록 (설계 문서 7장).
 
-실험 데이터(RQ1~RQ3)의 원천이므로 부가 기능이 아니라 항상 켜져 있는 기본 동작이다.
+실험 데이터(RQ-A·RQ-B)의 원천이므로 부가 기능이 아니라 항상 켜져 있는 기본 동작이다.
 백엔드/프론트 계측과의 조인 키는 segment_id / request_id.
 """
 from __future__ import annotations
@@ -21,6 +21,9 @@ CREATE TABLE IF NOT EXISTS request_log (
 );
 CREATE TABLE IF NOT EXISTS decision_log (
     station_id TEXT, at REAL, context_json TEXT, decision_json TEXT
+);
+CREATE TABLE IF NOT EXISTS corner_log (
+    station_id TEXT, at REAL, corner_type TEXT, label TEXT, event TEXT, produced_ms INTEGER
 );
 CREATE TABLE IF NOT EXISTS station_log (
     station_id TEXT, at REAL, event TEXT, payload_json TEXT
@@ -103,10 +106,21 @@ class Telemetry:
         self._db.commit()
 
     def log_decision(self, ctx, decision) -> None:
-        # ack 생략 결정도 빠짐없이 기록한다 — RQ2의 (b) 집단 관측의 원천
+        # 대기 판단도 빠짐없이 기록한다 — 버퍼 판단과 인용 결정의 원천 (ENGINE_ARCHITECTURE 7장)
         self._db.execute(
             "INSERT INTO decision_log VALUES (?,?,?,?)",
             (self.station_id, time.time(), _dump(ctx), _dump(decision)),
+        )
+        self._db.commit()
+
+    def log_corner(self, corner_type: str, label: str | None, event: str, produced_ms: int) -> None:
+        """코너 진입(enter)·종료(exit)·건너뜀(skip)·대체(fallback) — 클락 수치 보정과 Q-03의 원천.
+
+        produced_ms는 그 시점까지 제출한 오디오 누적 길이다. 코너의 실제 길이 = exit − enter.
+        """
+        self._db.execute(
+            "INSERT INTO corner_log VALUES (?,?,?,?,?,?)",
+            (self.station_id, time.time(), corner_type, label, event, produced_ms),
         )
         self._db.commit()
 

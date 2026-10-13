@@ -35,7 +35,10 @@ class ControlChannel(Protocol):
 
 
 def config_from_created(station_id: str, created: StationCreated, raw: dict) -> StationConfig:
-    """검증된 station.created → 엔진 내부 설정. persona의 표현 층만 프롬프트용 프로필로 옮긴다."""
+    """검증된 station.created → 엔진 내부 설정. persona의 표현 층만 프롬프트용 프로필로 옮긴다.
+
+    policy(v1)는 받기만 하고 쓰지 않는다 — 편성은 형식·코너·참여 강도가 정한다 (계약 v2 10.2절).
+    """
     p = created.persona
     return StationConfig(
         station_id=station_id,
@@ -45,7 +48,10 @@ def config_from_created(station_id: str, created: StationCreated, raw: dict) -> 
             signature_phrases=list(p.signature_phrases),
         ),
         broadcast_minutes=created.broadcast_minutes,
-        policy_name=created.policy,
+        format=created.format,
+        corners=created.talk_corners() if created.format == "talk" else None,
+        news_sections=created.sections() if created.format == "news" else None,
+        intensity=created.intensity,
         persona_id=p.persona_id,
         voice=p.voice,
         topic=created.topic,
@@ -253,10 +259,14 @@ class EngineManager:
             )
         elif event_type == "backpressure":
             engine.report_backpressure(payload, at=event.get("at"))
+        elif event_type == "track.queued":
+            engine.on_track_queued(payload)
+        elif event_type == "track.started":
+            engine.on_track_started(payload)
         elif event_type == "station.closed":
             engine.stop()  # 방송 태스크가 끝나면 _run_station이 방을 정리한다
         elif event_type:
-            # TODO(M3): state.transition — 재배치 가능 집합·방송 맥락(PUBLISHED 기준)에 반영
+            # TODO(M4): state.transition(PUBLISHED → 방송 맥락)·segment.started(REFLECTED) — 계약 v2
             logger.info("EVENT_IGNORED %s", event_type)
 
     async def _inject_demo(self, engine: StationEngine, bodies: list[str]) -> None:

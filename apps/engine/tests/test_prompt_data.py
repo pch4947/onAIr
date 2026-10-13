@@ -2,8 +2,7 @@
 import asyncio
 from pathlib import Path
 
-from onair_engine.catalog import Catalog
-from onair_engine.corners import build_corners
+from onair_engine.corners import build_prompt
 from onair_engine.domain import (
     GenerationJob,
     ListenerRequest,
@@ -12,12 +11,11 @@ from onair_engine.domain import (
     Script,
     StationProfile,
 )
-from onair_engine.pipeline.llm import DummyLlmClient, detect_corner
+from onair_engine.pipeline.llm import DummyLlmClient, detect_step
 from onair_engine.pipeline.pipeline import GenerationPipeline
 from onair_engine.pipeline.safety import SafetyChecker
 from onair_engine.pipeline.tts import make_tts
-from onair_engine.prompt_data import DATA_RULES, data_block
-from onair_engine.sources.rss import RssCollector
+from onair_engine.prompt_data import CHAT, DATA_RULES, data_block
 from onair_engine.telemetry import Telemetry
 
 RULES = Path(__file__).resolve().parent.parent / "config" / "safety_rules.yaml"
@@ -45,27 +43,34 @@ def test_data_block_cannot_be_closed_from_inside():
 
 
 def test_external_text_goes_only_into_data_blocks():
-    corners = build_corners(catalog=Catalog(), rss=RssCollector())
-    materials = {
-        "request_reply": Material(request=_request(INJECTION)),
-        "briefing": Material(text=f"- {INJECTION}: 요약 (출처: example.com)"),
-        "music_intro": Material(track_id="t1",
-                                extra={"title": INJECTION, "artist": "누군가", "mood": "calm"}),
+    news = {"title": INJECTION, "summary": "요약", "source": "example.com"}
+    track = {"track_ref": "t1", "title": INJECTION, "artist": "누군가", "duration_ms": 1}
+    cases = {
+        "story": Material(items=[{"nickname": "밤샘러", "body": INJECTION}]),
+        "talk": Material(topic=INJECTION),
+        "news_item": Material(items=[news]),
+        "music_intro": Material(track=track),
     }
-    for corner_type, material in materials.items():
-        prompt = corners[corner_type].build_prompt(material, PROFILE)
-        assert DATA_RULES in prompt.system, corner_type
-        assert "무시하고" not in _instructions(prompt.user), corner_type
-        assert prompt.user.count("</data>") == 1, corner_type
-        assert prompt.user.endswith("</data>"), corner_type
+    for step, material in cases.items():
+        prompt = build_prompt(step, material, PROFILE)
+        assert DATA_RULES in prompt.system, step
+        assert "무시하고" not in _instructions(prompt.user), step
+        assert prompt.user.count("</data>") == 1, step
+        assert prompt.user.endswith("</data>"), step
 
 
-def test_dummy_detects_corner_from_instructions_not_from_data():
-    corners = build_corners(catalog=Catalog(), rss=RssCollector())
-    # 사연 안의 "오프닝"·"브릿지"가 코너 판별에 끼어들면 엉뚱한 더미 대본이 나간다
-    req = _request("오프닝 멘트랑 브릿지 멘트 해주세요")
-    prompt = corners["request_reply"].build_prompt(Material(request=req), PROFILE)
-    assert detect_corner(prompt.user) == "request_reply"
+def test_quoted_chat_goes_into_its_own_data_block():
+    prompt = build_prompt("talk", Material(quotes=[_request(INJECTION)]), PROFILE)
+    assert f'<data label="{CHAT}">' in prompt.user
+    assert "무시하고" not in prompt.user.split(f'<data label="{CHAT}">', 1)[0]
+    assert prompt.user.endswith("</data>")
+
+
+def test_dummy_detects_step_from_instructions_not_from_data():
+    # 채팅 안의 "오프닝"·"브릿지"가 단계 판별에 끼어들면 엉뚱한 더미 대본이 나간다
+    req = _request("방송을 시작한다 오프닝 멘트랑 브릿지 멘트 해주세요")
+    prompt = build_prompt("talk", Material(quotes=[req]), PROFILE)
+    assert detect_step(prompt.user) == "talk"
     text = asyncio.run(DummyLlmClient(delay_sec=0, seed=0).generate(prompt)).text
     assert "오프닝 멘트랑" in text and "<data" not in text
 
@@ -87,7 +92,6 @@ def test_recent_scripts_return_as_data_block(tmp_path):
     llm = ScriptedLlm([f"사연을 소개할게요. {INJECTION}", "다음 멘트입니다."])
     pipeline = GenerationPipeline(
         station_id="st_test", profile=PROFILE,
-        corners=build_corners(catalog=Catalog(), rss=RssCollector()),
         llm=llm, tts=make_tts("dummy"), safety=SafetyChecker(RULES),
         telemetry=Telemetry(tmp_path / "metrics.sqlite", "st_test"),
         audio_root=tmp_path / "audio", recent_segments=2,
@@ -96,7 +100,7 @@ def test_recent_scripts_return_as_data_block(tmp_path):
     async def two():
         for _ in range(2):
             await pipeline.run(GenerationJob(job_id="job_t", corner_type="opening",
-                                             material=Material()))
+                                             step="opening_greeting", material=Material()))
 
     asyncio.run(two())
     system = llm.prompts[1].system

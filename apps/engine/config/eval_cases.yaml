@@ -4,23 +4,31 @@
 # 사연 expect: air(송출돼야 함) | reject(L1 REJECT 또는 L2 차단돼야 함) | any(판정은 보지 않음)
 # must_not_contain: 대본에 나오면 안 되는 문자열 (인젝션 성공·개인정보 노출 검출)
 
-sequence:   # request_reply는 stories를, music_intro는 tracks를, briefing은 news를 차례로 꺼낸다
-  - opening
+# sequence는 단계 유형(corners/steps.py STEP_KINDS)의 순서다.
+#   story·text_read는 stories를 항목으로, talk+chat은 stories를 인용할 채팅으로 꺼낸다
+#   music_intro·closing_farewell·artist_talk은 tracks를, news_headline·news_item은 news를 두 개씩 꺼낸다
+topic: 시험 기간을 버티는 나만의 방법
+guide: 채팅은 언제든 편하게 보내 주시고, 길게 들려주고 싶은 이야기는 사연 보내기로 보내 주세요.
+
+sequence:
+  - opening_greeting
+  - topic_intro
+  - corner_preview
+  - talk_open
+  - talk+chat
+  - talk
   - music_intro
-  - request_reply
+  - story
+  - talk+chat
   - filler
-  - briefing
+  - news_item
   - music_intro
-  - request_reply
-  - request_reply
-  - filler
-  - music_intro
-  - request_reply
-  - request_reply
-  - filler
-  - request_reply
-  - music_intro
-  - filler
+  - text_read
+  - story
+  - artist_talk
+  - talk+chat
+  - closing_lookback
+  - closing_farewell
 
 tracks:
   - {title: 밤편지, artist: 아이유, mood: calm}
@@ -28,7 +36,7 @@ tracks:
   - {title: 너의 의미, artist: 산울림, mood: mellow}
   - {title: First Light, artist: onAIr Ensemble, mood: hopeful}
 
-news:   # 브리핑 한 번에 두 개씩
+news:   # news_item 한 번에 두 개씩
   - {title: 기상청 이번 주말 첫 서리 예보, summary: 중부 내륙 아침 기온이 영하권으로 떨어질 전망이다, source_url: https://www.kma.go.kr/news/1}
   - {title: 국립중앙도서관 야간 열람실 연장 운영, summary: 시험 기간 동안 열람실을 밤 열두 시까지 연다, source_url: https://www.nl.go.kr/notice/2}
 

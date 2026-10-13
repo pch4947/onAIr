@@ -1,0 +1,64 @@
+# 형식 공통 코너와 참여 강도 프리셋 — docs/CORNER_DESIGN.md 7·8절.
+# 형식 파일(music/talk/news.yaml)이 같은 이름의 코너를 정의하면 그쪽이 이긴다.
+#
+# 코너 필드
+#   title       방송에서 부르는 코너 이름 (접착 문구의 {title})
+#   steps       진행 단계. kind는 corners/steps.py의 단계 유형 또는 glue(사전 렌더 문구)
+#               items: 항목 출처(track·next_track·news·covered_news·board_story·message·vote), take: 한 번에 꺼낼 개수,
+#               repeat: 최대 반복 — 문자열이면 참여 강도 프리셋 값
+#   contract    입력 종류별 반영 모드 (quote·steer·read·feature·solicit·closed·defer·none). 적지 않으면 defer
+#   budget_sec  [최소, 최대] — 최대를 넘으면 남은 단계를 건너뛴다
+#   call/close  접착 문구. {title}, {dj} 슬롯. 방송 시작 시 한 번 합성한다
+#   requires    진입 조건 (항목 출처별 최소 개수). 못 채우면 fallback 코너, 없으면 건너뛴다
+# 수치는 전부 [예시] — M3에서 단계 길이를 실측한 뒤 조정한다 (CORNER_DESIGN U5)
+
+intensity:
+  low:  {quote_limit: 1, quote_gap_sec: 120, steer_limit: 0, question: false, text_count: 3}
+  mid:  {quote_limit: 1, quote_gap_sec: 60,  steer_limit: 1, question: true,  text_count: 4}
+  high: {quote_limit: 2, quote_gap_sec: 30,  steer_limit: 2, question: true,  text_count: 5}
+
+corners:
+  opening:
+    title: 오프닝
+    budget_sec: [30, 120]
+    steps:
+      - kind: opening_greeting   # 인사 + 방금 나간 첫 곡 백어나운스
+      - kind: topic_intro        # 오늘의 이야기
+      - kind: corner_preview     # 코너 예고 + 참여 방법 안내
+    contract: {chat: quote}
+
+  closing:
+    title: 엔딩
+    budget_sec: [30, 90]
+    steps:
+      - kind: closing_lookback   # 오늘 방송 돌아보기 (반영 ④단계)
+      - kind: closing_farewell   # 마지막 곡 소개 + 끝인사
+        items: track
+    contract: {chat: quote, message: closed, board_story: closed, song_request: closed}
+
+  music_intro:
+    title: 곡 소개
+    budget_sec: [10, 30]
+    requires: {track: 1}         # 운영에서는 백엔드가 알려 준 곡(track.queued)이 있어야 한다
+    steps:
+      - kind: music_intro        # 곡 소개 → 백엔드가 바로 그 곡을 튼다 (music_ref)
+        items: track
+    contract: {song_request: feature, chat: quote}
+
+  topic_talk:
+    title: 오늘의 이야기
+    budget_sec: [90, 240]
+    call: "{title}, 같이 이야기 나눠 볼게요."
+    steps:
+      - kind: glue
+        glue: call
+      - kind: talk_open          # 화제 꺼내기 (참여 강도에 따라 청취자에게 질문)
+      - kind: talk               # 이야기 + 채팅 인용
+        repeat: 3
+    contract: {chat: steer}
+
+  filler:
+    title: 브릿지
+    budget_sec: [5, 15]
+    steps:
+      - kind: filler

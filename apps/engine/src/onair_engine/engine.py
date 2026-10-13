@@ -6,17 +6,16 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .ack import AckCache
 from .audio import CachedTts
 from .catalog import Catalog
-from .corners import build_corners
+from .corners.run import MaterialSources, TrackSource
 from .domain import ListenerRequest, RequestState, StationConfig, new_id
+from .format import Clock, load_format
+from .glue import GlueBank
 from .pipeline.llm import make_llm
 from .pipeline.pipeline import GenerationPipeline
 from .pipeline.safety import SafetyChecker
 from .pipeline.tts import make_tts
-from .scheduler.policies import get_policy
-from .scheduler.running_order import FixedRunningOrderBuilder
 from .scheduler.scheduler import Scheduler
 from .sources.rss import RssCollector
 from .telemetry import Telemetry
@@ -34,6 +33,7 @@ class EngineSettings:
     audio_dir: Path = field(default_factory=lambda: Path("var/audio"))  # 공유 오디오 루트
     sqlite_path: Path = field(default_factory=lambda: Path("var/engine_metrics.sqlite"))
     safety_rules_path: Path = field(default_factory=lambda: Path("config/safety_rules.yaml"))
+    formats_dir: Path = field(default_factory=lambda: Path("config/formats"))  # 형식·코너 정의
     llm: str = "dummy"
     llm_model: str | None = None  # None이면 어댑터 기본 모델 (openai는 필수)
     llm_base_url: str | None = None  # openai 호환 서버 주소. None이면 OpenAI 본가
@@ -42,6 +42,9 @@ class EngineSettings:
     tts_voice: str | None = None  # None이면 어댑터 기본 보이스
     tts_cache_dir: Path | None = None  # None이면 캐시 없이 매번 합성. 공유 오디오 루트 밖에 둔다
     max_concurrent_generations: int = 2
+    # 백엔드가 track.queued를 보내기 전에 더미 곡 이름으로 곡 소개를 만들지. 로컬 실행용이다 —
+    # 운영(--serve)에서는 끈다: 실제로 나오지 않는 곡을 소개하게 된다
+    dummy_tracks: bool = True
     target_buffer_sec: float = 30.0
     # 이보다 오래된 request.arrived는 답하지 않는다. 입력 스트림을 처음부터 읽으므로
     # 엔진이 꺼져 있던 사이의 예전 요청이 재기동 때 몰려온다 [예시]
@@ -67,7 +70,13 @@ class StationEngine:
         self.settings = settings
         self.transport = transport
 
-        # 키·보이스 누락은 방송 도중이 아니라 여기서 실패한다 — 계측 DB를 열기 전에 확인한다
+        # 키·보이스 누락·형식 설정 오류는 방송 도중이 아니라 여기서 실패한다 — 계측 DB를 열기 전에 확인한다
+        try:
+            fmt = load_format(config.format, settings.formats_dir)
+            clock = Clock(fmt, main_corners=config.corners, sections=config.news_sections)
+            intensity = fmt.intensity[config.intensity]
+        except (ValueError, TypeError, KeyError, OSError) as exc:
+            raise StationRejected("invalid_payload", f"형식 설정: {exc}"[:300]) from exc
         try:
             # 보이스는 방마다 다르다 (persona.md 9.3절). 엔진 설정 값은 로컬 실행용 기본값이다
             tts_client = make_tts(settings.tts, voice=config.voice or settings.tts_voice)
@@ -85,27 +94,24 @@ class StationEngine:
             self.telemetry.log_station("station.created", config.snapshot)
         # 제출 페이로드의 audio_ref는 이 루트 기준 상대 경로로 나간다 (설계 문서 5.1)
         audio_root = Path(settings.audio_dir)
-        # 파이프라인과 ack 모두 원자적 쓰기·캐시·길이 실측을 거친다
+        # 파이프라인과 접착 요소 모두 원자적 쓰기·캐시·길이 실측을 거친다
         tts = CachedTts(tts_client, cache_dir=settings.tts_cache_dir)
         safety = SafetyChecker(settings.safety_rules_path)
-        corners = build_corners(catalog=Catalog(), rss=RssCollector())
         pipeline = GenerationPipeline(
-            station_id=config.station_id, profile=config.profile, corners=corners,
+            station_id=config.station_id, profile=config.profile,
             llm=llm, tts=tts, safety=safety,
             telemetry=self.telemetry, audio_root=audio_root,
             recent_segments=config.recent_segments,
         )
-        self.ack_cache = AckCache(tts=tts, audio_root=audio_root, station_id=config.station_id)
+        self.tracks = TrackSource(Catalog(), dummy=settings.dummy_tracks)
+        self.sources = MaterialSources(tracks=self.tracks, rss=RssCollector())
+        self.glue = GlueBank(tts=tts, audio_root=audio_root, station_id=config.station_id,
+                             profile=config.profile, fmt=fmt, safety=safety)
         self.scheduler = Scheduler(
-            config=config,
-            order=FixedRunningOrderBuilder().build(config),
-            policy=get_policy(
-                config.policy_name,
-                target_buffer_sec=settings.target_buffer_sec,
-                max_inflight=settings.max_concurrent_generations,
-            ),
-            corners=corners, pipeline=pipeline, ack_cache=self.ack_cache,
+            config=config, fmt=fmt, clock=clock, sources=self.sources, intensity=intensity,
+            topic=self.topic, pipeline=pipeline, glue=self.glue,
             transport=transport, telemetry=self.telemetry,
+            target_buffer_sec=settings.target_buffer_sec,
             max_concurrent=settings.max_concurrent_generations,
         )
         self._safety = safety
@@ -121,12 +127,13 @@ class StationEngine:
 
     async def run(self, max_segments: int | None = None) -> None:
         try:
-            # ack 캐시는 방송 시작 전에 이 스테이션의 보이스로 사전 렌더링한다 (설계 문서 4.5)
+            # 접착 요소는 방송 시작 전에 이 스테이션의 보이스로 사전 렌더링한다 (설계 문서 4.5)
             try:
-                await self.ack_cache.prerender()
+                await self.glue.prerender()
             except Exception as exc:  # 보이스 ID 오류·TTS 장애 — 첫 합성에서 드러난다
                 await self.transport.notify_station("station.rejected", {
-                    "reason": "tts_unavailable", "detail": f"ack 사전 렌더링 실패: {exc}"[:300],
+                    "reason": "tts_unavailable",
+                    "detail": f"접착 요소 사전 렌더링 실패: {exc}"[:300],
                 })
                 raise StationRejected("tts_unavailable", str(exc)) from exc
             await self.transport.notify_station("station.started", {"topic": self.topic})
@@ -144,6 +151,17 @@ class StationEngine:
         if not isinstance(d_total_ms, (int, float)):  # 백엔드가 큐를 못 읽은 주기 — 이전 보고를 유지
             return
         self.scheduler.report_backpressure(d_total_ms, str(payload.get("severity", "")), at)
+
+    def on_track_queued(self, payload: dict) -> None:
+        """다음에 틀 곡 (계약 3.4절) — 다음 곡 소개 멘트가 이 곡을 소개한다 (music_ref)."""
+        track = payload.get("track")
+        if not isinstance(track, dict) or not track.get("track_ref") or not track.get("title"):
+            raise ValueError(f"track.queued에 곡 정보가 없다: {payload!r}"[:200])
+        self.tracks.queue(track)
+
+    def on_track_started(self, payload: dict) -> None:
+        """곡 재생 시작 — 지금은 계측만 한다. 곡 길이는 소개 멘트를 낼 때 이미 버퍼에 더했다."""
+        self.telemetry.log_station("track.started", payload)
 
     async def reject_stale_request(self, request_id: str) -> None:
         """너무 늦게 받은 요청 — 답하지 않고 종결한다. 백엔드 상태가 requested로 남지 않게 rejected로 알린다."""

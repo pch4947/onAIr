@@ -1,7 +1,8 @@
 """대본 품질 평가 러너 (onair-eval) — persona × 시나리오로 파이프라인을 돌려 지표를 모은다.
 
-엔진과 같은 GenerationPipeline(프롬프트 조립 → LLM → L1 → L2, 직전 멘트 맥락)과 코너 gather()를
+엔진과 같은 GenerationPipeline(단계 프롬프트 → LLM → L1 → 인용 검사 → L2, 직전 멘트 맥락)을
 그대로 쓰고 TTS만 dummy로 바꾼다. 그래서 여기서 보이는 대본이 방송에 나갈 대본이다.
+시나리오의 sequence는 단계 유형(corners/steps.py)의 순서다 — 코너·클락은 거치지 않는다.
 단, 청취자 입력단(L0)은 거치지 않는다 — 사연 픽스처로 L1·L2를 직접 시험하기 위해서다.
 
 결과: {out}/{시각}/report.md(사람이 읽는 요약 + 전체 대본), results.jsonl(멘트 단위 원자료)
@@ -21,14 +22,13 @@ from pathlib import Path
 
 import yaml
 
-from ..catalog import Catalog, Track
-from ..corners import build_corners
+from ..catalog import Track
+from ..corners.steps import STEP_KINDS, build_prompt
 from ..domain import (
     GenerationJob,
     ListenerRequest,
     Material,
     Prompt,
-    ScheduleContext,
     Script,
     StationProfile,
 )
@@ -38,7 +38,7 @@ from ..pipeline.pipeline import GenerationPipeline
 from ..pipeline.safety import SafetyChecker
 from ..pipeline.tts import make_tts
 from ..prompt_data import data_block
-from ..sources.rss import FeedItem, RssCollector
+from ..sources.rss import FeedItem, source_name
 from ..telemetry import Telemetry
 from . import checks
 
@@ -73,6 +73,12 @@ class RecordingLlm:
         return script
 
 
+# 사연 픽스처를 꺼내 쓰는 단계 — story(게시판 사연 낭독)·text_read(문자 낭독)는 항목으로,
+# talk+chat은 채팅 인용으로 넣는다 (같은 사연으로 두 경로의 L1·인용 검사를 시험한다)
+_STORY_STEPS = ("story", "text_read", "talk+chat")
+_TRACK_STEPS = ("music_intro", "closing_farewell")
+
+
 @dataclass
 class Scenario:
     sequence: list[str]
@@ -80,6 +86,8 @@ class Scenario:
     news: list[FeedItem]
     stories: list[dict]
     cliches: list[str] = field(default_factory=list)
+    topic: str = "오늘 하루 어땠나요"
+    guide: str = "채팅은 언제든 편하게 보내 주세요."
 
     @classmethod
     def load(cls, path: Path) -> Scenario:
@@ -87,14 +95,22 @@ class Scenario:
         tracks = [Track(f"eval_{i:03d}", t["title"], t["artist"], t["mood"], 180_000)
                   for i, t in enumerate(raw.get("tracks", []))]
         news = [FeedItem(n["title"], n["summary"], n["source_url"]) for n in raw.get("news", [])]
-        return cls(sequence=raw["sequence"], tracks=tracks, news=news,
-                   stories=raw.get("stories", []), cliches=raw.get("cliches", []))
+        sequence = raw["sequence"]
+        unknown = [s for s in sequence if s.removesuffix("+chat") not in STEP_KINDS]
+        if unknown:
+            raise SystemExit(f"{path}: 알 수 없는 단계 {unknown} (corners/steps.py STEP_KINDS)")
+        return cls(sequence=sequence, tracks=tracks, news=news,
+                   stories=raw.get("stories", []), cliches=raw.get("cliches", []),
+                   topic=raw.get("topic", cls.topic), guide=raw.get("guide", cls.guide))
 
 
-def _ctx() -> ScheduleContext:
-    return ScheduleContext(now=time.time(), pending_requests=[], generated_buffer_sec=0.0,
-                           inflight_generations=0, backpressure=False, order_position=0,
-                           next_slot="")
+def _track(t: Track) -> dict:
+    return {"track_ref": t.track_id, "title": t.title, "artist": t.artist,
+            "duration_ms": t.duration_ms, "mood": t.mood}
+
+
+def _news(n: FeedItem) -> dict:
+    return {"title": n.title, "summary": n.summary, "source": source_name(n.source_url)}
 
 
 def _instructions(user: str) -> str:
@@ -144,44 +160,73 @@ def score(rec: dict, profile: StationProfile, corner_range: tuple[int, int],
 
 async def run_scenario(profile: StationProfile, scenario: Scenario, llm: RecordingLlm, *,
                        rules: Path, recent_segments: int, workdir: Path, run: int) -> list[dict]:
-    corners = build_corners(catalog=Catalog(scenario.tracks), rss=RssCollector(scenario.news))
     safety = SafetyChecker(rules)
     telemetry = Telemetry(workdir / "metrics.sqlite", f"eval_{run}")
     pipeline = GenerationPipeline(
-        station_id=f"eval_{run}", profile=profile, corners=corners, llm=llm,
+        station_id=f"eval_{run}", profile=profile, llm=llm,
         tts=make_tts("dummy"), safety=safety, telemetry=telemetry,
         audio_root=workdir / "audio", recent_segments=recent_segments,
     )
     try:
-        return await _run_steps(profile, scenario, corners, pipeline, safety, llm, run)
+        return await _run_steps(profile, scenario, pipeline, safety, llm, run)
     finally:
         telemetry.close()  # Windows는 열린 sqlite 파일이 있으면 임시 폴더를 못 지운다
 
 
-async def _run_steps(profile: StationProfile, scenario: Scenario, corners: dict,
+def _material(entry: str, scenario: Scenario, stories, tracks, news) -> tuple[Material, dict] | None:
+    """시나리오 한 줄의 소재. 꺼낼 픽스처가 떨어졌으면 None — 그 줄은 건너뛴다."""
+    kind = entry.removesuffix("+chat")
+    m = Material(topic=scenario.topic)
+    case: dict = {}
+    if entry in _STORY_STEPS:
+        case = next(stories, None)
+        if case is None:
+            return None
+        if entry == "talk+chat":
+            m.quotes = [ListenerRequest(request_id=f"req_{case['id']}", kind="story",
+                                        body=case["body"], requester_ref="eval",
+                                        received_at=time.time())]
+        else:
+            m.items = [{"nickname": "평가", "body": case["body"]}]
+    elif kind in _TRACK_STEPS or kind == "artist_talk":
+        track = next(tracks, None)
+        if track is None:
+            return None
+        if kind == "artist_talk":
+            m.items = [_track(track)]
+        else:
+            m.track = _track(track)
+    elif kind in ("news_headline", "news_item"):
+        items = [_news(n) for n in [next(news, None) for _ in range(2)] if n]
+        if not items:
+            return None
+        m.items = items
+    elif kind == "news_recap":
+        m.extra["covered"] = [n.title for n in scenario.news]
+    elif kind == "corner_preview":
+        m.extra.update(guide=scenario.guide, corners=["사연 읽는 시간", "오늘의 이야기"])
+    elif kind == "talk_open":
+        m.extra["question"] = True
+    return m, case
+
+
+async def _run_steps(profile: StationProfile, scenario: Scenario,
                      pipeline: GenerationPipeline, safety: SafetyChecker, llm: RecordingLlm,
                      run: int) -> list[dict]:
-    stories = iter(scenario.stories)
+    stories, tracks, news = iter(scenario.stories), iter(scenario.tracks), iter(scenario.news)
     records: list[dict] = []
     aired: list[str] = []
-    for step, corner_type in enumerate(scenario.sequence):
-        corner = corners[corner_type]
-        case: dict = {}
-        if corner_type == "request_reply":
-            case = next(stories, None)
-            if case is None:
-                continue
-            material = Material(request=ListenerRequest(
-                request_id=f"req_{case['id']}", kind="story", body=case["body"],
-                requester_ref="eval", received_at=time.time()))
-        else:
-            material = await corner.gather(_ctx())
-            if material is None:
-                continue
-        prompt_user = corner.build_prompt(material, profile).user
+    for step, entry in enumerate(scenario.sequence):
+        kind = entry.removesuffix("+chat")
+        got = _material(entry, scenario, stories, tracks, news)
+        if got is None:
+            continue
+        material, case = got
+        plain = kind.startswith("news_")  # 뉴스 단계는 주관 금지 프롬프트 (CORNER_DESIGN 6.4절)
+        prompt_user = build_prompt(kind, material, profile, plain=plain).user
         before = len(llm.calls)
-        sub = await pipeline.run(GenerationJob(job_id=f"job_{run}_{step}",
-                                               corner_type=corner_type, material=material))
+        sub = await pipeline.run(GenerationJob(job_id=f"job_{run}_{step}", corner_type="eval",
+                                               step=kind, material=material, plain=plain))
         calls = llm.calls[before:]
         last = calls[-1]
         if last.error:
@@ -192,7 +237,7 @@ async def _run_steps(profile: StationProfile, scenario: Scenario, corners: dict,
         else:
             outcome, text = "aired", last.text
         rec = {
-            "persona": profile.dj_name, "run": run, "step": step, "corner": corner_type,
+            "persona": profile.dj_name, "run": run, "step": step, "corner": entry,
             "case": case.get("id"), "expect": case.get("expect"),
             "must_not_contain": [str(s) for s in case.get("must_not_contain", [])],
             "outcome": outcome, "text": text, "error": last.error,
@@ -202,7 +247,7 @@ async def _run_steps(profile: StationProfile, scenario: Scenario, corners: dict,
         if outcome == "l2_reject":
             rec["l2_rule"] = safety.check_l2(text)
         if outcome == "aired":
-            score(rec, profile, corner.expected_duration_sec, aired, scenario.cliches)
+            score(rec, profile, STEP_KINDS[kind].seconds, aired, scenario.cliches)
             aired.append(text)
         else:
             rec["flags"] = []
@@ -215,7 +260,7 @@ async def _run_steps(profile: StationProfile, scenario: Scenario, corners: dict,
         if len(records) == FAIL_FAST and all(r["outcome"] == "fallback" for r in records):
             # 키·모델 이름 오류면 끝까지 돌아도 대체 대본만 쌓인다
             raise SystemExit(f"처음 {FAIL_FAST}개 멘트가 모두 LLM 호출 실패 — 평가 중단: {last.error}")
-        print(f"  [{profile.dj_name} #{run}] {step:>2} {corner_type:<13} {outcome:<9} "
+        print(f"  [{profile.dj_name} #{run}] {step:>2} {entry:<16} {outcome:<9} "
               f"{(text or last.error or '')[:70]}", flush=True)
     return records
 
@@ -395,8 +440,8 @@ async def evaluate(args: argparse.Namespace) -> Path:
                     await judge_records(judge, profile, records)
                 by_persona[name] += records
 
-    ranges = {c.corner_type: c.expected_duration_sec
-              for c in build_corners(catalog=Catalog(), rss=RssCollector()).values()}
+    ranges = {entry: STEP_KINDS[entry.removesuffix("+chat")].seconds
+              for entry in dict.fromkeys(scenario.sequence)}
     meta = {
         "started": started.strftime("%Y-%m-%d %H:%M"),
         "LLM": f"{settings.llm} {settings.llm_model or '(기본 모델)'}"

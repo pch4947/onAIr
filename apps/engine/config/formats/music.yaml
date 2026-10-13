@@ -1,0 +1,20 @@
+# 음악 형식 — 말 : 곡 = 2 : 8 [예시]. 곡이 주인공이고, 채팅은 곡 사이에 드물게 인용한다.
+# 사연 보내기(message)는 받지 않는다 (CORNER_DESIGN U4).
+format: music
+label: 음악
+guide: 듣고 싶은 곡은 신청곡으로, 곡 이야기는 채팅으로 보내 주세요.
+
+# 곡이 없으면(호스트가 아직 등록 안 함) 코너가 전부 건너뛰어지고, 곡이 들어올 때까지 기다린다
+cycle: [music_intro, music_intro, artist_talk, music_intro]
+
+corners:
+  artist_talk:
+    title: 아티스트 이야기
+    budget_sec: [30, 90]
+    requires: {track: 1}
+    steps:
+      - kind: artist_talk        # 다음 곡의 아티스트·장르 이야기 (곡은 꺼내지 않고 미리 본다)
+        items: next_track
+      - kind: music_intro
+        items: track
+    contract: {chat: quote, song_request: feature}

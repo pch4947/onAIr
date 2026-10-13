@@ -10,6 +10,9 @@ from __future__ import annotations
 
 # 데이터 블록 라벨 — 더미 LLM이 슬롯을 꺼낼 때도 쓴다 (pipeline/llm.py)
 STORY = "청취자 사연"
+CHAT = "청취자 채팅"  # 인용할 채팅 — 편성 관리자가 고른 것만 들어간다 (CORNER_DESIGN 5.1절)
+TOPIC = "지금 화제"
+CORNERS = "오늘의 코너"
 SOURCES = "수집 소재"
 TRACK = "곡 정보"
 RECENT = "직전 멘트"
