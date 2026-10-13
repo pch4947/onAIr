@@ -11,7 +11,7 @@ lavalink:
 plugins:
   youtube:
     enabled: true
-    allowSearch: false
+    allowSearch: true
     clients: [WEB, TV]
     clientOptions:
       WEB:

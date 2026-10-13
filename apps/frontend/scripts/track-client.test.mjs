@@ -40,6 +40,17 @@ test('rejects anonymous calls before network access', async () => {
   await assert.rejects(createTrackClient('', () => null).checkStation('st_test'), /로그인/)
 })
 
+test('search sends plain query and never calls registration endpoint', async () => {
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, 'http://backend/api/stations/st_test/tracks/search')
+    assert.equal(options.headers.Authorization, 'Bearer login-token')
+    assert.deepEqual(JSON.parse(options.body), { query: '아이유 밤편지' })
+    assert.equal(options.headers['Idempotency-Key'], undefined)
+    return Response.json({ candidates: [] })
+  }
+  assert.deepEqual(await client.search('st_test', '아이유 밤편지', new AbortController().signal), { candidates: [] })
+})
+
 test('checks station readiness and reports owner and media errors without raw server details', async () => {
   globalThis.fetch = async () => Response.json({ station: { status: 'preparing' } })
   assert.equal(await client.checkStation('st_test'), false)

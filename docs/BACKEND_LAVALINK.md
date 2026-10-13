@@ -4,7 +4,23 @@
 
 소유자 음원 등록 API → 별도 다운로드 프로세스 → 내부 Lavalink → 전체 MP4 파일 →
 FFmpeg MP3 → 기존 Redis 방송 큐/HLS. Lavalink의 Discord 연결 기능은 사용하지 않습니다.
-링크만 지원하며 제목 검색·프론트 입력 UI·엔진 곡 소개 이벤트는 별도 작업입니다.
+청취 화면에서 링크를 등록하거나 검색어로 최대 3개 후보를 비교·선택할 수 있습니다.
+검색은 내부 Lavalink의 `ytsearch:`를 사용하며 다운로드·큐 등록과 별도입니다.
+
+## 검색 후보 선택
+
+방송 소유자 인증 후 `POST /api/stations/{station_id}/tracks/search`에
+`{"query":"가수 곡 제목"}`을 보냅니다. `candidates` 배열의 항목은
+`video_id`, `url`, `title`, `channel`, `duration_ms`, `thumbnail_url`입니다.
+중복·라이브·길이 불명·최대 재생시간 초과 영상은 제외하고 최대 3개를 반환합니다.
+결과가 적거나 없을 수도 있으며, 검색 성공이 다운로드 가능성을 보장하지 않습니다.
+선택한 항목의 `url`을 기존 음원 등록 API로 전달합니다. 백엔드에서 길이를 다시 검증합니다.
+
+`application.yml`의 `plugins.youtube.allowSearch: true`가 필요합니다.
+false이면 유명한 곡도 빈 결과가 나올 수 있습니다. 수정 후 Lavalink를 재시작합니다.
+외부 포트나 OAuth 권한 추가는 필요 없습니다. 검색은 최대 10초, 프론트는 15초 제한입니다.
+검색어 변경 시 이전 결과·선택을 초기화하며 이전 요청을 취소합니다.
+미리듣기·일반 청취자 신청·곡 목록 UI는 포함하지 않습니다.
 
 검증 버전은 Lavalink 4.2.2와 youtube-source 커밋
 `b33460b38ad13b5cd07da75e46444397cf0ea2df`입니다. 이 커밋의 TV 식별 정보 수정이 필요했습니다.
