@@ -18,11 +18,14 @@ export function useLivePlayback(url: string | null) {
     audio.addEventListener('playing', onPlay)
     audio.addEventListener('pause', onPause)
     audio.addEventListener('error', onError)
+    // 브라우저 autoplay 정책으로 거부될 수 있어 실패는 무시하고 기존 재생 버튼으로 폴백한다.
+    const attemptAutoplay = () => { audio.play().catch(() => {}) }
     if (Hls.isSupported()) {
       const hls = new Hls({ liveSyncDurationCount: 3, liveMaxLatencyDurationCount: 6 })
       hlsRef.current = hls
       hls.attachMedia(audio)
       hls.loadSource(url)
+      hls.on(Hls.Events.MANIFEST_PARSED, attemptAutoplay)
       hls.on(Hls.Events.ERROR, (_, data) => {
         if (!data.fatal) return
         onError()
@@ -36,6 +39,7 @@ export function useLivePlayback(url: string | null) {
       })
     } else if (audio.canPlayType('application/vnd.apple.mpegurl')) {
       audio.src = url
+      attemptAutoplay()
     } else {
       onError()
     }
