@@ -16,14 +16,17 @@ BGM을 -15 dB로 낮춰 반복 믹싱하고 0.3초 페이드를 적용합니다.
 방송 소유자가 `POST /api/stations/{station_id}/tracks`로 YouTube 링크 한 개를 등록하면,
 Lavalink(OAuth + remoteCipher) 다운로드 → MP3 변환 → 기존 Redis 큐 → FFmpeg HLS 송출 순서로 처리합니다.
 현재 음원을 중단하지 않습니다. 청취 화면의 신청곡 버튼에서 방송 소유자가 유튜브 링크를
-등록할 수 있습니다. 제목 검색과 방 생성의 `first_song`은 아직 지원하지 않습니다.
+등록하거나 가수·곡 제목으로 검색해 최대 3개 후보 중 선택할 수 있습니다.
+방 생성의 `first_song`은 아직 지원하지 않습니다.
 곡 이벤트와 소개 예약 모드는 [곡 이벤트 가이드](../../docs/BACKEND_TRACK_EVENTS.md)를 참고합니다.
 
 ### 화면에서 테스트
 
 1. 방송을 만든 계정으로 로그인하고 `/listen`에서 재생 버튼을 누릅니다.
-2. 채팅 입력창 옆 신청곡 버튼을 눌러 유튜브 영상 링크를 입력합니다.
-3. `대기열에 추가`를 누르고 준비 완료 안내를 기다립니다. 등록 성공은 즉시 재생을 뜻하지 않습니다.
+2. 채팅 입력창 옆 신청곡 버튼을 눌러 유튜브 영상 링크 또는 검색어를 입력합니다.
+   검색어는 `검색`을 누른 뒤 제목·채널·길이를 비교해 후보 하나를 선택합니다.
+3. `대기열에 추가` 또는 `선택한 곡 대기열에 추가`를 누르고 준비 완료 안내를 기다립니다.
+   등록 성공은 즉시 재생을 뜻하지 않습니다. 검색만으로 다운로드나 등록이 시작되지는 않습니다.
 4. 같은 링크로 실패 후 재시도할 때는 창을 닫지 않고 `다시 시도`를 누릅니다.
    같은 요청 키를 재사용합니다. 현재는 일반 청취자의 신청은 허용하지 않습니다.
 5. 등록 음악은 별도의 오디오 큐에 저장되므로 기존 사연·무드 요청 목록에는 표시되지 않습니다.
@@ -332,7 +335,11 @@ Remove-Item Env:ONAIR_INTEGRATION_TEST
 
 ## Windows에서 실제 음성 테스트 (처음부터 실행)
 
-아래는 백엔드 3001, 프론트엔드 18080 포트를 사용하는 수동 청취 테스트입니다.
+아래는 백엔드 3000, 프론트엔드 18080 포트를 사용하는 수동 청취 테스트입니다.
+엔진 REST는 8100, Lavalink는 2333, Redis는 6379를 사용합니다.
+자동 테스트가 임시 서버에 빈 포트를 배정하는 동작은 그대로 유지합니다.
+기존 `.env.local` 또는 PowerShell 환경변수에 다른 포트가 남아 있으면 함께 변경하고
+백엔드·프론트엔드를 재시작하세요. `.env`보다 셸 환경변수가 우선합니다.
 각 터미널은 저장소 루트에서 시작합니다. 서버가 이미 실행 중이면 중복 실행하지 않습니다.
 Python 3.12 이상, Node.js, Docker Desktop, FFmpeg가 설치되어 있어야 합니다.
 
@@ -366,7 +373,7 @@ docker compose exec redis redis-cli ping
 
 ```powershell
 cd apps/backend
-$env:PORT = "3001"
+$env:PORT = "3000"
 $env:ONAIR_REDIS_URL = "redis://127.0.0.1:6379/0"
 $env:ONAIR_STATION_ID = "st_local_dev"
 $env:ONAIR_HLS_ENABLED = "1"
@@ -374,7 +381,7 @@ $env:ONAIR_FFMPEG = "ffmpeg"
 .\.venv\Scripts\python.exe -m app
 ```
 
-이 터미널을 실행 상태로 둡니다. http://127.0.0.1:3001/health/redis 에서
+이 터미널을 실행 상태로 둡니다. http://127.0.0.1:3000/health/redis 에서
 `{"ok":true,"redis":"connected"}`를 확인합니다.
 
 ### 3. 터미널 2: 프론트엔드
@@ -383,7 +390,7 @@ $env:ONAIR_FFMPEG = "ffmpeg"
 
 ```powershell
 cd apps/frontend
-$env:VITE_API_BASE_URL = "http://127.0.0.1:3001"
+$env:VITE_API_BASE_URL = "http://127.0.0.1:3000"
 $env:VITE_WS_URL = ""
 $env:VITE_HLS_URL = ""
 npm.cmd run dev -- --host 127.0.0.1 --port 18080 --strictPort
@@ -418,7 +425,7 @@ $env:ONAIR_REDIS_URL = "redis://127.0.0.1:6379/0"
 | 소리가 안 나옴 | 재생 버튼·PC 음소거·엔진 로그와 /api/stream/state의 status, error 확인 |
 | HLS publisher stopped | 백엔드 오류 로그 확인 후 해당 백엔드만 Ctrl+C로 종료하고 재실행 |
 
-방송 상태 URL: http://127.0.0.1:3001/api/stream/state
+방송 상태 URL: http://127.0.0.1:3000/api/stream/state
 정상 준비 상태는 `status: ready`, `error: null`입니다. 준비됨 자체가 음성 존재를 뜻하지는 않습니다.
 화면 위 WebSocket 연결 끊김 표시는 현재 HLS 재생 여부와 별개입니다.
 

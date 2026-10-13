@@ -1,3 +1,12 @@
+export interface TrackCandidate {
+  video_id: string
+  url: string
+  title: string
+  channel: string
+  duration_ms: number
+  thumbnail_url: string
+}
+
 export function normalizeYoutubeLink(value: string): string | null {
   try {
     const url = new URL(value.trim())
@@ -32,13 +41,19 @@ export function createTrackClient(base: string, getToken: () => string | null) {
     try {
       response = await fetch(`${base}/api/stations/${path}`, {
         ...options, headers: { ...options.headers, Authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(260000),
+        signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(260000),
       })
     } catch { throw new Error('연결이 끊겼거나 시간이 초과됐어요. 같은 링크로 다시 시도해주세요.') }
     if (!response.ok) throw new Error(errors[response.status] ?? '음악 등록에 실패했어요. 다시 시도해주세요.')
     return response.json()
   }
   return {
+    async search(stationId: string, query: string, signal?: AbortSignal): Promise<{ candidates: TrackCandidate[] }> {
+      return call(`${encodeURIComponent(stationId)}/tracks/search`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query }), signal,
+      })
+    },
     async checkStation(stationId: string): Promise<boolean> {
       const result = await call(encodeURIComponent(stationId))
       return result.station.status === 'started'

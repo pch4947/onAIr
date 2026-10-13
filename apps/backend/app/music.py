@@ -9,6 +9,7 @@ import re
 import shutil
 import sys
 import tempfile
+import httpx
 import time
 from typing import Annotated, Literal
 from urllib.parse import parse_qs, urlsplit
@@ -23,6 +24,93 @@ from .streaming.tracks import REGISTER
 
 router = APIRouter(prefix='/api/stations')
 logger = logging.getLogger(__name__)
+
+
+class TrackSearchInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    query: str = Field(min_length=1, max_length=120)
+
+    @field_validator('query')
+    @classmethod
+    def clean_query(cls, value):
+        value = value.strip()
+        if not value:
+            raise ValueError('Enter a search term')
+        return value
+
+
+class TrackCandidate(BaseModel):
+    video_id: str
+    url: str
+    title: str
+    channel: str
+    duration_ms: int
+    thumbnail_url: str
+
+
+class TrackSearchResult(BaseModel):
+    candidates: list[TrackCandidate]
+
+
+def search_candidates(payload, max_seconds):
+    if payload.get('loadType') == 'empty':
+        return []
+    if payload.get('loadType') != 'search' or not isinstance(payload.get('data'), list):
+        raise ValueError('Invalid search response')
+    result, seen = [], set()
+    for row in payload['data']:
+        if not isinstance(row, dict) or not isinstance(row.get('info'), dict):
+            continue
+        info = row['info']
+        video = info.get('identifier', '')
+        duration = info.get('length')
+        if (not isinstance(video, str) or not re.fullmatch(r'[A-Za-z0-9_-]{11}', video)
+                or video in seen or info.get('isStream') is not False
+                or info.get('sourceName') != 'youtube'
+                or type(duration) is not int or not 0 < duration <= max_seconds * 1000):
+            continue
+        seen.add(video)
+        result.append(TrackCandidate(video_id=video, url='https://www.youtube.com/watch?v=' + video,
+            title=str(info.get('title') or video)[:200], channel=str(info.get('author') or '')[:200],
+            duration_ms=duration, thumbnail_url=f'https://i.ytimg.com/vi/{video}/mqdefault.jpg'))
+        if len(result) == 3:
+            break
+    return result
+
+
+@router.post('/{station_id}/tracks/search', response_model=TrackSearchResult,
+    responses={403: {'description': 'Station owner required'},
+               503: {'description': 'Search service unavailable'}, 504: {'description': 'Search timed out'}})
+async def search_tracks(station_id: str, body: TrackSearchInput, request: Request, user: User):
+    """Search YouTube only; return up to three finite videos without downloading or enqueueing."""
+    settings = request.app.state.settings
+    if station_id != settings.station_id:
+        raise HTTPException(404, 'Station not found')
+    try:
+        async with asyncio.timeout(3):
+            raw = await request.app.state.redis.get(f'backend:{station_id}:station')
+        if not raw:
+            raise HTTPException(404, 'Station not found')
+        station = json.loads(raw)
+        if station['owner_id'] != user['id']:
+            raise HTTPException(403, 'Station owner required')
+        if station['status'] != 'started':
+            raise HTTPException(409, 'Station must be started')
+        if not settings.lavalink_password:
+            raise HTTPException(503, 'Search service unavailable')
+        async with httpx.AsyncClient(timeout=10, follow_redirects=False, trust_env=False) as client:
+            response = await client.get(settings.lavalink_url + '/v4/loadtracks',
+                headers={'Authorization': settings.lavalink_password},
+                params={'identifier': 'ytsearch:' + body.query})
+        if response.status_code != 200:
+            raise HTTPException(503, 'Search service unavailable')
+        return TrackSearchResult(candidates=search_candidates(response.json(), settings.youtube_max_seconds))
+    except (httpx.TimeoutException, TimeoutError):
+        raise HTTPException(504, 'Search timed out') from None
+    except (httpx.RequestError, RedisError):
+        raise HTTPException(503, 'Search service unavailable') from None
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(502, 'Invalid search service response') from None
 
 
 def youtube_id(value):
