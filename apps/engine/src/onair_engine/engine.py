@@ -42,6 +42,9 @@ class EngineSettings:
     tts_voice: str | None = None  # None이면 어댑터 기본 보이스
     tts_cache_dir: Path | None = None  # None이면 캐시 없이 매번 합성. 공유 오디오 루트 밖에 둔다
     max_concurrent_generations: int = 2
+    # 백엔드가 track.queued를 보내기 전에 더미 곡 이름으로 곡 소개를 만들지. 로컬 실행용이다 —
+    # 운영(--serve)에서는 끈다: 실제로 나오지 않는 곡을 소개하게 된다
+    dummy_tracks: bool = True
     target_buffer_sec: float = 30.0
     # 이보다 오래된 request.arrived는 답하지 않는다. 입력 스트림을 처음부터 읽으므로
     # 엔진이 꺼져 있던 사이의 예전 요청이 재기동 때 몰려온다 [예시]
@@ -100,7 +103,7 @@ class StationEngine:
             telemetry=self.telemetry, audio_root=audio_root,
             recent_segments=config.recent_segments,
         )
-        self.tracks = TrackSource(Catalog())
+        self.tracks = TrackSource(Catalog(), dummy=settings.dummy_tracks)
         self.sources = MaterialSources(tracks=self.tracks, rss=RssCollector())
         self.glue = GlueBank(tts=tts, audio_root=audio_root, station_id=config.station_id,
                              profile=config.profile, fmt=fmt, safety=safety)

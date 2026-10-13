@@ -39,6 +39,7 @@ corners:
   music_intro:
     title: 곡 소개
     budget_sec: [10, 30]
+    requires: {track: 1}         # 운영에서는 백엔드가 알려 준 곡(track.queued)이 있어야 한다
     steps:
       - kind: music_intro        # 곡 소개 → 백엔드가 바로 그 곡을 튼다 (music_ref)
         items: track

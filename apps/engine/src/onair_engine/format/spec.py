@@ -120,9 +120,6 @@ class FormatSpec(BaseModel):
                and not c.startswith("$section:")]
         if bad:
             raise ValueError(f"알 수 없는 자리 표시: {bad} ($main, $section:<코너>만 쓴다)")
-        # 순환 한 바퀴가 전부 건너뛰어지면 방송이 빈다 — 항상 진행되는 코너가 하나는 있어야 한다
-        if not any(c in self.corners and not self.corners[c].requires for c in self.cycle):
-            raise ValueError("cycle에 진입 조건 없는 코너가 하나 이상 있어야 한다")
         return self
 
     @model_validator(mode="after")

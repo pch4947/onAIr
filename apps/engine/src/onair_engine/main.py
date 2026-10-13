@@ -77,6 +77,7 @@ def load_config(path: Path) -> tuple[StationConfig, EngineSettings]:
         tts_voice=pipe.get("tts_voice"),
         tts_cache_dir=Path(pipe["tts_cache_dir"]) if pipe.get("tts_cache_dir") else None,
         max_concurrent_generations=int(pipe.get("max_concurrent_generations", 2)),
+        dummy_tracks=bool(pipe.get("dummy_tracks", True)),
         target_buffer_sec=float(pipe.get("target_buffer_sec", 30)),
         request_max_age_sec=float(pipe.get("request_max_age_sec", 600)),
         api_host=str(raw.get("api", {}).get("host", "127.0.0.1")),
@@ -191,6 +192,8 @@ def cli(argv: list[str] | None = None) -> None:
     if args.serve or args.api:
         if args.serve and settings.transport_kind != "redis":
             parser.error("--serve는 transport.kind=redis가 필요합니다 (--transport redis)")
+        # 운영에서는 백엔드가 알려 준 곡(track.queued)만 소개한다
+        settings.dummy_tracks = False
         main = _serve(manager, settings, with_stations=args.serve)
     else:
         main = manager.run_local(

@@ -47,7 +47,6 @@ def _spec(**override) -> dict:
 @pytest.mark.parametrize("override, message", [
     ({"cycle": ["weather"]}, "정의되지 않은 코너"),
     ({"cycle": ["$oops"]}, "알 수 없는 자리 표시"),
-    ({"cycle": ["text_corner"]}, "진입 조건 없는 코너"),
     ({"default_main": ["weather"]}, "정의되지 않은 코너"),
 ])
 def test_format_spec_rejects_bad_cycle(override, message):

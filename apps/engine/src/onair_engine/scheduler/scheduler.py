@@ -40,8 +40,11 @@ _IDLE_SLEEP_SEC = 0.5
 _MAX_REQUEST_FAILURES = 2  # 생성 실패한 요청은 한 번 다시 큐에 넣고, 또 실패하면 거절한다
 # 백엔드는 backpressure를 약 10초마다 보낸다. 세 번 연속 못 받으면 백엔드가 멈춘 것으로 보고 자체 추정으로 돌아간다
 _BACKEND_REPORT_TTL_SEC = 30.0
-# 클락이 코너를 연달아 이만큼 건너뛰면(전부 진입 조건 미달) 설정 오류로 보고 멈춘다
-_MAX_EMPTY_CORNERS = 50
+# 클락이 코너를 연달아 이만큼 건너뛰면(전부 진입 조건 미달) 지금은 낼 것이 없다고 보고 기다린다.
+# 예: 운영 중인 음악 형식 방에 아직 등록된 곡이 없다 — 곡(track.queued)이 오면 다시 진행한다
+_MAX_EMPTY_CORNERS = 20
+_NO_MATERIAL_SLEEP_SEC = 3.0
+_WAIT = object()  # _next_planned: 낼 수 있는 단계가 지금은 없다
 # v1 계약은 세그먼트당 요청 하나(request_ref)만 싣는다 — 참여 강도가 2여도 1건 (계약 v2 input_refs 전까지)
 _V1_QUOTES_PER_SEGMENT = 1
 
@@ -80,6 +83,7 @@ class Scheduler:
         self._backend_report: tuple[float, float, int] | None = None
         self._backpressure = False
         self._run: CornerRun | None = None
+        self._skip_logged: set[tuple[str, str | None]] = set()  # 기다리는 동안 skip 로그를 반복하지 않는다
         self._last_quote_at = float("-inf")
         # 순서 보장 제출 — 순번 발급, 다음에 낼 순번, 끝났지만 앞 순번을 기다리는 결과
         self._seq = 0
@@ -166,6 +170,10 @@ class Scheduler:
             if planned is None:  # 엔딩까지 편성을 마쳤다 — 남은 생성이 끝나면 종료
                 self.telemetry.log_decision(ctx, Decision(action="idle"))
                 break
+            if planned is _WAIT:  # 진입할 수 있는 코너가 없다 — 소재(곡 등)가 들어오길 기다린다
+                self.telemetry.log_decision(ctx, Decision(action="no_material"))
+                await asyncio.sleep(_NO_MATERIAL_SLEEP_SEC)
+                continue
             if planned.step.kind == "glue":
                 await self._publish_glue(ctx, planned)
             else:
@@ -181,7 +189,8 @@ class Scheduler:
 
     # ── 클락 · 코너 ──────────────────────────────────────────────────
 
-    def _next_planned(self, ctx: ScheduleContext) -> PlannedStep | None:
+    def _next_planned(self, ctx: ScheduleContext):
+        """다음 단계. 엔딩까지 끝났으면 None, 지금은 진입할 코너가 없으면 _WAIT."""
         empty = 0
         while True:
             if self._run is None:
@@ -192,10 +201,9 @@ class Scheduler:
                 if entry is None:
                     empty += 1
                     if empty >= _MAX_EMPTY_CORNERS:
-                        logger.error("CLOCK_EMPTY %s — 진입할 수 있는 코너가 없다",
-                                     self.config.station_id)
-                        return None
+                        return _WAIT
                     continue
+                self._skip_logged.clear()
                 self._run = CornerRun(entry, sources=self.sources, intensity=self.intensity,
                                       thread=Thread(topic=entry.label or self.topic),
                                       started_ms=self._produced_ms)
@@ -212,8 +220,7 @@ class Scheduler:
             self._run = None
             empty += 1
             if empty >= _MAX_EMPTY_CORNERS:
-                logger.error("CLOCK_EMPTY %s — 단계가 나오는 코너가 없다", self.config.station_id)
-                return None
+                return _WAIT
 
     def _admit(self, entry: ClockEntry) -> ClockEntry | None:
         """진입 조건(requires)을 못 채우면 대체 코너로, 대체도 없으면 이번 차례를 건너뛴다."""
@@ -224,7 +231,10 @@ class Scheduler:
             self.telemetry.log_corner(entry.corner.corner_type, entry.label, "fallback",
                                       self._produced_ms)
             return ClockEntry(self.fmt.corner(fallback), entry.label)
-        self.telemetry.log_corner(entry.corner.corner_type, entry.label, "skip", self._produced_ms)
+        key = (entry.corner.corner_type, entry.label)
+        if key not in self._skip_logged:  # 소재를 기다리는 동안 같은 skip을 계속 쌓지 않는다
+            self._skip_logged.add(key)
+            self.telemetry.log_corner(*key, "skip", self._produced_ms)
         return None
 
     def _build_job(self, planned: PlannedStep) -> GenerationJob:

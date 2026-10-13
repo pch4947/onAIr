@@ -14,8 +14,8 @@ from .format.spec import FormatSpec
 from .pipeline.safety import SafetyChecker
 from .pipeline.tts import TtsClient
 
-# 백엔드 계약 모델이 kind: glue를 받기 전(#103)까지는 멘트로 보낸다. BGM 더킹 구분은 같다
-WIRE_KIND = SegmentKind.SPEECH
+# 백엔드는 glue를 멘트와 같이 BGM 더킹하고, music_ref가 있으면 곡 소개로 다룬다 (#103)
+WIRE_KIND = SegmentKind.GLUE
 
 
 class GlueBank:

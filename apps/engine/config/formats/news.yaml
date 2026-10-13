@@ -32,6 +32,7 @@ corners:
     title: 곡 소개
     budget_sec: [5, 20]
     subjectivity: none
+    requires: {track: 1}
     steps:
       - kind: music_intro
         items: track

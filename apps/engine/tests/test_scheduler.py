@@ -34,11 +34,12 @@ class Capture:
         self.station_events.append((event_type, payload))
 
 
-def _engine(tmp_path, **config) -> tuple[StationEngine, Capture]:
+def _engine(tmp_path, dummy_tracks: bool = True, **config) -> tuple[StationEngine, Capture]:
     cfg = StationConfig(station_id="st_test", profile=PROFILE,
                         broadcast_minutes=config.pop("broadcast_minutes", 30), **config)
     settings = EngineSettings(audio_dir=tmp_path / "audio", sqlite_path=tmp_path / "metrics.sqlite",
-                              safety_rules_path=RULES, target_buffer_sec=1e9)
+                              safety_rules_path=RULES, target_buffer_sec=1e9,
+                              dummy_tracks=dummy_tracks)
     transport = Capture()
     return StationEngine(cfg, settings, transport), transport
 
@@ -70,6 +71,7 @@ def test_segments_are_published_in_planned_order(tmp_path):
     engine.scheduler.pipeline = FakePipeline()
     asyncio.run(engine.run(max_segments=6))
     order = ["glue" if _glue(s) else s.id for s in transport.segments]
+    assert all(s.kind == SegmentKind.GLUE for s in transport.segments if _glue(s))  # #103
     # 첫 멘트가 가장 늦게 끝나도 제출은 편성 순서대로, 코너 콜은 앞 코너가 다 나간 뒤에
     assert order == ["opening_greeting", "topic_intro", "corner_preview", "glue", "talk_open",
                      "talk"]
@@ -182,3 +184,44 @@ def test_glue_prerender_covers_format_corners(tmp_path):
     ref, ms = engine.glue.get("topic_talk", "call")
     assert ref.startswith("st_test/glue/") and ms > 0
     assert engine.glue.get("opening", "call") is None  # 문구가 없는 코너
+
+
+def test_serve_mode_skips_music_without_backend_track(tmp_path):
+    # 운영(--serve)에서는 더미 곡을 소개하지 않는다 — 등록된 곡이 없으면 곡 소개 코너를 건너뛴다
+    engine, transport = _engine(tmp_path, dummy_tracks=False)
+    asyncio.run(engine.run(max_segments=10))
+    corners = {s.corner_type for s in transport.segments}
+    assert "music_intro" not in corners and "topic_talk" in corners
+
+
+def test_music_format_waits_for_track_instead_of_ending(tmp_path):
+    engine, transport = _engine(tmp_path, dummy_tracks=False, format="music")
+
+    async def scenario():
+        task = asyncio.create_task(engine.run())
+        for _ in range(200):  # 오프닝까지 나가고 곡을 기다린다
+            if len(transport.segments) >= 3:
+                break
+            await asyncio.sleep(0.02)
+        await asyncio.sleep(3.5)  # 소재 대기(_NO_MATERIAL_SLEEP_SEC) 한 번 이상
+        waiting = len(transport.segments)
+        assert not task.done(), "곡이 없다고 방송을 끝내면 안 된다"
+        db = sqlite3.connect(tmp_path / "metrics.sqlite")
+        skips = db.execute("SELECT COUNT(*) FROM corner_log WHERE event='skip'").fetchone()[0]
+        db.close()
+        # 기다리는 동안(여러 번 다시 시도) 같은 skip을 쌓지 않는다 — music_intro, artist_talk 한 번씩
+        assert skips == 2
+        engine.on_track_queued({"track": {"track_ref": "yt:abc", "title": "밤편지",
+                                          "artist": "아이유", "duration_ms": 200_000},
+                                "source": "playlist"})
+        for _ in range(300):  # 기다리던 루프가 깨어나 곡 소개를 낸다
+            if any(s.music_ref for s in transport.segments):
+                break
+            await asyncio.sleep(0.02)
+        engine.stop()
+        await task
+        return waiting
+
+    waiting = asyncio.run(scenario())
+    assert [s.corner_type for s in transport.segments[:waiting]] == ["opening"] * waiting
+    assert any(s.music_ref == "yt:abc" for s in transport.segments)

@@ -29,8 +29,7 @@ class SegmentKind(StrEnum):
     SPEECH = "speech"
     MUSIC = "music"
     FILLER = "filler"
-    # 접착 요소(코너 콜 등). 백엔드가 받을 수 있게 되기 전(#103)까지는 SPEECH로 보낸다 — glue.py
-    GLUE = "glue"
+    GLUE = "glue"  # 접착 요소(코너 콜·마무리) — 사전 렌더 문구 (glue.py, 백엔드 #103)
 
 
 class RequestState(StrEnum):

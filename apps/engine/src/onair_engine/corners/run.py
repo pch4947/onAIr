@@ -33,8 +33,10 @@ class TrackSource:
     (백엔드가 track.queued를 보내기 전·로컬 실행 — #104).
     """
 
-    def __init__(self, catalog: Catalog | None = None):
+    def __init__(self, catalog: Catalog | None = None, *, dummy: bool = True):
+        """dummy=False(운영)면 백엔드가 알려 준 곡만 쓴다 — 없으면 곡 소개 코너를 건너뛴다."""
         self._catalog = catalog or Catalog()
+        self._dummy_enabled = dummy
         self._queued: dict | None = None
         self._peeked: dict | None = None  # artist_talk이 미리 본 더미 곡 — 같은 곡을 소개해야 한다
 
@@ -56,6 +58,8 @@ class TrackSource:
         return track
 
     def _dummy(self) -> dict | None:
+        if not self._dummy_enabled:
+            return None
         t = self._catalog.pick()
         if t is None:
             return None
