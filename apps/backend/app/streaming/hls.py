@@ -345,8 +345,22 @@ class HlsPublisher:
                     async with self.redis.pipeline(transaction=True) as pipe:
                         pipe.lrange(self.prefix + ':queue', 0, -1)
                         pipe.hgetall(self.prefix + ':segments')
-                        ids, records = await pipe.execute()
-                    self.queued = {key: json.loads(records[key])['duration_ms'] / 1000 for key in ids if key in records}
+                        if self.settings.track_intro_enabled:
+                            pipe.hget(self.prefix + ':track-plan', 'frozen')
+                        queue_snapshot = await pipe.execute()
+                        ids, records = queue_snapshot[:2]
+                    reserved = queue_snapshot[2] if self.settings.track_intro_enabled else None
+                    self.queued = {}
+                    for key in ids:
+                        if key not in records:
+                            continue
+                        row = json.loads(records[key])
+                        # Unintroduced music is a candidate, not playable buffer.
+                        # Counting a four-minute candidate here can prevent the
+                        # engine from generating the introduction needed to play it.
+                        if self.settings.track_intro_enabled and row['kind'] == 'music' and key != reserved:
+                            continue
+                        self.queued[key] = row['duration_ms'] / 1000
                     self.queue_available = True
                     self.redis_error = None
                     # Retry an interrupted queue removal without replaying a published source.
