@@ -1,6 +1,17 @@
 import { useEffect, useState } from 'react'
 import { GENRE_OPTIONS, MAX_MUSIC_TASTE, getVoices } from '@/routes/station-create/api'
-import type { Energy, Formality, Humor, PersonaForm, StationInfo, Voice } from '@/shared/types'
+import type {
+  Energy,
+  Formality,
+  Humor,
+  Intensity,
+  NewsSection,
+  PersonaForm,
+  StationFormat,
+  StationInfo,
+  TalkCorner,
+  Voice,
+} from '@/shared/types'
 
 const FORMALITY_OPTIONS: { value: Formality; label: string }[] = [
   { value: 'polite', label: '존댓말' },
@@ -17,6 +28,34 @@ const HUMOR_OPTIONS: { value: Humor; label: string }[] = [
   { value: 'often', label: '자주' },
 ]
 const BROADCAST_MINUTES_OPTIONS = [30, 45, 60]
+
+const CORNER_OPTIONS: { value: TalkCorner; label: string }[] = [
+  { value: 'story_corner', label: '게시판 사연 읽기' },
+  { value: 'text_corner', label: '채팅 소통' },
+  { value: 'topic_talk', label: '주제 토크' },
+  { value: 'dj_vs_listeners', label: 'DJ와의 미니게임' },
+]
+const NEWS_SECTION_OPTIONS: { value: NewsSection; label: string }[] = [
+  { value: 'general', label: '종합' },
+  { value: 'economy', label: '경제' },
+  { value: 'it', label: 'IT' },
+  { value: 'sports', label: '스포츠' },
+  { value: 'culture', label: '문화' },
+]
+const INTENSITY_OPTIONS: { value: Intensity; label: string }[] = [
+  { value: 'low', label: '낮음' },
+  { value: 'mid', label: '보통' },
+  { value: 'high', label: '높음' },
+]
+const DEFAULT_CORNERS: TalkCorner[] = ['story_corner', 'topic_talk']
+const DEFAULT_NEWS_SECTIONS: NewsSection[] = ['general', 'it']
+const MAX_FORMAT_OPTIONS = 3
+
+function toggleWithinLimit<T>(current: T[], value: T): T[] {
+  if (current.includes(value)) return current.filter((item) => item !== value)
+  if (current.length >= MAX_FORMAT_OPTIONS) return current
+  return [...current, value]
+}
 
 const fieldLabelClass = 'text-[13px] font-medium text-label'
 const textInputClass =
@@ -64,11 +103,13 @@ function Chips<T extends string>({
 }
 
 interface PersonaFormStepProps {
+  format: StationFormat
+  onBack: () => void
   onSubmit: (form: PersonaForm, station: StationInfo) => void
   serverErrors?: Record<string, string>
 }
 
-export function PersonaFormStep({ onSubmit, serverErrors = {} }: PersonaFormStepProps) {
+export function PersonaFormStep({ format, onBack, onSubmit, serverErrors = {} }: PersonaFormStepProps) {
   const [voices, setVoices] = useState<Voice[]>([])
   const [formality, setFormality] = useState<Formality>('polite')
   const [energy, setEnergy] = useState<Energy>('low')
@@ -81,6 +122,11 @@ export function PersonaFormStep({ onSubmit, serverErrors = {} }: PersonaFormStep
   const [voiceAttempt, setVoiceAttempt] = useState(0)
   const [broadcastMinutes, setBroadcastMinutes] = useState(30)
   const [topic, setTopic] = useState('')
+  const [corners, setCorners] = useState<TalkCorner[]>(DEFAULT_CORNERS)
+  const [newsSections, setNewsSections] = useState<NewsSection[]>(DEFAULT_NEWS_SECTIONS)
+  const [intensity, setIntensity] = useState<Intensity>('mid')
+  // 백엔드에 아직 해당 필드가 없어 전송하지 않음 — 화면에만 보여주는 상태 (#102)
+  const [wantsSongRequests, setWantsSongRequests] = useState(true)
   const [errors, setErrors] = useState<Record<string, string>>({})
 
   useEffect(() => {
@@ -114,6 +160,8 @@ export function PersonaFormStep({ onSubmit, serverErrors = {} }: PersonaFormStep
     if (djName.trim().length > 20) nextErrors.djName = 'DJ 이름은 20자 이하로 입력해주세요'
     if (hostNote.length > 100) nextErrors.hostNote = '100자 이하로 입력해주세요'
     if (topic.length > 60) nextErrors.topic = '60자 이하로 입력해주세요'
+    if (format === 'talk' && corners.length < 2) nextErrors.corners = '본 코너를 2~3개 골라주세요'
+    if (format === 'news' && newsSections.length < 2) nextErrors.newsSections = '분야를 2~3개 골라주세요'
     setErrors(nextErrors)
     if (Object.keys(nextErrors).length > 0) return
 
@@ -128,6 +176,10 @@ export function PersonaFormStep({ onSubmit, serverErrors = {} }: PersonaFormStep
       {
         broadcastMinutes,
         topic: topic.trim() || undefined,
+        format,
+        intensity,
+        corners: format === 'talk' ? corners : undefined,
+        newsSections: format === 'news' ? newsSections : undefined,
       },
     )
   }
@@ -135,11 +187,109 @@ export function PersonaFormStep({ onSubmit, serverErrors = {} }: PersonaFormStep
   return (
     <form onSubmit={handleSubmit} className="flex w-full flex-col gap-5">
       <div className="flex flex-col gap-1">
+        <button type="button" onClick={onBack} className="self-start text-xs text-text-muted">
+          ← 형식 다시 고르기
+        </button>
         <h1 className="text-[22px] font-semibold text-text">방송 시작하기</h1>
         <p className="text-[13px] text-text-muted">
           DJ 스타일을 고르면 AI가 어울리는 캐릭터 초안을 만들어드려요
         </p>
       </div>
+
+      {format === 'music' && (
+        <label className="flex items-center justify-between rounded-lg border border-field-border bg-field-bg px-4 py-3">
+          <span className={fieldLabelClass}>신청곡 받기</span>
+          <input
+            type="checkbox"
+            checked={wantsSongRequests}
+            onChange={(event) => setWantsSongRequests(event.target.checked)}
+            className="size-4"
+          />
+        </label>
+      )}
+
+      {format === 'talk' && (
+        <div className="flex flex-col gap-2">
+          <span className={fieldLabelClass}>본 코너 선택 (중복 선택 가능)</span>
+          <div className="flex flex-wrap gap-2">
+            {CORNER_OPTIONS.map((option) => {
+              const active = corners.includes(option.value)
+              const disabled = !active && corners.length >= MAX_FORMAT_OPTIONS
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-pressed={active}
+                  disabled={disabled}
+                  onClick={() => setCorners((prev) => toggleWithinLimit(prev, option.value))}
+                  className={
+                    active
+                      ? 'rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white'
+                      : 'rounded-xl bg-chip-bg px-3.5 py-2 text-xs font-medium text-chip-text disabled:opacity-40'
+                  }
+                >
+                  {option.label}
+                </button>
+              )
+            })}
+          </div>
+          <span className={errorTextClass}>{errors.corners || ' '}</span>
+        </div>
+      )}
+
+      {format === 'news' && (
+        <div className="flex flex-col gap-2">
+          <span className={fieldLabelClass}>분야 (2~3개)</span>
+          <div className="flex flex-wrap gap-2">
+            {NEWS_SECTION_OPTIONS.map((option) => {
+              const active = newsSections.includes(option.value)
+              const disabled = !active && newsSections.length >= MAX_FORMAT_OPTIONS
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-pressed={active}
+                  disabled={disabled}
+                  onClick={() => setNewsSections((prev) => toggleWithinLimit(prev, option.value))}
+                  className={
+                    active
+                      ? 'rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white'
+                      : 'rounded-xl bg-chip-bg px-3.5 py-2 text-xs font-medium text-chip-text disabled:opacity-40'
+                  }
+                >
+                  {option.label}
+                </button>
+              )
+            })}
+          </div>
+          <span className={errorTextClass}>{errors.newsSections || ' '}</span>
+        </div>
+      )}
+
+      {format !== 'news' && (
+        <div className="flex flex-col gap-2">
+          <span className={fieldLabelClass}>채팅 반영 정도</span>
+          <div className="flex flex-wrap gap-2">
+            {INTENSITY_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                aria-pressed={intensity === option.value}
+                onClick={() => setIntensity(option.value)}
+                className={
+                  intensity === option.value
+                    ? 'rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white'
+                    : 'rounded-xl bg-chip-bg px-3.5 py-2 text-xs font-medium text-chip-text'
+                }
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="h-px bg-border" />
 
       <div className="flex flex-wrap gap-x-6 gap-y-3">
         <div className="flex flex-col gap-2">

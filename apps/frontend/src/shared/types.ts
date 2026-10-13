@@ -80,10 +80,19 @@ export interface Voice {
   description: string
 }
 
+export type StationFormat = 'music' | 'talk' | 'news'
+export type TalkCorner = 'story_corner' | 'text_corner' | 'topic_talk' | 'dj_vs_listeners'
+export type NewsSection = 'general' | 'economy' | 'it' | 'sports' | 'culture'
+export type Intensity = 'low' | 'mid' | 'high'
+
 export interface StationInfo {
   firstSongUrl?: string
   broadcastMinutes: number
   topic?: string
+  format: StationFormat
+  corners?: TalkCorner[]
+  newsSections?: NewsSection[]
+  intensity: Intensity
 }
 
 export interface PersonaFieldError {
