@@ -4,14 +4,15 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { DraftLoadingStep } from '@/routes/station-create/DraftLoadingStep'
 import { DraftSelectStep } from '@/routes/station-create/DraftSelectStep'
+import { FormatSelectStep } from '@/routes/station-create/FormatSelectStep'
 import { PersonaEditStep } from '@/routes/station-create/PersonaEditStep'
 import { PersonaFormStep } from '@/routes/station-create/PersonaFormStep'
 import { createStation, generatePersonaDrafts, getStation } from '@/routes/station-create/api'
 import { StationApiError } from '@/routes/station-create/client'
 import type { StationResult } from '@/routes/station-create/client'
-import type { Persona, PersonaForm, StationInfo } from '@/shared/types'
+import type { Persona, PersonaForm, StationFormat, StationInfo } from '@/shared/types'
 
-type Step = 'form' | 'loading' | 'drafts' | 'edit' | 'submitting' | 'waiting'
+type Step = 'format' | 'form' | 'loading' | 'drafts' | 'edit' | 'submitting' | 'waiting'
 
 interface StationCreateModalProps {
   onClose: () => void
@@ -19,7 +20,8 @@ interface StationCreateModalProps {
 
 export function StationCreateModal({ onClose }: StationCreateModalProps) {
   const navigate = useNavigate()
-  const [step, setStep] = useState<Step>('form')
+  const [step, setStep] = useState<Step>('format')
+  const [selectedFormat, setSelectedFormat] = useState<StationFormat>('talk')
   const [form, setForm] = useState<PersonaForm | null>(null)
   const [stationInfo, setStationInfo] = useState<StationInfo | null>(null)
   const [drafts, setDrafts] = useState<Persona[]>([])
@@ -85,11 +87,7 @@ export function StationCreateModal({ onClose }: StationCreateModalProps) {
     setSubmitError('')
     setStep('submitting')
     try {
-      const input = {
-        persona,
-        broadcastMinutes: stationInfo.broadcastMinutes,
-        topic: stationInfo.topic,
-      }
+      const input = { ...stationInfo, persona }
       const body = JSON.stringify(input)
       if (!retry.current || retry.current.body !== body) retry.current = { body, key: crypto.randomUUID() }
       setStation(await createStation(input, retry.current.key))
@@ -113,8 +111,22 @@ export function StationCreateModal({ onClose }: StationCreateModalProps) {
           ×
         </button>
 
+        {step === 'format' && (
+          <FormatSelectStep
+            initialFormat={selectedFormat}
+            onSubmit={(format) => {
+              setSelectedFormat(format)
+              setStep('form')
+            }}
+          />
+        )}
         <div hidden={step !== 'form'}>
-          <PersonaFormStep onSubmit={handleFormSubmit} serverErrors={formErrors} />
+          <PersonaFormStep
+            format={selectedFormat}
+            onBack={() => setStep('format')}
+            onSubmit={handleFormSubmit}
+            serverErrors={formErrors}
+          />
         </div>
         {(step === 'form' || step === 'drafts') && submitError && <p role="alert" className="text-sm text-danger">{submitError}</p>}
         {step === 'loading' && <DraftLoadingStep />}

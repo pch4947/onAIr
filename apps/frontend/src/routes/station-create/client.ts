@@ -88,6 +88,9 @@ export function createStationClient(base: string, getToken: () => string | null)
       if (input.firstSongUrl) throw new Error('첫 노래 지정은 아직 지원하지 않아요.')
       return (await request<{ station: StationResult }>('/stations', {
         persona: toWire(input.persona), broadcast_minutes: input.broadcastMinutes, topic: input.topic || null,
+        format: input.format, intensity: input.intensity,
+        ...(input.format === 'talk' && input.corners ? { corners: input.corners } : {}),
+        ...(input.format === 'news' && input.newsSections ? { news_sections: input.newsSections } : {}),
       }, key)).station
     },
     async getStation(id: string, signal?: AbortSignal): Promise<StationResult> {
