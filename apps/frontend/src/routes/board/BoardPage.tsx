@@ -1,12 +1,13 @@
 // 04_Board_게시판 화면
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Sidebar } from '@/app/Sidebar'
 import { LikeButton } from '@/routes/board/LikeButton'
 import { NewPostModal } from '@/routes/board/NewPostModal'
 import { PostDetailModal } from '@/routes/board/PostDetailModal'
-import { getBoardPosts, likePost, unlikePost } from '@/shared/api'
+import { getBoardPost, getBoardPosts, likePost, unlikePost } from '@/shared/api'
 import type { BoardPost, LikeStatus } from '@/shared/types'
 
 const PAGE_SIZE = 7
@@ -23,6 +24,7 @@ function formatTimeAgo(iso: string): string {
 
 export function BoardPage() {
   const queryClient = useQueryClient()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [selectedPost, setSelectedPost] = useState<BoardPost | null>(null)
   const [page, setPage] = useState(1)
@@ -32,6 +34,24 @@ export function BoardPage() {
   })
   const posts = postsQuery.data?.posts ?? []
   const totalPages = Math.max(1, Math.ceil((postsQuery.data?.total ?? 0) / PAGE_SIZE))
+
+  // 알림(예: 새 댓글)을 클릭해서 들어온 경우 — 목록에 없어도(다른 페이지에 있거나 오래된 글이어도) 바로 열어준다.
+  const linkedPostId = searchParams.get('post')
+  useEffect(() => {
+    if (!linkedPostId) return
+    let cancelled = false
+    getBoardPost(linkedPostId).then((post) => {
+      if (!cancelled) setSelectedPost(post)
+    }).catch(() => {})
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      next.delete('post')
+      return next
+    }, { replace: true })
+    return () => {
+      cancelled = true
+    }
+  }, [linkedPostId, setSearchParams])
 
   const updatePostLikeInCache = (postId: string, status: LikeStatus) => {
     queryClient.setQueryData<{ posts: BoardPost[]; total: number }>(['board-posts', page], (old) =>

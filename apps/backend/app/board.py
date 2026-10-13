@@ -1,6 +1,6 @@
 """Redis-backed board posts, comments, and likes (사연 게시판). Mirrors the storage pattern used by RequestStore.
 
-Engine hand-off (board.story), topic matching, and read notifications are out of scope here —
+Engine hand-off (board.story) and topic matching are out of scope here —
 see issue tracking for the follow-up that wires posts into the broadcast pipeline.
 """
 from datetime import datetime, timezone
@@ -43,6 +43,10 @@ class BoardStore:
                      createdAt=datetime.now(timezone.utc).isoformat(timespec="milliseconds"))
         await self.redis.hset(self.key, entry["id"], json.dumps(entry, ensure_ascii=False))
         return entry
+
+    async def get(self, post_id: str) -> dict | None:
+        raw = await self.redis.hget(self.key, post_id)
+        return json.loads(raw) if raw else None
 
     # Defined before `list` below — once that method exists, its name shadows the
     # builtin `list` for annotations evaluated later in this class body.
@@ -199,6 +203,19 @@ async def list_liked_posts(request: Request, current_user: User, offset: Offset 
     return {"posts": enriched, "total": total}
 
 
+@router.get("/posts/{post_id}")
+async def get_post(post_id: str, request: Request, current_user: User):
+    try:
+        async with asyncio.timeout(3):
+            post = await request.app.state.board.get(post_id)
+            if not post:
+                raise HTTPException(404, "Post not found")
+            count, liked = await request.app.state.post_likes.status(post_id, current_user["id"])
+    except (RedisError, TimeoutError):
+        raise HTTPException(503, "Redis unavailable") from None
+    return {"post": with_like_status(post, count, liked)}
+
+
 @router.post("/posts/{post_id}/like")
 async def like_post(post_id: str, request: Request, current_user: User):
     try:
@@ -227,6 +244,11 @@ async def create_comment(post_id: str, body: CommentInput, request: Request, cur
         async with asyncio.timeout(3):
             entry = await request.app.state.board_comments.create(
                 post_id, current_user["id"], current_user["name"], body.body)
+            post = await request.app.state.board.get(post_id)
+            if post and post["authorId"] != current_user["id"]:
+                await request.app.state.notifications.create(
+                    post["authorId"], "comment", "새 댓글이 달렸어요",
+                    f'{current_user["name"]} 님이 내 글에 댓글을 남겼어요', data={"postId": post_id})
     except (RedisError, TimeoutError):
         raise HTTPException(503, "Redis unavailable") from None
     return {"comment": with_like_status(entry, 0, False)}

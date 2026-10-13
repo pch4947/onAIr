@@ -536,6 +536,46 @@ class BoardApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(res.status_code, 503)
 
 
+class GetPostApiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_returns_post_with_like_status(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        app.dependency_overrides[get_current_user] = lambda: {"id": "u1", "name": "x"}
+        post = dict(id="post1", authorId="author1", authorName="글쓴이", title="t", body="b",
+                    songRequestUrl=None, createdAt="2026-01-01T00:00:00.000+00:00")
+        app.state.board = BoardStore(SimpleNamespace(hget=AsyncMock(return_value=json.dumps(post, ensure_ascii=False))))
+        app.state.post_likes = LikeStore(FakeRedisSet(), "backend:board:post-likes")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            res = await client.get("/api/board/posts/post1")
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.json()["post"]["id"], "post1")
+            self.assertEqual(res.json()["post"]["likeCount"], 0)
+
+    async def test_missing_post_is_404(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        app.dependency_overrides[get_current_user] = lambda: {"id": "u1", "name": "x"}
+        app.state.board = BoardStore(SimpleNamespace(hget=AsyncMock(return_value=None)))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            res = await client.get("/api/board/posts/missing")
+            self.assertEqual(res.status_code, 404)
+
+    async def test_requires_login(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            res = await client.get("/api/board/posts/post1")
+            self.assertEqual(res.status_code, 401)
+
+    async def test_mine_and_liked_routes_are_not_shadowed_by_the_dynamic_route(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        app.dependency_overrides[get_current_user] = lambda: {"id": "u1", "name": "x"}
+        app.state.board = BoardStore(SimpleNamespace(hgetall=AsyncMock(return_value={})))
+        app.state.post_likes = LikeStore(FakeRedisSet(), "backend:board:post-likes")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            res = await client.get("/api/board/posts/mine")
+            self.assertEqual(res.status_code, 200)
+            res = await client.get("/api/board/posts/liked")
+            self.assertEqual(res.status_code, 200)
+
+
 class CommentApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_create_requires_auth_validates_and_returns_comment(self):
         app = create_app(Settings("127.0.0.1", 3000))
@@ -543,6 +583,7 @@ class CommentApiTests(unittest.IsolatedAsyncioTestCase):
         redis = FakeRedisList({})
         redis.rpush = AsyncMock(side_effect=lambda key, value: redis.lists.setdefault(key, []).append(value))
         app.state.board_comments = CommentStore(redis)
+        app.state.board = BoardStore(SimpleNamespace(hget=AsyncMock(return_value=None)))
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
             res = await client.post("/api/board/posts/post1/comments", json={"body": "힘내세요"})
             self.assertEqual(res.status_code, 201)
@@ -557,6 +598,38 @@ class CommentApiTests(unittest.IsolatedAsyncioTestCase):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
             res = await client.post("/api/board/posts/post1/comments", json={"body": "힘내세요"})
             self.assertEqual(res.status_code, 401)
+
+    async def test_create_notifies_post_author_when_commenter_differs(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        app.dependency_overrides[get_current_user] = lambda: {"id": "commenter1", "name": "댓글러"}
+        redis = FakeRedisList({})
+        redis.rpush = AsyncMock(side_effect=lambda key, value: redis.lists.setdefault(key, []).append(value))
+        app.state.board_comments = CommentStore(redis)
+        post = dict(id="post1", authorId="author1", authorName="글쓴이", title="t", body="b",
+                    songRequestUrl=None, createdAt="2026-01-01T00:00:00.000+00:00")
+        app.state.board = BoardStore(SimpleNamespace(hget=AsyncMock(return_value=json.dumps(post, ensure_ascii=False))))
+        app.state.notifications = SimpleNamespace(create=AsyncMock())
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            res = await client.post("/api/board/posts/post1/comments", json={"body": "힘내세요"})
+            self.assertEqual(res.status_code, 201)
+        app.state.notifications.create.assert_awaited_once()
+        self.assertEqual(app.state.notifications.create.await_args.args[0], "author1")
+        self.assertEqual(app.state.notifications.create.await_args.kwargs["data"], {"postId": "post1"})
+
+    async def test_create_skips_notification_when_commenting_on_own_post(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        app.dependency_overrides[get_current_user] = lambda: {"id": "author1", "name": "글쓴이"}
+        redis = FakeRedisList({})
+        redis.rpush = AsyncMock(side_effect=lambda key, value: redis.lists.setdefault(key, []).append(value))
+        app.state.board_comments = CommentStore(redis)
+        post = dict(id="post1", authorId="author1", authorName="글쓴이", title="t", body="b",
+                    songRequestUrl=None, createdAt="2026-01-01T00:00:00.000+00:00")
+        app.state.board = BoardStore(SimpleNamespace(hget=AsyncMock(return_value=json.dumps(post, ensure_ascii=False))))
+        app.state.notifications = SimpleNamespace(create=AsyncMock())
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            res = await client.post("/api/board/posts/post1/comments", json={"body": "내 글에 내 댓글"})
+            self.assertEqual(res.status_code, 201)
+        app.state.notifications.create.assert_not_awaited()
 
     async def test_list_paginates_and_handles_redis_failure(self):
         app = create_app(Settings("127.0.0.1", 3000))

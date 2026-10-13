@@ -6,6 +6,7 @@ import type {
   BoardPost,
   BroadcastStateResponse,
   LikeStatus,
+  NotificationItem,
   ReplaySession,
   RequestRecord,
   SubmitRequestResponse,
@@ -125,6 +126,17 @@ export const getMyBoardPosts = (params: { offset?: number; limit?: number } = {}
 export const getLikedBoardPosts = (params: { offset?: number; limit?: number } = {}) =>
   fetchBoardPostPage('/api/board/posts/liked', params)
 
+export async function getBoardPost(postId: string): Promise<BoardPost> {
+  const res = await fetch(`${API_BASE}/api/board/posts/${postId}`, {
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
+  })
+  if (!res.ok) {
+    throw new Error(`GET /api/board/posts/${postId} failed: ${res.status}`)
+  }
+  const { post } = (await res.json()) as { post: BoardPost }
+  return post
+}
+
 export async function createBoardPost(input: {
   title: string
   body: string
@@ -242,5 +254,62 @@ export async function deleteReplay(sessionId: string): Promise<void> {
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { detail?: string } | null
     throw new Error(body?.detail || `DELETE /api/replays/${sessionId} failed: ${res.status}`)
+  }
+}
+
+export async function getNotifications(params: {
+  offset?: number
+  limit?: number
+} = {}): Promise<{ notifications: NotificationItem[]; total: number; unreadCount: number }> {
+  const query = new URLSearchParams()
+  if (params.offset !== undefined) query.set('offset', String(params.offset))
+  if (params.limit !== undefined) query.set('limit', String(params.limit))
+  const qs = query.toString()
+  const res = await fetch(`${API_BASE}/api/notifications${qs ? `?${qs}` : ''}`, {
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
+  })
+  if (!res.ok) {
+    throw new Error(`GET /api/notifications failed: ${res.status}`)
+  }
+  return (await res.json()) as { notifications: NotificationItem[]; total: number; unreadCount: number }
+}
+
+export async function markNotificationRead(notificationId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/notifications/${notificationId}/read`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
+  })
+  if (!res.ok) {
+    throw new Error(`POST /api/notifications/${notificationId}/read failed: ${res.status}`)
+  }
+}
+
+export async function markAllNotificationsRead(): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/notifications/read-all`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
+  })
+  if (!res.ok) {
+    throw new Error(`POST /api/notifications/read-all failed: ${res.status}`)
+  }
+}
+
+export async function deleteNotification(notificationId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/notifications/${notificationId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
+  })
+  if (!res.ok) {
+    throw new Error(`DELETE /api/notifications/${notificationId} failed: ${res.status}`)
+  }
+}
+
+export async function deleteAllNotifications(): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/notifications`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
+  })
+  if (!res.ok) {
+    throw new Error(`DELETE /api/notifications failed: ${res.status}`)
   }
 }

@@ -138,3 +138,13 @@ export interface ReplaySession {
   bookmarkCount: number
   bookmarked: boolean
 }
+
+export interface NotificationItem {
+  id: string
+  kind: string
+  title: string
+  description: string
+  createdAt: string
+  isUnread: boolean
+  data: { postId?: string }
+}
