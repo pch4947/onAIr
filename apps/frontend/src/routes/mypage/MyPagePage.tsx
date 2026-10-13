@@ -5,10 +5,11 @@ import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Sidebar } from '@/app/Sidebar'
 import { BoardPostCollection } from '@/routes/mypage/BoardPostCollection'
+import { NotificationCollection } from '@/routes/mypage/NotificationCollection'
 import { ReplayCollection } from '@/routes/mypage/ReplayCollection'
 import { clearAccessToken } from '@/shared/authToken'
 import { getBookmarkedReplays, getBroadcastState, getLikedBoardPosts, getMyBoardPosts, getMyStationReplays } from '@/shared/api'
-import { MYPAGE_TABS, NOTIFICATIONS } from '@/routes/mypage/mock'
+import { MYPAGE_TABS } from '@/routes/mypage/mock'
 import type { MyPageTab } from '@/routes/mypage/mock'
 
 export function MyPagePage() {
@@ -55,26 +56,7 @@ export function MyPagePage() {
           ))}
         </nav>
 
-        {activeTab === 'notifications' && (
-          <ul className="flex flex-col gap-2.5">
-            {NOTIFICATIONS.map((item) => (
-              <li
-                key={item.id}
-                className={
-                  item.isUnread
-                    ? 'flex items-center justify-between gap-4 rounded-md border border-[#bad1fa] bg-[#ebf2ff] px-4 py-3.5'
-                    : 'flex items-center justify-between gap-4 rounded-md border border-field-border bg-field-bg px-4 py-3.5'
-                }
-              >
-                <div className="flex flex-col gap-1">
-                  <p className="text-sm font-semibold text-[#1a1a1f]">{item.title}</p>
-                  <p className="text-xs text-text-muted">{item.description}</p>
-                </div>
-                {item.isUnread && <span className="size-2 shrink-0 rounded-full bg-primary" />}
-              </li>
-            ))}
-          </ul>
-        )}
+        {activeTab === 'notifications' && <NotificationCollection />}
 
         {activeTab === 'myPosts' && (
           <BoardPostCollection
