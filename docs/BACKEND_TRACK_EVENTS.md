@@ -26,6 +26,11 @@
 곡 시작 시 다음 대기 곡을 알리며, 대기 곡이 없으면 등록된 playlist 곡을 순환합니다.
 다음 곡을 다운로드할 외부 카탈로그 자체는 이 변경에 포함되지 않습니다.
 
+소개 연동 모드의 `backpressure.d_total_ms`에는 아직 소개·예약되지 않은 음악 후보를
+넣지 않습니다. 후보 곡 길이가 목표 버퍼보다 길면 엔진이 소개 생성을 멈출 수 있기 때문입니다.
+소개가 접수되어 예약된 곡, 인코딩 중인 곡, 방송 시간표에 발행된 곡은 버퍼에 포함합니다.
+직접 송출 모드(0)의 버퍼 계산은 유지합니다.
+
 ## 음원 등록 API
 
 기존 `POST /api/stations/{station_id}/tracks`에 선택 필드 `source`(기본 playlist),
@@ -38,5 +43,21 @@
 `python -m unittest discover -s tests -p test_track_events.py -v`로 서버 시각과 소개 대기를 검증합니다.
 Redis 통합 검증은 `ONAIR_INTEGRATION_TEST=1`로 실행합니다. UUID로 분리한 테스트 키만 정리합니다.
 
-엔진의 이벤트 수신·소개 생성·HELD 처리와 프론트의 화면 연동은 별도 팀원 작업입니다.
-따라서 이 PR은 #104의 백엔드 부분만 완료하며 전체 이슈를 닫지 않습니다.
+실제 엔진 M3까지 포함한 검증은 백엔드 폴더에서 다음과 같이 실행합니다.
+
+```powershell
+$env:ONAIR_INTEGRATION_TEST = '1'
+$env:ONAIR_FFMPEG = (Get-Command ffmpeg).Source
+.venv/Scripts/python.exe -m unittest discover -s tests -p test_music_intro_e2e.py -v
+```
+
+선택적으로 `ONAIR_E2E_AUDIO_FILE`에 이미 다운로드한 실제 음원 경로를 지정할 수 있습니다.
+없으면 테스트 톤을 생성합니다. 곡이 목표 버퍼·보고 주기보다 길도록 15초 이상으로 준비하고,
+실제 엔진이 생성한 소개→예약 곡→소개 제출 이후 도착한 신청곡의 순서를 확인합니다.
+Redis DB15의 UUID 테스트 방송만 사용하며 자기 키와 control 항목만 정리합니다.
+LLM/TTS는 dummy이므로 실제 DJ 음성 품질은 별도 검증해야 합니다.
+테스트는 서버 서비스를 재시작하거나 운영 모드를 활성화하지 않습니다.
+
+엔진 M3의 곡 이벤트 수신과 소개 생성은 위 통합 테스트에 포함합니다.
+실제 LLM/TTS를 사용하는 방송 품질, HELD 등 후속 입력 정책과 프론트 음악 큐 표시는
+별도 검증·작업 범위입니다. 운영 환경의 소개 연동 모드는 별도 배포 검증 후 활성화합니다.
