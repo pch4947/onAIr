@@ -11,6 +11,7 @@ import { useCurrentUser } from '@/shared/useCurrentUser'
 import { ExperimentSurveyModal } from '@/routes/listen/ExperimentSurveyModal'
 import { SongRequestModal } from '@/routes/listen/SongRequestModal'
 import { SongQueueModal } from '@/routes/listen/SongQueueModal'
+import { StationStopButton } from '@/routes/listen/StationStopButton'
 import { EmojiIcon, MusicNoteIcon, ReplaySaveIcon, SendIcon, SongRequestAddIcon } from '@/routes/listen/icons'
 import { STATUS_VARIANT, STATUS_VARIANT_CLASS, isPendingStatus } from '@/routes/listen/requestStatus'
 import { STATION_INFO } from '@/routes/listen/mock'
@@ -65,6 +66,9 @@ export function ListenPage() {
     refetchInterval: BROADCAST_STATE_POLL_INTERVAL_MS,
   })
   const stationId = broadcastStateQuery.data?.stationId
+  const stationStatus = broadcastStateQuery.data?.stationStatus
+  const ended = stationStatus === 'ended' || stationStatus === 'rejected'
+  const ending = ['stopping', 'cleaning', 'draining'].includes(stationStatus ?? '')
 
   useEffect(() => {
     if (!stationId) return
@@ -118,7 +122,7 @@ export function ListenPage() {
             <div className="absolute left-4 right-4 top-4 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <span className="rounded-xl bg-live px-2.5 py-1 text-[11px] font-semibold text-white">
-                  LIVE
+                  {ended ? '종료' : ending ? '종료 중' : 'LIVE'}
                 </span>
                 <span className="text-[13px] font-semibold text-white">{STATION_INFO.name}</span>
                 <button
@@ -141,6 +145,7 @@ export function ListenPage() {
                 )}
               </div>
               <div className="flex items-center gap-2 text-[11px] text-nav-inactive">
+                <StationStopButton stationId={stationId} userId={currentUser?.id} />
                 <span>{CONNECTION_STATUS_LABEL[connectionStatus]}</span>
                 <span>👁 {viewerCount ?? '-'}명 시청 중</span>
               </div>
@@ -167,7 +172,7 @@ export function ListenPage() {
             <div className="absolute inset-x-0 bottom-0 flex flex-col gap-1.5 bg-black/35 px-4 py-3.5">
               <p className="text-[11px] text-nav-inactive">공유 라이브 라디오</p>
               <p className="text-base font-semibold text-white">
-                {isPlaying ? '라이브 방송 청취 중' : hlsUrl ? '재생 버튼을 눌러 방송에 참여하세요' : '방송 준비 중…'}
+                {ended ? '방송이 종료되었습니다' : ending ? '방송 종료 후 정리 중입니다' : isPlaying ? '라이브 방송 청취 중' : hlsUrl ? '재생 버튼을 눌러 방송에 참여하세요' : '방송 준비 중…'}
               </p>
               <div className="flex items-center gap-3">
                 <button
@@ -186,7 +191,7 @@ export function ListenPage() {
                   />
                 </div>
                 <span className="shrink-0 text-[11px] text-nav-inactive">
-                  LIVE
+                  {ended ? '종료' : ending ? '종료 중' : 'LIVE'}
                 </span>
               </div>
               <p className="text-[11px] text-nav-inactive">
@@ -194,7 +199,7 @@ export function ListenPage() {
                   ? '방송 상태 불러오는 중...'
                   : broadcastStateQuery.isError || !broadcastStateQuery.data
                     ? '방송 상태를 불러오지 못했습니다'
-                    : `방송 상태: ${STREAM_STATUS_LABEL[broadcastStateQuery.data.stream.status]}`}
+                    : `방송 상태: ${ended ? '종료됨' : ending ? '종료·정리 중' : STREAM_STATUS_LABEL[broadcastStateQuery.data.stream.status]}`}
               </p>
             </div>
           </div>

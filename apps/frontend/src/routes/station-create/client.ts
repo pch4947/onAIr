@@ -6,7 +6,8 @@ type WirePersona = Omit<Persona, 'musicTaste' | 'djName' | 'signaturePhrases'> &
 
 export interface StationResult {
   station_id: string
-  status: 'preparing' | 'started' | 'rejected'
+  status: 'preparing' | 'started' | 'rejected' | 'draining' | 'stopping' | 'cleaning' | 'ended'
+  created_at: number
   hls_ready: boolean
   hls_url: string
   engine_result: { reason?: string; detail?: string } | null
@@ -95,6 +96,10 @@ export function createStationClient(base: string, getToken: () => string | null)
     },
     async getStation(id: string, signal?: AbortSignal): Promise<StationResult> {
       return (await request<{ station: StationResult }>(`/stations/${encodeURIComponent(id)}`, undefined, undefined, signal)).station
+    },
+    async stopStation(id: string, createdAt: number): Promise<StationResult> {
+      return (await request<{ station: StationResult }>(`/stations/${encodeURIComponent(id)}/stop`,
+        { created_at: createdAt })).station
     },
   }
 }

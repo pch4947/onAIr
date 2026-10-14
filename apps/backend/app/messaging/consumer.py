@@ -90,6 +90,7 @@ class EngineConsumer:
         self.prefix = f"backend:{settings.station_id}"
         self.stream = f"engine:{settings.station_id}:out"
         self.name = f"backend-{socket.gethostname()}-{uuid.uuid4().hex[:8]}"
+        self.lifecycle_lock = asyncio.Lock()
 
     async def ensure_group(self):
         try:
@@ -108,11 +109,22 @@ class EngineConsumer:
         await self.redis.hdel(self.prefix + ":attempts", entry_id)
 
     async def handle(self, entry_id, fields):
+        async with self.lifecycle_lock:
+            await self._handle(entry_id, fields)
+
+    async def _handle(self, entry_id, fields):
         try:
             event = decode(fields, self.settings.station_id)
         except (ValueError, TypeError):
             await self.quarantine(entry_id, fields, "invalid_contract")
             return
+        raw = await self.redis.get(self.prefix + ':station')
+        if raw:
+            station = json.loads(raw)
+            if (station['status'] in ('ended', 'cleaning')
+                    or float(fields['at']) < station['created_at']):
+                await self.ack(entry_id)
+                return
         if isinstance(event, Segment):
             encoded = json.dumps(event.model_dump(), sort_keys=True, ensure_ascii=False)
             old = await self.redis.hget(self.prefix + ":segments", event.id)

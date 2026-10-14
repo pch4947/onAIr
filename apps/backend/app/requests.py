@@ -4,10 +4,13 @@ import hashlib
 import json
 import time
 from uuid import uuid4
+from fastapi import HTTPException
 
 
 # Check key types before writing: Redis scripts isolate commands but do not roll back errors.
 CREATE = """
+local station = redis.call('GET', KEYS[5])
+if station and cjson.decode(station).status ~= 'started' then return {-1, ''} end
 local expected = {'hash', 'hash', 'stream', 'list'}
 for i = 1, 4 do
   local kind = redis.call('TYPE', KEYS[i]).ok
@@ -47,13 +50,16 @@ class RequestStore:
         fingerprint = hashlib.sha256(json.dumps([prompt, listener_id, kind], ensure_ascii=False).encode()).hexdigest()
         # Separate automatic keys from client-provided keys.
         key = 'client:' + hashlib.sha256(idempotency_key.encode()).hexdigest() if idempotency_key else 'auto:' + request_id
-        accepted, stored_id = await self.redis.eval(CREATE, 4, self.prefix + ':requests',
+        accepted, stored_id = await self.redis.eval(CREATE, 5, self.prefix + ':requests',
             self.prefix + ':request-keys', f'engine:{self.station_id}:in',
             self.prefix + ':request-history:' + request_id,
+            self.prefix + ':station',
             key, fingerprint, request_id, json.dumps(entry, ensure_ascii=False),
             'evt_' + uuid4().hex, self.station_id, str(time.time()),
             json.dumps(dict(request_id=request_id, kind=kind, body=prompt,
                             requester_ref=listener_id), ensure_ascii=False))
+        if accepted == -1:
+            raise HTTPException(409, 'Station is not accepting requests')
         if not accepted:
             raise IdempotencyConflict()
         return await self.get(stored_id)

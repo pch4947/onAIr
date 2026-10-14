@@ -29,13 +29,15 @@ local old = redis.call('GET', KEYS[1])
 if old then
  local s = cjson.decode(old)
  if s.owner_id == ARGV[1] and s.retry_key == ARGV[2] and s.fingerprint == ARGV[3] then return old end
- return ''
+ if s.status ~= 'ended' then return '' end
 end
 redis.call('HSET', KEYS[2], ARGV[4], ARGV[5])
-redis.call('SET', KEYS[1], ARGV[6])
-redis.call('XADD', KEYS[3], '*', 'type', 'station.created', 'contract_version', '1',
+local control_id = redis.call('XADD', KEYS[3], '*', 'type', 'station.created', 'contract_version', '1',
  'event_id', ARGV[7], 'station_id', ARGV[8], 'at', ARGV[9], 'payload', ARGV[10])
-return ARGV[6]
+-- Preserve empty JSON arrays in persona; Redis cjson would turn them into objects.
+local encoded = string.sub(ARGV[6], 1, -2) .. ', "control_id":' .. cjson.encode(control_id) .. '}'
+redis.call('SET', KEYS[1], encoded)
+return encoded
 """
 
 RESULT = """
@@ -43,10 +45,8 @@ local raw = redis.call('GET', KEYS[1])
 if not raw then return 0 end
 local s = cjson.decode(raw)
 if s.status ~= 'preparing' or tonumber(ARGV[1]) < s.created_at then return 0 end
-s.status = ARGV[2]
-s.engine_result = cjson.decode(ARGV[3])
-s.updated_at = tonumber(ARGV[1])
-redis.call('SET', KEYS[1], cjson.encode(s))
+if raw ~= ARGV[4] then return 0 end
+redis.call('SET', KEYS[1], ARGV[5])
 return 1
 """
 
@@ -111,6 +111,7 @@ class StationStore:
             exclude={'format', 'corners', 'news_sections', 'intensity', 'experiment'}) | body.format_options()
         now = time.time()
         record = dict(station_id=self.station_id, owner_id=owner, status='preparing',
+                      generation=uuid4().hex,
                       created_at=now, updated_at=now, config=payload,
                       retry_key=retry_key, fingerprint=fingerprint, engine_result=None)
         raw = await self.redis.eval(CREATE, 3, self.key, f'backend:{self.station_id}:personas',
@@ -122,15 +123,23 @@ class StationStore:
         return json.loads(raw)
 
     async def result(self, kind, payload, at):
+        raw = await self.redis.get(self.key)
+        if not raw:
+            return
+        record = json.loads(raw)
+        status = 'started' if kind == 'station.started' else 'rejected'
+        updated = dict(record, status=status, engine_result=payload, updated_at=at)
+        # Keep persona arrays and the exact created_at used by the stop API.
         await self.redis.eval(RESULT, 1, self.key, str(at),
-                              'started' if kind == 'station.started' else 'rejected', json.dumps(payload))
+                              status, json.dumps(payload), raw, json.dumps(updated))
 
 
 def public_station(record, request):
     # Engine started does not imply HLS ready, and fallback readiness does not imply engine started.
     hls = request.app.state.hls
-    return {k: v for k, v in record.items() if k not in ('retry_key', 'fingerprint', 'owner_id')} | {
-        'hls_ready': bool(request.app.state.settings.hls_enabled and hls.ready),
+    return {k: v for k, v in record.items() if k not in ('retry_key', 'fingerprint', 'owner_id', 'control_id')} | {
+        'hls_ready': bool(request.app.state.settings.hls_enabled and hls.ready
+                          and record['status'] not in ('stopping', 'cleaning', 'ended', 'rejected')),
         'hls_url': f'/hls/{record["station_id"]}/index.m3u8'}
 
 
@@ -142,7 +151,12 @@ async def create_station(body: StationInput, request: Request, user: User,
         raise HTTPException(422, 'Submit a persona draft without persona_id; the backend assigns it')
     try:
         async with asyncio.timeout(3):
-            record = await request.app.state.stations.create(body, user['id'], idempotency_key)
+            lifecycle = getattr(request.app.state, 'lifecycle', None)
+            if lifecycle:
+                async with lifecycle.lock:
+                    record = await request.app.state.stations.create(body, user['id'], idempotency_key)
+            else:
+                record = await request.app.state.stations.create(body, user['id'], idempotency_key)
     except (RedisError, TimeoutError):
         raise HTTPException(503, 'Redis unavailable; retry with the same Idempotency-Key') from None
     return {'station': public_station(record, request)}
@@ -161,6 +175,27 @@ async def get_station(station_id: str, request: Request, response: Response, use
     if not raw or json.loads(raw)['owner_id'] != user['id']:
         raise HTTPException(404, 'Station not found')
     return {'station': public_station(json.loads(raw), request)}
+
+
+class StopInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    created_at: float = Field(gt=0, allow_inf_nan=False)
+
+
+@router.post('/stations/{station_id}/stop', status_code=202)
+async def stop_station(station_id: str, body: StopInput, request: Request, user: User):
+    """Owner-only, idempotent stop and cleanup. Keeps VOD; 202 means cleanup is pending.
+
+    Send the created_at from the owner lookup to avoid stopping a replacement broadcast.
+    """
+    if station_id != request.app.state.settings.station_id:
+        raise HTTPException(404, 'Station not found')
+    try:
+        async with asyncio.timeout(5):
+            record = await request.app.state.lifecycle.request_stop(user['id'], body.created_at)
+    except (RedisError, TimeoutError):
+        raise HTTPException(503, 'Cleanup unavailable; safely retry the same request') from None
+    return {'station': public_station(record, request)}
 
 
 async def engine_call(request, method, path, body=None, params=None):
