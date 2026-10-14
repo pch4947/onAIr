@@ -43,10 +43,11 @@ class RequestStore:
         self.station_id = station_id
         self.prefix = f'backend:{station_id}'
 
-    async def create(self, prompt, listener_id, kind, idempotency_key=None):
+    async def create(self, prompt, listener_id, kind, idempotency_key=None, listener_name=None):
         request_id = str(uuid4())
-        entry = dict(id=request_id, prompt=prompt, listenerId=listener_id, kind=kind,
-                     status='requested', createdAt=datetime.now(timezone.utc).isoformat(timespec='milliseconds'))
+        entry = dict(id=request_id, prompt=prompt, listenerId=listener_id, listenerName=listener_name,
+                     kind=kind, status='requested',
+                     createdAt=datetime.now(timezone.utc).isoformat(timespec='milliseconds'))
         fingerprint = hashlib.sha256(json.dumps([prompt, listener_id, kind], ensure_ascii=False).encode()).hexdigest()
         # Separate automatic keys from client-provided keys.
         key = 'client:' + hashlib.sha256(idempotency_key.encode()).hexdigest() if idempotency_key else 'auto:' + request_id

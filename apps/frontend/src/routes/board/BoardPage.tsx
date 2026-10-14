@@ -59,6 +59,12 @@ export function BoardPage() {
     )
   }
 
+  const handlePostDeleted = (postId: string) => {
+    queryClient.setQueryData<{ posts: BoardPost[]; total: number }>(['board-posts', page], (old) =>
+      old ? { ...old, posts: old.posts.filter((post) => post.id !== postId), total: old.total - 1 } : old,
+    )
+  }
+
   const handleTogglePostLike = async (post: BoardPost) => {
     const status = post.liked ? await unlikePost(post.id) : await likePost(post.id)
     updatePostLikeInCache(post.id, status)
@@ -154,6 +160,7 @@ export function BoardPage() {
           post={selectedPost}
           onClose={() => setSelectedPost(null)}
           onPostLikeChange={updatePostLikeInCache}
+          onPostDeleted={handlePostDeleted}
         />
       )}
     </div>

@@ -100,6 +100,7 @@ class BackendTests(unittest.TestCase):
                           "/api/stations/{station_id}/stop", "/api/stations/{station_id}/tracks/access",
                           "/api/personas/drafts", "/api/personas/check", "/api/board/posts",
                           "/api/board/posts/{post_id}", "/api/board/posts/{post_id}/comments",
+                          "/api/board/posts/{post_id}/comments/{comment_id}",
                           "/api/board/posts/{post_id}/like",
                           "/api/board/comments/{comment_id}/like", "/api/board/posts/mine",
                           "/api/board/posts/liked", "/api/stations/{station_id}/replays",

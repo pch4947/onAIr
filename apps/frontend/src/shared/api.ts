@@ -36,12 +36,16 @@ export async function sendPresenceHeartbeat(stationId: string, clientId: string)
 export async function submitRequest(input: {
   prompt: string
   listenerId?: string
+  listenerName?: string
   kind?: 'story' | 'mood'
 }): Promise<SubmitRequestResponse> {
   const res = await fetch(`${API_BASE}/api/requests`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt: input.prompt, listenerId: input.listenerId, kind: input.kind }),
+    body: JSON.stringify({
+      prompt: input.prompt, listenerId: input.listenerId,
+      listenerName: input.listenerName, kind: input.kind,
+    }),
   })
   if (!res.ok) {
     throw new Error(`POST /api/requests failed: ${res.status}`)
@@ -205,6 +209,26 @@ export const likeComment = (commentId: string) =>
   toggleLike(`${API_BASE}/api/board/comments/${commentId}/like`, 'POST')
 export const unlikeComment = (commentId: string) =>
   toggleLike(`${API_BASE}/api/board/comments/${commentId}/like`, 'DELETE')
+
+export async function deleteBoardPost(postId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/board/posts/${postId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
+  })
+  if (!res.ok) {
+    throw new Error(`DELETE /api/board/posts/${postId} failed: ${res.status}`)
+  }
+}
+
+export async function deleteComment(postId: string, commentId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/board/posts/${postId}/comments/${commentId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
+  })
+  if (!res.ok) {
+    throw new Error(`DELETE /api/board/posts/${postId}/comments/${commentId} failed: ${res.status}`)
+  }
+}
 
 async function fetchReplayPage(
   path: string,
