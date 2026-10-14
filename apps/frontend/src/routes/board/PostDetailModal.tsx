@@ -1,8 +1,13 @@
 // 06_Board_게시글 상세보기
 
 import { useEffect, useState } from 'react'
+import { useMutation } from '@tanstack/react-query'
 import { LikeButton } from '@/routes/board/LikeButton'
-import { createComment, getComments, likeComment, likePost, unlikeComment, unlikePost } from '@/shared/api'
+import {
+  createComment, deleteBoardPost, deleteComment, getComments, likeComment, likePost,
+  unlikeComment, unlikePost,
+} from '@/shared/api'
+import { useCurrentUser } from '@/shared/useCurrentUser'
 import type { BoardComment, BoardPost, LikeStatus } from '@/shared/types'
 
 const COMMENT_PAGE_SIZE = 10
@@ -17,9 +22,11 @@ interface PostDetailModalProps {
   post: BoardPost
   onClose: () => void
   onPostLikeChange?: (postId: string, status: LikeStatus) => void
+  onPostDeleted?: (postId: string) => void
 }
 
-export function PostDetailModal({ post, onClose, onPostLikeChange }: PostDetailModalProps) {
+export function PostDetailModal({ post, onClose, onPostLikeChange, onPostDeleted }: PostDetailModalProps) {
+  const { data: currentUser } = useCurrentUser()
   const [postLike, setPostLike] = useState<LikeStatus>({ likeCount: post.likeCount, liked: post.liked })
   const [commentPage, setCommentPage] = useState(1)
   const [comments, setComments] = useState<BoardComment[]>([])
@@ -27,7 +34,26 @@ export function PostDetailModal({ post, onClose, onPostLikeChange }: PostDetailM
   const [isLoadingComments, setIsLoadingComments] = useState(false)
   const [commentBody, setCommentBody] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isConfirmingPostDelete, setIsConfirmingPostDelete] = useState(false)
+  const [commentDeleteTarget, setCommentDeleteTarget] = useState<BoardComment | null>(null)
   const commentTotalPages = Math.max(1, Math.ceil(commentTotal / COMMENT_PAGE_SIZE))
+
+  const deletePostMutation = useMutation({
+    mutationFn: () => deleteBoardPost(post.id),
+    onSuccess: () => {
+      onPostDeleted?.(post.id)
+      onClose()
+    },
+  })
+
+  const deleteCommentMutation = useMutation({
+    mutationFn: (comment: BoardComment) => deleteComment(post.id, comment.id),
+    onSuccess: (_, comment) => {
+      setComments((prev) => prev.filter((item) => item.id !== comment.id))
+      setCommentTotal((prev) => Math.max(0, prev - 1))
+      setCommentDeleteTarget(null)
+    },
+  })
 
   const handleTogglePostLike = async () => {
     const status = postLike.liked ? await unlikePost(post.id) : await likePost(post.id)
@@ -91,6 +117,15 @@ export function PostDetailModal({ post, onClose, onPostLikeChange }: PostDetailM
           </div>
           <div className="flex shrink-0 items-center gap-3">
             <LikeButton liked={postLike.liked} count={postLike.likeCount} onToggle={handleTogglePostLike} />
+            {post.authorId === currentUser?.id && (
+              <button
+                type="button"
+                onClick={() => setIsConfirmingPostDelete(true)}
+                className="text-xs font-medium text-text-muted hover:text-danger"
+              >
+                삭제
+              </button>
+            )}
             <button type="button" onClick={onClose} className="text-base text-text-muted">
               ×
             </button>
@@ -121,11 +156,22 @@ export function PostDetailModal({ post, onClose, onPostLikeChange }: PostDetailM
                     <span className="text-xs font-semibold text-text">{comment.authorName}</span>
                     <span className="text-[11px] text-[#999]">· {formatDateTime(comment.createdAt)}</span>
                   </div>
-                  <LikeButton
-                    liked={comment.liked}
-                    count={comment.likeCount}
-                    onToggle={() => handleToggleCommentLike(comment)}
-                  />
+                  <div className="flex items-center gap-2">
+                    <LikeButton
+                      liked={comment.liked}
+                      count={comment.likeCount}
+                      onToggle={() => handleToggleCommentLike(comment)}
+                    />
+                    {comment.authorId === currentUser?.id && (
+                      <button
+                        type="button"
+                        onClick={() => setCommentDeleteTarget(comment)}
+                        className="text-[11px] font-medium text-text-muted hover:text-danger"
+                      >
+                        삭제
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <p className="mt-1 text-[13px] text-text">{comment.body}</p>
               </li>
@@ -175,6 +221,68 @@ export function PostDetailModal({ post, onClose, onPostLikeChange }: PostDetailM
           </form>
         </div>
       </div>
+
+      {isConfirmingPostDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
+          <div className="flex w-full max-w-100 flex-col gap-4 rounded-xl bg-surface px-7 pb-6 pt-7 shadow-lg">
+            <p className="text-lg font-semibold text-text">이 글을 삭제할까요?</p>
+            <p className="text-[13px] leading-relaxed text-text-muted">
+              삭제하면 글과 모든 댓글이 영구히 사라져요. 되돌릴 수 없어요.
+            </p>
+            {deletePostMutation.isError && (
+              <p className="text-xs text-danger">삭제에 실패했어요, 다시 시도해주세요</p>
+            )}
+            <footer className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsConfirmingPostDelete(false)}
+                disabled={deletePostMutation.isPending}
+                className="rounded-md px-4 py-2.5 text-[13px] font-medium text-text-muted"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={() => deletePostMutation.mutate()}
+                disabled={deletePostMutation.isPending}
+                className="rounded-md bg-danger px-5 py-2.5 text-[13px] font-semibold text-white disabled:opacity-60"
+              >
+                {deletePostMutation.isPending ? '삭제 중...' : '삭제'}
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
+
+      {commentDeleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
+          <div className="flex w-full max-w-100 flex-col gap-4 rounded-xl bg-surface px-7 pb-6 pt-7 shadow-lg">
+            <p className="text-lg font-semibold text-text">이 댓글을 삭제할까요?</p>
+            <p className="text-[13px] leading-relaxed text-text-muted">되돌릴 수 없어요.</p>
+            {deleteCommentMutation.isError && (
+              <p className="text-xs text-danger">삭제에 실패했어요, 다시 시도해주세요</p>
+            )}
+            <footer className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setCommentDeleteTarget(null)}
+                disabled={deleteCommentMutation.isPending}
+                className="rounded-md px-4 py-2.5 text-[13px] font-medium text-text-muted"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={() => deleteCommentMutation.mutate(commentDeleteTarget)}
+                disabled={deleteCommentMutation.isPending}
+                className="rounded-md bg-danger px-5 py-2.5 text-[13px] font-semibold text-white disabled:opacity-60"
+              >
+                {deleteCommentMutation.isPending ? '삭제 중...' : '삭제'}
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

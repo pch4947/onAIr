@@ -38,6 +38,12 @@ class BoardStoreTests(unittest.IsolatedAsyncioTestCase):
         posts = await store.list()
         self.assertEqual([post["id"] for post in posts], ["b", "a"])
 
+    async def test_delete_removes_the_post_field(self):
+        redis = SimpleNamespace(hdel=AsyncMock())
+        store = BoardStore(redis)
+        await store.delete("post1")
+        redis.hdel.assert_awaited_once_with(store.key, "post1")
+
 
 class FakePipeline:
     def __init__(self, redis):
@@ -76,6 +82,19 @@ class FakeRedisList:
     def pipeline(self, transaction=True):
         return FakePipeline(self)
 
+    async def lrange(self, key, start, stop):
+        items = self.lists.get(key, [])
+        stop = len(items) - 1 if stop == -1 else stop
+        return items[start:stop + 1]
+
+    async def lrem(self, key, count, value):
+        items = self.lists.get(key, [])
+        if value in items:
+            items.remove(value)
+
+    async def delete(self, key):
+        self.lists.pop(key, None)
+
 
 class CommentStoreTests(unittest.IsolatedAsyncioTestCase):
     async def test_create_appends_and_list_paginates(self):
@@ -98,6 +117,34 @@ class CommentStoreTests(unittest.IsolatedAsyncioTestCase):
         store = CommentStore(redis)
         comments, total = await store.list("missing", offset=0, limit=10)
         self.assertEqual((comments, total), ([], 0))
+
+    async def test_get_one_finds_by_id_and_returns_none_when_missing(self):
+        redis = FakeRedisList({})
+        store = CommentStore(redis)
+        redis.rpush = AsyncMock(side_effect=lambda key, value: redis.lists.setdefault(key, []).append(value))
+        entry = await store.create("post1", "u1", "user1", "댓글")
+        self.assertEqual((await store.get_one("post1", entry["id"]))["body"], "댓글")
+        self.assertIsNone(await store.get_one("post1", "missing"))
+
+    async def test_delete_one_removes_only_the_matching_comment(self):
+        redis = FakeRedisList({})
+        store = CommentStore(redis)
+        redis.rpush = AsyncMock(side_effect=lambda key, value: redis.lists.setdefault(key, []).append(value))
+        kept = await store.create("post1", "u1", "user1", "남을 댓글")
+        removed = await store.create("post1", "u1", "user1", "지울 댓글")
+        await store.delete_one("post1", removed["id"])
+        comments, total = await store.list("post1", offset=0, limit=10)
+        self.assertEqual(total, 1)
+        self.assertEqual(comments[0]["id"], kept["id"])
+
+    async def test_delete_all_clears_the_list_and_returns_ids(self):
+        redis = FakeRedisList({})
+        store = CommentStore(redis)
+        redis.rpush = AsyncMock(side_effect=lambda key, value: redis.lists.setdefault(key, []).append(value))
+        entries = [await store.create("post1", "u1", "user1", f"댓글 {i}") for i in range(3)]
+        ids = await store.delete_all("post1")
+        self.assertEqual(set(ids), {entry["id"] for entry in entries})
+        self.assertEqual(await store.list("post1", offset=0, limit=10), ([], 0))
 
 
 class FakeSetPipeline:
@@ -158,6 +205,12 @@ class FakeRedisSet:
     async def zrem(self, key, member):
         self.zsets.setdefault(key, {}).pop(member, None)
 
+    async def smembers(self, key):
+        return set(self.sets.get(key, set()))
+
+    async def delete(self, key):
+        self.sets.pop(key, None)
+
     def pipeline(self, transaction=True):
         return FakeSetPipeline(self)
 
@@ -187,6 +240,13 @@ class LikeStoreTests(unittest.IsolatedAsyncioTestCase):
     async def test_status_many_empty_returns_empty(self):
         store = LikeStore(FakeRedisSet(), "prefix")
         self.assertEqual(await store.status_many([], "u1"), {})
+
+    async def test_delete_clears_the_like_set(self):
+        store = LikeStore(FakeRedisSet(), "prefix")
+        await store.like("t1", "u1")
+        await store.like("t1", "u2")
+        await store.delete("t1")
+        self.assertEqual(await store.status("t1", "u1"), (0, False))
 
 
 class LikeStoreUserIndexTests(unittest.IsolatedAsyncioTestCase):
@@ -224,6 +284,16 @@ class LikeStoreUserIndexTests(unittest.IsolatedAsyncioTestCase):
         store = LikeStore(redis, "backend:board:comment-likes")  # no user_index_prefix
         await store.like("c1", "u1")
         self.assertEqual(redis.zsets, {})
+
+    async def test_delete_also_clears_every_liker_from_the_user_index(self):
+        store = LikeStore(FakeRedisSet(), "backend:board:post-likes", "backend:board:user-liked-posts")
+        with patch("app.board.time", SimpleNamespace(time=Mock(side_effect=[1000.0, 1001.0]))):
+            await store.like("p1", "u1")
+            await store.like("p1", "u2")
+        await store.delete("p1")
+        self.assertEqual(await store.status("p1", "u1"), (0, False))
+        self.assertEqual(await store.liked_by("u1", 0, 10), ([], 0))
+        self.assertEqual(await store.liked_by("u2", 0, 10), ([], 0))
 
 
 class BoardStoreGetManyTests(unittest.IsolatedAsyncioTestCase):
@@ -652,6 +722,101 @@ class CommentApiTests(unittest.IsolatedAsyncioTestCase):
             redis.pipeline = lambda transaction=True: (_ for _ in ()).throw(ConnectionError("offline"))
             res = await client.get("/api/board/posts/post1/comments")
             self.assertEqual(res.status_code, 503)
+
+
+class DeletePostApiTests(unittest.IsolatedAsyncioTestCase):
+    def _post(self, author_id="author1"):
+        return dict(id="post1", authorId=author_id, authorName="글쓴이", title="t", body="b",
+                   songRequestUrl=None, createdAt="2026-01-01T00:00:00.000+00:00")
+
+    async def test_author_can_delete_own_post_and_its_comments_and_likes(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        app.dependency_overrides[get_current_user] = lambda: {"id": "author1", "name": "글쓴이"}
+        board_redis = SimpleNamespace(hget=AsyncMock(return_value=json.dumps(self._post(), ensure_ascii=False)),
+                                      hdel=AsyncMock())
+        app.state.board = BoardStore(board_redis)
+        comment_redis = FakeRedisList({"backend:board:comments:post1": [
+            json.dumps(dict(id="c1", postId="post1", authorId="u2", authorName="x", body="b",
+                            createdAt="2026-01-01T00:00:00.000+00:00"), ensure_ascii=False)]})
+        app.state.board_comments = CommentStore(comment_redis)
+        app.state.post_likes = LikeStore(FakeRedisSet(), "backend:board:post-likes",
+                                         "backend:board:user-liked-posts")
+        app.state.comment_likes = LikeStore(FakeRedisSet(), "backend:board:comment-likes")
+        await app.state.post_likes.like("post1", "u3")
+        await app.state.comment_likes.like("c1", "u3")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            res = await client.delete("/api/board/posts/post1")
+            self.assertEqual(res.status_code, 204)
+        board_redis.hdel.assert_awaited_once_with(app.state.board.key, "post1")
+        self.assertEqual(comment_redis.lists.get("backend:board:comments:post1"), None)
+        self.assertEqual(await app.state.post_likes.status("post1", "u3"), (0, False))
+        self.assertEqual(await app.state.comment_likes.status("c1", "u3"), (0, False))
+
+    async def test_other_user_cannot_delete_the_post(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        app.dependency_overrides[get_current_user] = lambda: {"id": "someone-else", "name": "다른사람"}
+        app.state.board = BoardStore(SimpleNamespace(
+            hget=AsyncMock(return_value=json.dumps(self._post(), ensure_ascii=False))))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            res = await client.delete("/api/board/posts/post1")
+            self.assertEqual(res.status_code, 403)
+
+    async def test_missing_post_is_404(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        app.dependency_overrides[get_current_user] = lambda: {"id": "author1", "name": "글쓴이"}
+        app.state.board = BoardStore(SimpleNamespace(hget=AsyncMock(return_value=None)))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            res = await client.delete("/api/board/posts/post1")
+            self.assertEqual(res.status_code, 404)
+
+    async def test_requires_login(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            res = await client.delete("/api/board/posts/post1")
+            self.assertEqual(res.status_code, 401)
+
+
+class DeleteCommentApiTests(unittest.IsolatedAsyncioTestCase):
+    def _seed_comment(self, author_id="author1"):
+        redis = FakeRedisList({"backend:board:comments:post1": [
+            json.dumps(dict(id="c1", postId="post1", authorId=author_id, authorName="x", body="b",
+                            createdAt="2026-01-01T00:00:00.000+00:00"), ensure_ascii=False)]})
+        return redis
+
+    async def test_author_can_delete_own_comment_and_its_likes(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        app.dependency_overrides[get_current_user] = lambda: {"id": "author1", "name": "댓글쓴이"}
+        app.state.board_comments = CommentStore(self._seed_comment())
+        app.state.comment_likes = LikeStore(FakeRedisSet(), "backend:board:comment-likes")
+        await app.state.comment_likes.like("c1", "u2")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            res = await client.delete("/api/board/posts/post1/comments/c1")
+            self.assertEqual(res.status_code, 204)
+        comments, total = await app.state.board_comments.list("post1", 0, 10)
+        self.assertEqual((comments, total), ([], 0))
+        self.assertEqual(await app.state.comment_likes.status("c1", "u2"), (0, False))
+
+    async def test_other_user_cannot_delete_the_comment(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        app.dependency_overrides[get_current_user] = lambda: {"id": "someone-else", "name": "다른사람"}
+        app.state.board_comments = CommentStore(self._seed_comment())
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            res = await client.delete("/api/board/posts/post1/comments/c1")
+            self.assertEqual(res.status_code, 403)
+
+    async def test_missing_comment_is_404(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        app.dependency_overrides[get_current_user] = lambda: {"id": "author1", "name": "x"}
+        app.state.board_comments = CommentStore(FakeRedisList({}))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            res = await client.delete("/api/board/posts/post1/comments/missing")
+            self.assertEqual(res.status_code, 404)
+
+    async def test_requires_login(self):
+        app = create_app(Settings("127.0.0.1", 3000))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            res = await client.delete("/api/board/posts/post1/comments/c1")
+            self.assertEqual(res.status_code, 401)
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ export interface BroadcastStateResponse {
 export interface RequestRecord {
   id: string
   listenerId: string
+  listenerName?: string
   prompt: string
   kind: 'story' | 'mood'
   status: string
