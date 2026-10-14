@@ -13,9 +13,9 @@ BGM을 -15 dB로 낮춰 반복 믹싱하고 0.3초 페이드를 적용합니다.
 
 ## YouTube 링크 음원 송출 (단일 방송 MVP)
 
-방송 소유자가 `POST /api/stations/{station_id}/tracks`로 YouTube 링크 한 개를 등록하면,
+로그인한 사용자가 `POST /api/stations/{station_id}/tracks`로 YouTube 링크 한 개를 등록하면,
 Lavalink(OAuth + remoteCipher) 다운로드 → MP3 변환 → 기존 Redis 큐 → FFmpeg HLS 송출 순서로 처리합니다.
-현재 음원을 중단하지 않습니다. 청취 화면의 신청곡 버튼에서 방송 소유자가 유튜브 링크를
+현재 음원을 중단하지 않습니다. 청취 화면의 신청곡 버튼에서 로그인한 사용자가 유튜브 링크를
 등록하거나 가수·곡 제목으로 검색해 최대 3개 후보 중 선택할 수 있습니다.
 방 생성의 `first_song`은 아직 지원하지 않습니다.
 곡 이벤트와 소개 예약 모드는 [곡 이벤트 가이드](../../docs/BACKEND_TRACK_EVENTS.md)를 참고합니다.
@@ -44,7 +44,7 @@ Lavalink(OAuth + remoteCipher) 다운로드 → MP3 변환 → 기존 Redis 큐 
 
 ### PowerShell 호출
 
-`$token`은 `/api/auth/login`에서 받은 **방송 소유자의 accessToken**으로 설정합니다.
+`$token`은 `/api/auth/login`에서 받은 **로그인한 사용자의 accessToken**으로 설정합니다.
 주소·방송 ID는 현재 환경에 맞춥니다. 토큰을 저장소에 기록하지 않습니다.
 
 ```powershell
@@ -68,7 +68,7 @@ Invoke-RestMethod -Method Post -Uri "$base/api/stations/$station/tracks" `
 큐 대기 시간과 방송 버퍼만큼 지연됩니다. 다운로드와 MP3 변환은 각각 120초 제한이며,
 실패·취소 시 해당 자식 프로세스를 종료하고 불완전 파일은 큐에 넣지 않습니다.
 
-오류: 401 로그인 필요, 403 소유자 아님, 404 방송 없음, 409 방송 미시작/키 충돌,
+오류: 401 로그인 필요, 404 방송 없음, 409 방송 미시작/키 충돌,
 422 링크 형식 오류, 429 다운로드 처리 중, 502 영상 제한·다운로드/변환 실패,
 503 Redis/도구/저장소 사용 불가, 504 시간 초과. 실패한 다운로드는 큐에 넣지 않으며 기존 방송과 폴백을 유지합니다.
 YouTube 측 변경이나 네트워크 제한으로 다운로드가 실패할 수 있습니다.

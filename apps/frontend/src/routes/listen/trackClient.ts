@@ -23,8 +23,8 @@ export function normalizeYoutubeLink(value: string): string | null {
 
 const errors: Record<number, string> = {
   401: '로그인 후 다시 시도해주세요.',
-  403: '방송을 만든 계정만 음악을 등록할 수 있어요.',
-  404: '내 방송을 찾을 수 없어요. 방송을 만든 계정으로 로그인해주세요.',
+  403: '음악을 신청할 권한이 없어요.',
+  404: '방송을 찾을 수 없어요.',
   409: '방송 시작 상태를 확인해주세요. 이미 사용한 요청이라면 창을 다시 열어주세요.',
   422: '올바른 유튜브 영상 링크를 입력해주세요.',
   429: '다른 음원을 준비하고 있어요. 잠시 후 다시 시도해주세요.',
@@ -55,8 +55,8 @@ export function createTrackClient(base: string, getToken: () => string | null) {
       })
     },
     async checkStation(stationId: string): Promise<boolean> {
-      const result = await call(encodeURIComponent(stationId))
-      return result.station.status === 'started'
+      const result = await call(`${encodeURIComponent(stationId)}/tracks/access`)
+      return result.can_request === true
     },
     async enqueue(stationId: string, url: string, key: string): Promise<{ track: { title: string } }> {
       return call(`${encodeURIComponent(stationId)}/tracks`, {

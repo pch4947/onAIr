@@ -2,14 +2,14 @@
 
 ## 구조와 범위
 
-소유자 음원 등록 API → 별도 다운로드 프로세스 → 내부 Lavalink → 전체 MP4 파일 →
+로그인 사용자 음원 등록 API → 별도 다운로드 프로세스 → 내부 Lavalink → 전체 MP4 파일 →
 FFmpeg MP3 → 기존 Redis 방송 큐/HLS. Lavalink의 Discord 연결 기능은 사용하지 않습니다.
 청취 화면에서 링크를 등록하거나 검색어로 최대 3개 후보를 비교·선택할 수 있습니다.
 검색은 내부 Lavalink의 `ytsearch:`를 사용하며 다운로드·큐 등록과 별도입니다.
 
 ## 검색 후보 선택
 
-방송 소유자 인증 후 `POST /api/stations/{station_id}/tracks/search`에
+로그인 인증 후 `POST /api/stations/{station_id}/tracks/search`에
 `{"query":"가수 곡 제목"}`을 보냅니다. `candidates` 배열의 항목은
 `video_id`, `url`, `title`, `channel`, `duration_ms`, `thumbnail_url`입니다.
 중복·라이브·길이 불명·최대 재생시간 초과 영상은 제외하고 최대 3개를 반환합니다.

@@ -20,7 +20,7 @@ test('accepts supported YouTube links and rejects unrelated or ambiguous URLs', 
     'https://youtube.com/watch?v=BaW_jenozKc&v=other', '노래 제목']) assert.equal(normalizeYoutubeLink(url), null)
 })
 
-test('uses owner authentication and preserves retry key for repeated submissions', async () => {
+test('uses listener authentication and preserves retry key for repeated submissions', async () => {
   let calls = 0
   globalThis.fetch = async (url, options) => {
     calls++
@@ -51,12 +51,15 @@ test('search sends plain query and never calls registration endpoint', async () 
   assert.deepEqual(await client.search('st_test', '아이유 밤편지', new AbortController().signal), { candidates: [] })
 })
 
-test('checks station readiness and reports owner and media errors without raw server details', async () => {
-  globalThis.fetch = async () => Response.json({ station: { status: 'preparing' } })
+test('checks station readiness and reports access and media errors without raw server details', async () => {
+  globalThis.fetch = async (url) => {
+    assert.equal(url, 'http://backend/api/stations/st_test/tracks/access')
+    return Response.json({ can_request: false })
+  }
   assert.equal(await client.checkStation('st_test'), false)
-  globalThis.fetch = async () => Response.json({ station: { status: 'started' } })
+  globalThis.fetch = async () => Response.json({ can_request: true })
   assert.equal(await client.checkStation('st_test'), true)
-  for (const [status, message] of [[403, /방송을 만든 계정/], [404, /내 방송/], [502, /다운로드/], [504, /같은 링크/]]) {
+  for (const [status, message] of [[403, /권한/], [404, /방송을 찾을/], [502, /다운로드/], [504, /같은 링크/]]) {
     globalThis.fetch = async () => Response.json({ detail: 'private backend detail' }, { status })
     await assert.rejects(client.enqueue('st_test', 'url', 'key'), message)
   }

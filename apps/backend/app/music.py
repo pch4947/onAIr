@@ -1,4 +1,4 @@
-"""Owner-only direct YouTube playout MVP, using the existing durable HLS queue."""
+"""Authenticated YouTube playout MVP, using the existing durable HLS queue."""
 import asyncio
 import hashlib
 import json
@@ -78,8 +78,23 @@ def search_candidates(payload, max_seconds):
     return result
 
 
+@router.get('/{station_id}/tracks/access')
+async def track_access(station_id: str, request: Request, user: User):
+    """Expose request readiness without exposing the host's private station record."""
+    if station_id != request.app.state.settings.station_id:
+        raise HTTPException(404, 'Station not found')
+    try:
+        async with asyncio.timeout(3):
+            raw = await request.app.state.redis.get(f'backend:{station_id}:station')
+        if not raw:
+            raise HTTPException(404, 'Station not found')
+        return {'can_request': json.loads(raw)['status'] == 'started'}
+    except (RedisError, TimeoutError):
+        raise HTTPException(503, 'Redis unavailable') from None
+
+
 @router.post('/{station_id}/tracks/search', response_model=TrackSearchResult,
-    responses={403: {'description': 'Station owner required'},
+    responses={401: {'description': 'Login required'},
                503: {'description': 'Search service unavailable'}, 504: {'description': 'Search timed out'}})
 async def search_tracks(station_id: str, body: TrackSearchInput, request: Request, user: User):
     """Search YouTube only; return up to three finite videos without downloading or enqueueing."""
@@ -92,8 +107,6 @@ async def search_tracks(station_id: str, body: TrackSearchInput, request: Reques
         if not raw:
             raise HTTPException(404, 'Station not found')
         station = json.loads(raw)
-        if station['owner_id'] != user['id']:
-            raise HTTPException(403, 'Station owner required')
         if station['status'] != 'started':
             raise HTTPException(409, 'Station must be started')
         if not settings.lavalink_password:
@@ -160,7 +173,7 @@ end
 local station = redis.call('GET', KEYS[4])
 if not station then return 'unavailable' end
 local s = cjson.decode(station)
-if s.owner_id ~= ARGV[4] or s.status ~= 'started' then return 'unavailable' end
+if s.status ~= 'started' then return 'unavailable' end
 local old = redis.call('HGET', KEYS[1], ARGV[1])
 if old then return old end
 redis.call('HSET', KEYS[2], ARGV[1], ARGV[2])
@@ -276,7 +289,7 @@ class MusicService:
 
 
 @router.post('/{station_id}/tracks', status_code=202, responses={
-    403: {'description': 'Station owner required'}, 409: {'description': 'Station or retry-key conflict'},
+    401: {'description': 'Login required'}, 409: {'description': 'Station or retry-key conflict'},
     429: {'description': 'Download busy'}, 502: {'description': 'Audio preparation failed'},
     503: {'description': 'HLS, Redis or media tools unavailable'}, 504: {'description': 'Preparation timed out'}})
 async def enqueue_track(station_id: str, body: TrackInput, request: Request, user: User,
@@ -293,8 +306,6 @@ async def enqueue_track(station_id: str, body: TrackInput, request: Request, use
         if not raw:
             raise HTTPException(404, 'Station not found')
         station = json.loads(raw)
-        if station['owner_id'] != user['id']:
-            raise HTTPException(403, 'Station owner required')
         if station['status'] != 'started':
             raise HTTPException(409, 'Station must be started')
         if body.source == 'playlist' and body.request_id is None:

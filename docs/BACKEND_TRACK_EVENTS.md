@@ -34,7 +34,7 @@
 ## 음원 등록 API
 
 기존 `POST /api/stations/{station_id}/tracks`에 선택 필드 `source`(기본 playlist),
-`request_id`를 추가합니다. 소유자 인증과 Idempotency-Key 요구사항은 유지합니다.
+`request_id`를 추가합니다. 로그인 인증과 Idempotency-Key 요구사항은 유지합니다.
 같은 키로 다른 곡·source·request_id를 보내면 409입니다. Swagger는 FastAPI 모델에서 생성됩니다.
 `request`·`vote`는 출처 메타데이터이며 청취자 채팅에서 자동 선곡하는 기능은 아닙니다.
 

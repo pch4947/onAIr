@@ -29,7 +29,7 @@ export function SongRequestModal({ onClose, stationId }: SongRequestModalProps) 
   const retry = useRef<{ url: string; key: string } | null>(null)
   const submitting = useRef(false)
   const station = useQuery({
-    queryKey: ['track-owner', stationId], queryFn: () => client.checkStation(stationId!),
+    queryKey: ['track-access', stationId], queryFn: () => client.checkStation(stationId!),
     enabled: Boolean(stationId), retry: false, staleTime: 0,
   })
   const submitSongRequestMutation = useMutation({
@@ -85,7 +85,7 @@ export function SongRequestModal({ onClose, stationId }: SongRequestModalProps) 
           </button>
         </header>
 
-        <p className="text-xs text-text-muted">방송을 만든 계정 전용이에요. 링크 또는 가수·곡 제목으로 입력해주세요. 검색은 10분 이하 일반 영상만 보여줘요.</p>
+        <p className="text-xs text-text-muted">로그인한 청취자 누구나 신청할 수 있어요. 링크 또는 가수·곡 제목으로 입력해주세요. 검색은 10분 이하 일반 영상만 보여줘요.</p>
 
         <label className="flex flex-col gap-1.5">
           <span className={fieldLabelClass}>유튜브 링크 또는 검색어</span>
