@@ -130,7 +130,8 @@ export function ListenPage() {
                 <button
                   type="button"
                   onClick={() => stream?.sessionId && bookmarkLiveMutation.mutate(stream.sessionId)}
-                  disabled={!stream?.sessionId || bookmarkLiveMutation.isPending}
+                  disabled={!stream?.sessionId || ended || stationStatus === 'cleaning'
+                    || stationStatus === 'stopping' || bookmarkLiveMutation.isPending}
                   className="flex items-center gap-1 rounded-full bg-black/45 px-2.5 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
                 >
                   <ReplaySaveIcon className="size-3.5" />
