@@ -1,6 +1,7 @@
 """Redis connection lifecycle and bounded readiness check."""
 
 import asyncio
+import json
 import httpx
 from contextlib import asynccontextmanager
 
@@ -18,6 +19,7 @@ from .notifications import NotificationStore
 from .replays import ReplaySessionStore
 from .api import PresenceStore
 from .music import MusicService
+from .station_lifecycle import StationLifecycle
 
 
 @asynccontextmanager
@@ -48,12 +50,24 @@ async def redis_lifespan(app):
     task = asyncio.create_task(app.state.engine_consumer.run(), name="engine-consumer")
     publisher = HlsPublisher(client, app.state.settings, app.state.replay_sessions)
     app.state.hls = publisher
+    lifecycle = StationLifecycle(app)
+    app.state.lifecycle = lifecycle
+    app.state.engine_consumer.lifecycle_lock = lifecycle.lock
+    lifecycle_task = None
     try:
-        if app.state.settings.hls_enabled:
+        try:
+            raw = await client.get(app.state.stations.key)
+            status = json.loads(raw)['status'] if raw else None
+        except RedisError:
+            status = 'unknown'  # Keep health endpoints available; retry from lifecycle.
+        if app.state.settings.hls_enabled and status not in ('ended', 'cleaning', 'unknown'):
             await publisher.start()
+        lifecycle_task = asyncio.create_task(lifecycle.run(), name='station-lifecycle')
         yield
     finally:
-        await publisher.stop()
+        if lifecycle_task:
+            await stop_consumer(lifecycle_task)
+        await app.state.hls.stop()
         await stop_consumer(task)
         await client.aclose()
         await engine_http.aclose()

@@ -63,3 +63,14 @@ test('missing login, service failure, and network failure are explicit', async (
   globalThis.fetch = async () => { throw new TypeError('offline') }
   await assert.rejects(client.getVoices(), (error) => error.status === 503)
 })
+
+test('owner stop uses authentication and the displayed broadcast creation time', async () => {
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, 'http://backend/api/stations/st_test/stop')
+    assert.equal(options.method, 'POST')
+    assert.equal(options.headers.Authorization, 'Bearer login-token')
+    assert.deepEqual(JSON.parse(options.body), { created_at: 123.456 })
+    return Response.json({ station: { station_id: 'st_test', status: 'stopping' } }, { status: 202 })
+  }
+  assert.equal((await client.stopStation('st_test', 123.456)).status, 'stopping')
+})

@@ -11,6 +11,7 @@ export interface StreamInfo {
 }
 
 export interface BroadcastStateResponse {
+  stationStatus?: 'idle' | 'preparing' | 'started' | 'draining' | 'stopping' | 'cleaning' | 'ended' | 'rejected' | 'unknown'
   stream: StreamInfo
   stationId: string
   viewerCount: number | null

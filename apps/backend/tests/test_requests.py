@@ -110,7 +110,8 @@ class RequestIntegrationTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as directory:
                 settings = replace(settings, sqlite_path=Path(directory) / 'metrics.sqlite',
                     audio_dir=Path(directory), tts_cache_dir=None,
-                    safety_rules_path=engine_dir / 'config/safety_rules.yaml', llm='dummy', tts='dummy')
+                    safety_rules_path=engine_dir / 'config/safety_rules.yaml',
+                    formats_dir=engine_dir / 'config/formats', llm='dummy', tts='dummy')
                 transport = RedisTransport('redis://127.0.0.1:6379/0', self.station)
                 engine = StationEngine(config, settings, transport)
                 events = transport.events()

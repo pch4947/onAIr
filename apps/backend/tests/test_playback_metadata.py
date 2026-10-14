@@ -28,6 +28,7 @@ class PlaybackMetadataTests(unittest.IsolatedAsyncioTestCase):
             publisher.publish(second, 4, True)
             request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
                 broadcast=BroadcastState(), hls=publisher, settings=settings,
+                redis=SimpleNamespace(get=AsyncMock(return_value=None)),
                 requests=SimpleNamespace(metrics=AsyncMock(return_value={})),
                 presence=SimpleNamespace(count=AsyncMock(return_value=0)))))
             response = Response()

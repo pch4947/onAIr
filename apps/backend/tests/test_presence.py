@@ -114,6 +114,7 @@ class StreamStateViewerCountTests(unittest.IsolatedAsyncioTestCase):
         settings = Settings('127.0.0.1', 3000)
         request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
             broadcast=BroadcastState(), settings=settings, hls=None,
+            redis=SimpleNamespace(get=AsyncMock(return_value=None)),
             requests=SimpleNamespace(metrics=AsyncMock(return_value={})),
             presence=SimpleNamespace(count=AsyncMock(return_value=7)))))
         result = await stream_state(request, Response())
@@ -123,6 +124,7 @@ class StreamStateViewerCountTests(unittest.IsolatedAsyncioTestCase):
         settings = Settings('127.0.0.1', 3000)
         request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
             broadcast=BroadcastState(), settings=settings, hls=None,
+            redis=SimpleNamespace(get=AsyncMock(side_effect=ConnectionError('offline'))),
             requests=SimpleNamespace(metrics=AsyncMock(return_value={})),
             presence=SimpleNamespace(count=AsyncMock(side_effect=ConnectionError('offline'))))))
         result = await stream_state(request, Response())

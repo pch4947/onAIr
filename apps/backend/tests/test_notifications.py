@@ -2,7 +2,7 @@
 import json
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import httpx
 from redis.exceptions import ConnectionError
@@ -142,8 +142,9 @@ class NotificationStoreTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_list_sorts_newest_first(self):
         store = NotificationStore(FakeNotificationRedis())
-        await store.create("u1", "comment", "first", "d1")
-        await store.create("u1", "comment", "second", "d2")
+        with patch('app.notifications.time.time', side_effect=[1000, 1001]):
+            await store.create("u1", "comment", "first", "d1")
+            await store.create("u1", "comment", "second", "d2")
         notifications, _ = await store.list("u1", 0, 10)
         self.assertEqual([n["title"] for n in notifications], ["second", "first"])
 
@@ -157,8 +158,9 @@ class NotificationStoreTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_list_pagination(self):
         store = NotificationStore(FakeNotificationRedis())
-        for i in range(5):
-            await store.create("u1", "comment", f"n{i}", "d")
+        with patch('app.notifications.time.time', side_effect=range(1000, 1005)):
+            for i in range(5):
+                await store.create("u1", "comment", f"n{i}", "d")
         notifications, total = await store.list("u1", 1, 2)
         self.assertEqual(total, 5)
         self.assertEqual([n["title"] for n in notifications], ["n3", "n2"])

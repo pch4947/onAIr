@@ -86,7 +86,8 @@ class MusicIntroE2ETests(unittest.IsolatedAsyncioTestCase):
                     keys = [prefix + ':' + s for s in ('music-submissions', 'segments', 'queue', 'station', 'tracks', 'track-plan')]
                     keys += [f'engine:{station}:in', prefix + ':playlist', prefix + ':playlist-order']
                     await redis.eval(ENQUEUE, 9, *keys, id, json.dumps(row), json.dumps({'segment_id': id}),
-                        'test-owner', json.dumps(meta), station, str(time.time()))
+                        'test-owner', json.dumps(meta), station, str(time.time()),
+                        record['generation'], str(record['created_at']))
 
                 async def wait_for(predicate, label, timeout=100):
                     try:

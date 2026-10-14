@@ -85,7 +85,8 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await client.get(path)).status_code, 404)
 
     async def test_busy_retry_and_failed_download_never_enqueues(self):
-        redis = SimpleNamespace(hget=AsyncMock(return_value=None), eval=AsyncMock())
+        redis = SimpleNamespace(hget=AsyncMock(return_value=None), eval=AsyncMock(),
+                                get=AsyncMock(return_value=json.dumps({'status': 'started'})))
         service = MusicService(redis, Settings('127.0.0.1', 3000))
         await service.lock.acquire()
         with self.assertRaises(HTTPException) as error:

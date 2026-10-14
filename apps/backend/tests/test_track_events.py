@@ -77,7 +77,7 @@ class TrackRedisTests(unittest.IsolatedAsyncioTestCase):
                 ('music-submissions', 'segments', 'queue', 'station', 'tracks', 'track-plan')]
         keys += [f'engine:{self.station}:in', self.prefix + ':playlist', self.prefix + ':playlist-order']
         await self.redis.eval(ENQUEUE, 9, *keys, key, json.dumps(row), json.dumps({'segment_id': key}),
-                              'owner', json.dumps(meta), self.station, str(time.time()))
+                              'owner', json.dumps(meta), self.station, str(time.time()), '', '')
         return row
 
     async def reserve(self, intro_id, track, row=None):

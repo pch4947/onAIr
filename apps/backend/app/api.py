@@ -147,6 +147,15 @@ async def viewer_count(request: Request):
         return None
 
 
+async def station_status(request: Request):
+    try:
+        async with asyncio.timeout(3):
+            raw = await request.app.state.redis.get(f'backend:{request.app.state.settings.station_id}:station')
+            return json.loads(raw)['status'] if raw else 'idle'
+    except (RedisError, TimeoutError):
+        return 'unknown'
+
+
 @router.post("/stations/{station_id}/presence", status_code=204)
 async def presence_heartbeat(station_id: str, body: PresenceInput, request: Request):
     if station_id != request.app.state.settings.station_id:
@@ -166,7 +175,8 @@ async def stream_state(request: Request, response: Response,
     result = request.app.state.broadcast.snapshot()
     result["stationId"] = request.app.state.settings.station_id
     # 둘 다 Redis 호출이라 순차 await하면 각자의 연결 타임아웃이 합산돼 버림; 동시에 실행.
-    viewers, metrics = await asyncio.gather(viewer_count(request), request_metrics(request))
+    viewers, metrics, status = await asyncio.gather(viewer_count(request), request_metrics(request), station_status(request))
+    result['stationStatus'] = status
     result["viewerCount"] = viewers
     result.update(metrics)
     hls = request.app.state.hls
@@ -181,6 +191,8 @@ async def stream_state(request: Request, response: Response,
         playback = hls.playback_metadata(fragment) if request.app.state.settings.hls_enabled else {
             "fragment": fragment, "status": "unavailable", "segment": None}
         result["stream"] = {**result["stream"], "currentSegment": playback["segment"], "playback": playback}
+    if result['stationStatus'] in ('ended', 'cleaning', 'stopping', 'rejected'):
+        result['stream'] = {**result['stream'], 'status': 'bootstrapping', 'hlsUrl': None, 'currentSegment': None}
     return result
 
 

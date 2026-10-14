@@ -182,6 +182,7 @@ class StationRedisTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             settings = EngineSettings(audio_dir=root / 'audio', sqlite_path=root / 'metrics.sqlite',
+                formats_dir=Path(__file__).resolve().parents[2] / 'engine/config/formats',
                 safety_rules_path=Path(__file__).resolve().parents[2] / 'engine/config/safety_rules.yaml')
             manager = EngineManager(settings, transport_factory=lambda sid:
                 RedisTransport('redis://127.0.0.1:6379/15', sid))
@@ -202,6 +203,8 @@ class StationRedisTests(unittest.IsolatedAsyncioTestCase):
                 await consumer.handle(*started[0])
                 record = json.loads(await self.redis.get(self.store.key))
                 self.assertEqual(record['status'], 'started')
+                self.assertEqual(record['created_at'], records[0]['created_at'])
+                self.assertEqual(record['config']['persona']['music_taste'], [])
                 self.assertEqual(record['engine_result']['topic'], BODY['persona']['concept'])
             finally:
                 await manager.close_all()

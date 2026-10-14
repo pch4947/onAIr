@@ -141,6 +141,7 @@ class HlsPublisher:
             self.ownership.close()
             self.ownership = None
         self.ready = False
+        self.started = False
 
     async def encode(self, source: Path | None, *, bgm_duration=None):
         # Only completed encodes are exposed; staging is outside the HTTP directory.

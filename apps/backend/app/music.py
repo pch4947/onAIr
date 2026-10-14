@@ -174,6 +174,7 @@ local station = redis.call('GET', KEYS[4])
 if not station then return 'unavailable' end
 local s = cjson.decode(station)
 if s.status ~= 'started' then return 'unavailable' end
+if (s.generation or '') ~= ARGV[8] or (s.created_at and s.created_at ~= tonumber(ARGV[9])) then return 'unavailable' end
 local old = redis.call('HGET', KEYS[1], ARGV[1])
 if old then return old end
 redis.call('HSET', KEYS[2], ARGV[1], ARGV[2])
@@ -248,7 +249,13 @@ class MusicService:
         return audio, metadata
 
     async def enqueue(self, video_id, owner, retry_key, source='playlist', request_id=None):
-        segment_id = 'music_' + hashlib.sha256(f'{owner}:{retry_key}'.encode()).hexdigest()
+        station_raw = await self.redis.get(self.prefix + ':station')
+        station = json.loads(station_raw) if station_raw else {}
+        generation = station.get('generation', '')
+        created_at = station.get('created_at')
+        # A reused client key in a new broadcast must not inherit an old PLAYED state.
+        scope = f'{generation}:' if generation else ''
+        segment_id = 'music_' + hashlib.sha256(f'{scope}{owner}:{retry_key}'.encode()).hexdigest()
         async def existing():
             raw = await self.redis.hget(self.prefix + ':music-submissions', segment_id)
             if raw:
@@ -282,7 +289,8 @@ class MusicService:
                     self.prefix + ':tracks', self.prefix + ':track-plan', f'engine:{self.settings.station_id}:in',
                     self.prefix + ':playlist', self.prefix + ':playlist-order',
                     segment_id, json.dumps(segment.model_dump(), sort_keys=True, ensure_ascii=False),
-                    json.dumps(result), owner, json.dumps(event), self.settings.station_id, str(time.time()))
+                    json.dumps(result), owner, json.dumps(event), self.settings.station_id, str(time.time()),
+                    generation, str(created_at) if created_at is not None else '')
             if raw == 'unavailable':
                 raise HTTPException(409, 'Station is no longer started')
             return json.loads(raw)

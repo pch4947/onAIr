@@ -196,6 +196,20 @@ def make_app(redis=None, owner_id=None, hls_dir=None):
 
 
 class ReplayApiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_previous_owner_keeps_replay_after_station_owner_changes(self):
+        app, redis = make_app(owner_id='new-owner')
+        await app.state.replay_sessions.start('old-session', 1000)
+        await app.state.replay_sessions.end('old-session', 1100)
+        key = 'backend:st_local_dev:replay-sessions'
+        row = (await app.state.replay_sessions.get_many(['old-session']))['old-session']
+        await redis.hset(key, 'old-session', json.dumps(row | {'ownerId': 'previous-owner'}))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
+            app.dependency_overrides[get_current_user] = lambda: {'id': 'new-owner'}
+            self.assertEqual((await client.delete('/api/replays/old-session')).status_code, 403)
+            self.assertEqual((await client.get('/api/stations/st_local_dev/replays/mine')).json()['total'], 0)
+            app.dependency_overrides[get_current_user] = lambda: {'id': 'previous-owner'}
+            self.assertEqual((await client.get('/api/stations/st_local_dev/replays/mine')).json()['total'], 1)
+
     async def test_list_replays_requires_login(self):
         app, _ = make_app()
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:

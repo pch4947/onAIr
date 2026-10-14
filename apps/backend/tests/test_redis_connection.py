@@ -21,7 +21,7 @@ class RedisConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await redis_health(request)).status_code, 503)
 
     async def test_lifespan_closes_client_even_on_failure(self):
-        client = SimpleNamespace(aclose=AsyncMock())
+        client = SimpleNamespace(aclose=AsyncMock(), get=AsyncMock(return_value=None))
         app = SimpleNamespace(state=SimpleNamespace(settings=Settings("127.0.0.1", 3000)))
         with patch("app.redis_connection.Redis.from_url", return_value=client):
             with self.assertRaises(RuntimeError):

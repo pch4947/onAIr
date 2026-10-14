@@ -1,8 +1,8 @@
 """Redis 기반 방송 다시듣기(VOD) 세션 및 북마크. board.py의 저장 패턴을 그대로 따른다.
 
 "세션"은 HlsPublisher 프로세스 하나의 생애주기와 같다(streaming/hls.py의 self.session 참고) —
-단일 station 프로토타입에는 아직 별도의 방송 시작/종료 API가 없어서, 프로세스 생애주기가
-지금 쓸 수 있는 가장 가까운 세션 경계다. 실제 세션 id가 생기면 이걸로 교체하면 된다.
+방송 종료 정리 시 세션을 닫고, 다음 방송에는 새 publisher와 세션을 생성한다.
+종료된 세션의 ownerId는 다음 방송 소유자가 바뀌어도 유지한다.
 """
 from datetime import datetime, timezone
 from typing import Annotated
@@ -108,9 +108,11 @@ async def list_my_replays(station_id: str, request: Request, current_user: User,
     require_station(station_id, request)
     try:
         async with asyncio.timeout(3):
-            if not await is_station_owner(request, current_user["id"]):
-                return {"replays": [], "total": 0}
-            sessions, total = await request.app.state.replay_sessions.list(offset, limit)
+            legacy_owner = await is_station_owner(request, current_user['id'])
+            all_sessions, _ = await request.app.state.replay_sessions.list(0, 2147483647)
+            owned = [s for s in all_sessions if s.get('ownerId') == current_user['id']
+                     or ('ownerId' not in s and legacy_owner)]
+            sessions, total = owned[offset:offset + limit], len(owned)
             marks = await request.app.state.replay_bookmarks.status_many(
                 [s["id"] for s in sessions], current_user["id"])
     except (RedisError, TimeoutError):
@@ -161,11 +163,13 @@ async def delete_replay(session_id: str, request: Request, current_user: User):
     HlsPublisher가 지금도 그 vod 디렉터리에 쓰고 있을 수 있어 삭제를 막는다."""
     try:
         async with asyncio.timeout(3):
-            if not await is_station_owner(request, current_user["id"]):
-                raise HTTPException(403, "본인 방송만 삭제할 수 있어요")
             record = (await request.app.state.replay_sessions.get_many([session_id])).get(session_id)
             if not record:
                 raise HTTPException(404, "다시듣기를 찾을 수 없어요")
+            owner = (record['ownerId'] == current_user['id'] if 'ownerId' in record
+                     else await is_station_owner(request, current_user['id']))
+            if not owner:
+                raise HTTPException(403, "본인 방송만 삭제할 수 있어요")
             if record["endedAt"] is None:
                 raise HTTPException(409, "진행 중인 방송은 삭제할 수 없어요")
             # 삭제된 세션이 북마크한 사람들의 목록/카운트에 고아로 남지 않도록 같이 정리한다.
