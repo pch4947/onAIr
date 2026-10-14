@@ -36,7 +36,7 @@ class SearchFilterTests(unittest.TestCase):
 
 
 class SearchApiTests(unittest.IsolatedAsyncioTestCase):
-    async def test_owner_only_search_never_enqueues_and_uses_internal_auth(self):
+    async def test_authenticated_listener_search_never_enqueues_and_uses_internal_auth(self):
         app = create_app(Settings('127.0.0.1', 3000, lavalink_password='internal-test'))
         app.state.redis = SimpleNamespace(get=AsyncMock(return_value=json.dumps(dict(owner_id='owner', status='started'))))
         app.state.music = SimpleNamespace(enqueue=AsyncMock())
@@ -46,9 +46,9 @@ class SearchApiTests(unittest.IsolatedAsyncioTestCase):
         upstream.get.return_value = httpx.Response(200, json={'loadType': 'search', 'data': [track()]})
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
             self.assertEqual((await client.post(path, json={'query': 'song'})).status_code, 401)
-            app.dependency_overrides[get_current_user] = lambda: {'id': 'other'}
-            self.assertEqual((await client.post(path, json={'query': 'song'})).status_code, 403)
-            app.dependency_overrides[get_current_user] = lambda: {'id': 'owner'}
+            async def current_listener():
+                return {'id': 'other'}
+            app.dependency_overrides[get_current_user] = current_listener
             with patch('app.music.httpx.AsyncClient', return_value=upstream) as factory:
                 response = await client.post(path, json={'query': '  가수 노래  '})
                 self.assertEqual(response.status_code, 200)

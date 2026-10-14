@@ -48,7 +48,7 @@ class ValidationTests(unittest.TestCase):
 
 
 class ApiTests(unittest.IsolatedAsyncioTestCase):
-    async def test_auth_owner_state_and_accepted_queue(self):
+    async def test_authenticated_listener_state_and_accepted_queue(self):
         app = create_app(Settings('127.0.0.1', 3000, hls_enabled=True))
         app.state.redis = SimpleNamespace(get=AsyncMock(return_value=json.dumps(dict(owner_id='owner', status='started'))))
         app.state.music = SimpleNamespace(enqueue=AsyncMock(return_value={'status': 'queued'}))
@@ -57,16 +57,32 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             body = {'url': f'https://youtu.be/{VIDEO}'}
             headers = {'Idempotency-Key': 'song-one'}
             self.assertEqual((await client.post(path, json=body, headers=headers)).status_code, 401)
-            app.dependency_overrides[get_current_user] = lambda: {'id': 'other'}
-            self.assertEqual((await client.post(path, json=body, headers=headers)).status_code, 403)
-            app.dependency_overrides[get_current_user] = lambda: {'id': 'owner'}
+            async def current_listener():
+                return {'id': 'other'}
+            app.dependency_overrides[get_current_user] = current_listener
             self.assertEqual((await client.post(path, json={'url': 'https://example.com'}, headers=headers)).status_code, 422)
             self.assertEqual((await client.post(path, json=body)).status_code, 422)
             app.state.music.enqueue.assert_not_awaited()
             self.assertEqual((await client.post(path, json=body, headers=headers)).status_code, 202)
-            app.state.music.enqueue.assert_awaited_once_with(VIDEO, 'owner', 'song-one')
+            app.state.music.enqueue.assert_awaited_once_with(VIDEO, 'other', 'song-one')
             app.state.redis.get.return_value = json.dumps(dict(owner_id='owner', status='preparing'))
             self.assertEqual((await client.post(path, json=body, headers=headers)).status_code, 409)
+
+    async def test_listener_access_exposes_only_readiness(self):
+        app = create_app(Settings('127.0.0.1', 3000))
+        app.state.redis = SimpleNamespace(get=AsyncMock(return_value=json.dumps(
+            dict(owner_id='private-owner', status='started', config={'persona': 'private'}))))
+        path = '/api/stations/st_local_dev/tracks/access'
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
+            self.assertEqual((await client.get(path)).status_code, 401)
+            async def current_listener():
+                return {'id': 'listener'}
+            app.dependency_overrides[get_current_user] = current_listener
+            self.assertEqual((await client.get(path)).json(), {'can_request': True})
+            app.state.redis.get.return_value = json.dumps({'status': 'ended'})
+            self.assertEqual((await client.get(path)).json(), {'can_request': False})
+            app.state.redis.get.return_value = None
+            self.assertEqual((await client.get(path)).status_code, 404)
 
     async def test_busy_retry_and_failed_download_never_enqueues(self):
         redis = SimpleNamespace(hget=AsyncMock(return_value=None), eval=AsyncMock())
@@ -134,8 +150,8 @@ class MusicIntegrationTests(unittest.IsolatedAsyncioTestCase):
                     else:
                         await original(args, timeout)
                 with patch('app.music.run_process', side_effect=local_download):
-                    first = await service.enqueue(VIDEO, 'owner', 'one')
-                    second = await service.enqueue(VIDEO, 'owner', 'one')
+                    first = await service.enqueue(VIDEO, 'listener', 'one')
+                    second = await service.enqueue(VIDEO, 'listener', 'one')
                 self.assertEqual(first, second)
                 self.assertEqual(await redis.llen(prefix + ':queue'), 1)
                 publisher = HlsPublisher(redis, settings)
@@ -160,7 +176,7 @@ class MusicIntegrationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertGreater(len(audio_response.content), 0)
                 await original([settings.ffmpeg, '-nostdin', '-v', 'error', '-i',
                                 str(publisher.directory / fragment), '-f', 'null', '-'], 15)
-                self.assertEqual((await service.enqueue(VIDEO, 'owner', 'one'))['segment_id'], first['segment_id'])
+                self.assertEqual((await service.enqueue(VIDEO, 'listener', 'one'))['segment_id'], first['segment_id'])
                 async with asyncio.timeout(5):
                     while await redis.llen(prefix + ':queue'):
                         await asyncio.sleep(0.1)
