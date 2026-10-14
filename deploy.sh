@@ -8,6 +8,9 @@
 #
 # 옵션:
 #   --full   변경 여부와 상관없이 전부 설치·빌드
+#
+# 변경 판단은 "마지막으로 배포에 성공한 커밋"(.git/onair-deployed) 기준입니다.
+# 직접 git pull을 했거나 이전 배포가 중간에 실패해도 아직 배포 안 된 변경은 다시 설치·빌드됩니다.
 #   --no-pull  pull 없이 설치·빌드·재시작만
 #
 # 서비스 이름은 환경변수로 바꿀 수 있습니다 (없는 서비스는 건너뜀):
@@ -36,8 +39,10 @@ warn() { printf '\033[1;33m[warn] %s\033[0m\n' "$*"; }
 
 cd "$ROOT"
 
+# 마지막으로 배포에 성공한 커밋 (git이 추적하지 않는 .git 안에 기록)
+STATE_FILE="$(git rev-parse --git-dir)/onair-deployed"
+
 # ---------------------------------------------------------------- 1. pull
-OLD_HEAD="$(git rev-parse HEAD)"
 if [[ $PULL -eq 1 ]]; then
   log "git pull origin $BRANCH"
   if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
@@ -49,12 +54,17 @@ if [[ $PULL -eq 1 ]]; then
 fi
 NEW_HEAD="$(git rev-parse HEAD)"
 
-if [[ "$OLD_HEAD" == "$NEW_HEAD" ]]; then
-  echo "새 커밋 없음 ($NEW_HEAD)"
+LAST_DEPLOYED="$(cat "$STATE_FILE" 2>/dev/null || true)"
+if [[ -z "$LAST_DEPLOYED" ]] || ! git cat-file -e "$LAST_DEPLOYED^{commit}" 2>/dev/null; then
+  echo "배포 기록 없음 — 전부 설치·빌드합니다"
+  FULL=1
+  CHANGED=""
+elif [[ "$LAST_DEPLOYED" == "$NEW_HEAD" ]]; then
+  echo "마지막 배포 이후 새 커밋 없음 ($NEW_HEAD)"
   CHANGED=""
 else
-  echo "$OLD_HEAD -> $NEW_HEAD"
-  CHANGED="$(git diff --name-only "$OLD_HEAD" "$NEW_HEAD")"
+  echo "마지막 배포 $LAST_DEPLOYED -> $NEW_HEAD"
+  CHANGED="$(git diff --name-only "$LAST_DEPLOYED" "$NEW_HEAD")"
 fi
 
 # 경로 패턴(정규식)에 해당하는 파일이 바뀌었거나 --full이면 true
@@ -134,4 +144,6 @@ if [[ $restarted -eq 0 ]]; then
   warn "재시작한 서비스가 없습니다. 직접 띄운 프로세스라면 수동으로 재시작하세요."
 fi
 
+# 설치·빌드가 끝까지 성공했을 때만 기록 (set -e라 중간 실패 시 여기까지 오지 않음)
+echo "$NEW_HEAD" >"$STATE_FILE"
 log "배포 완료 ($(git rev-parse --short HEAD))"
