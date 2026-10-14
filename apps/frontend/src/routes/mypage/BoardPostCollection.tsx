@@ -33,6 +33,12 @@ export function BoardPostCollection({ queryKey, fetcher, emptyText, removeOnUnli
     })
   }
 
+  const handlePostDeleted = (postId: string) => {
+    queryClient.setQueryData<{ posts: BoardPost[]; total: number }>([queryKey, page], (old) =>
+      old ? { ...old, posts: old.posts.filter((post) => post.id !== postId), total: old.total - 1 } : old,
+    )
+  }
+
   if (!query.isLoading && posts.length === 0) {
     return <p className="text-[13px] text-text-muted">{emptyText}</p>
   }
@@ -83,6 +89,7 @@ export function BoardPostCollection({ queryKey, fetcher, emptyText, removeOnUnli
           post={selectedPost}
           onClose={() => setSelectedPost(null)}
           onPostLikeChange={handlePostLikeChange}
+          onPostDeleted={handlePostDeleted}
         />
       )}
     </div>

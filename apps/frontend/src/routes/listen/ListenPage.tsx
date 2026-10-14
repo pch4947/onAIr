@@ -92,7 +92,7 @@ export function ListenPage() {
   const allRequests = requestsQuery.data?.requests ?? []
   const chatMessages = allRequests.map((item) => ({
     id: item.id,
-    author: item.listenerId === currentUser?.id ? '나' : item.listenerId,
+    author: item.listenerId === currentUser?.id ? '나' : (item.listenerName || '익명'),
     text: item.prompt,
     kind: item.kind,
     status: item.status,
@@ -103,7 +103,9 @@ export function ListenPage() {
     event.preventDefault()
     const trimmed = chatInput.trim()
     if (!trimmed) return
-    submitRequestMutation.mutate({ prompt: trimmed, listenerId: currentUser?.id, kind: 'story' })
+    submitRequestMutation.mutate({
+      prompt: trimmed, listenerId: currentUser?.id, listenerName: currentUser?.name, kind: 'story',
+    })
     setChatInput('')
   }
 
@@ -216,9 +218,10 @@ export function ListenPage() {
                   className="flex flex-col gap-1 rounded-md border border-primary/30 bg-primary/10 px-3 py-2"
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="flex items-center gap-1 font-semibold text-primary">
+                    <span className="flex min-w-0 items-center gap-1 font-semibold text-primary">
                       <MusicNoteIcon className="size-3.5 shrink-0" />
-                      {message.author} 님의 신청곡
+                      <span className="truncate" title={message.author}>{message.author}</span>
+                      <span className="shrink-0">님의 신청곡</span>
                     </span>
                     <span
                       className={`shrink-0 rounded-xl px-2 py-0.5 text-[10px] font-semibold text-white ${STATUS_VARIANT_CLASS[STATUS_VARIANT[message.status] ?? 'queued']}`}
@@ -230,8 +233,13 @@ export function ListenPage() {
                 </li>
               ) : (
                 <li key={message.id} className="flex items-baseline gap-1.5">
-                  <span className="shrink-0 font-semibold text-text-muted">{message.author}</span>
-                  <span>{message.text}</span>
+                  <span
+                    className="max-w-18 shrink-0 truncate font-semibold text-text-muted"
+                    title={message.author}
+                  >
+                    {message.author}
+                  </span>
+                  <span className="min-w-0 flex-1 wrap-break-word">{message.text}</span>
                 </li>
               ),
             )}

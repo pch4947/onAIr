@@ -62,6 +62,9 @@ class BoardStore:
         # Newest first, matching the board feed's reading order.
         return sorted(posts, key=lambda entry: (entry["createdAt"], entry["id"]), reverse=True)
 
+    async def delete(self, post_id: str) -> None:
+        await self.redis.hdel(self.key, post_id)
+
 
 class CommentStore:
     def __init__(self, redis):
@@ -75,6 +78,29 @@ class CommentStore:
                      body=body, createdAt=datetime.now(timezone.utc).isoformat(timespec="milliseconds"))
         await self.redis.rpush(self.key(post_id), json.dumps(entry, ensure_ascii=False))
         return entry
+
+    # Defined before `list` below — once that method exists, its name shadows the
+    # builtin `list` for annotations evaluated later in this class body.
+    async def get_one(self, post_id: str, comment_id: str) -> dict | None:
+        raw = await self.redis.lrange(self.key(post_id), 0, -1)
+        for item in raw:
+            entry = json.loads(item)
+            if entry["id"] == comment_id:
+                return entry
+        return None
+
+    async def delete_one(self, post_id: str, comment_id: str) -> None:
+        raw = await self.redis.lrange(self.key(post_id), 0, -1)
+        for item in raw:
+            if json.loads(item)["id"] == comment_id:
+                await self.redis.lrem(self.key(post_id), 1, item)
+                return
+
+    async def delete_all(self, post_id: str) -> list[str]:
+        """Remove every comment under a post; returns their ids so likes can be cleaned up too."""
+        raw = await self.redis.lrange(self.key(post_id), 0, -1)
+        await self.redis.delete(self.key(post_id))
+        return [json.loads(item)["id"] for item in raw]
 
     async def list(self, post_id: str, offset: int, limit: int) -> tuple[list[dict], int]:
         key = self.key(post_id)
@@ -129,6 +155,15 @@ class LikeStore:
             pipe.sismember(self.key(target_id), user_id)
             count, liked = await pipe.execute()
         return count, bool(liked)
+
+    async def delete(self, target_id: str) -> None:
+        """Drop a target's like set entirely, also clearing it from any per-user index."""
+        key = self.key(target_id)
+        if self.user_index_prefix:
+            members = await self.redis.smembers(key)
+            for member in members:
+                await self.redis.zrem(self.user_index_key(member), target_id)
+        await self.redis.delete(key)
 
     async def status_many(self, target_ids: list[str], user_id: str) -> dict[str, tuple[int, bool]]:
         if not target_ids:
@@ -227,6 +262,25 @@ async def like_post(post_id: str, request: Request, current_user: User):
     return {"likeCount": count, "liked": liked}
 
 
+@router.delete("/posts/{post_id}", status_code=204)
+async def delete_post(post_id: str, request: Request, current_user: User):
+    try:
+        async with asyncio.timeout(3):
+            post = await request.app.state.board.get(post_id)
+            if not post:
+                raise HTTPException(404, "Post not found")
+            if post["authorId"] != current_user["id"]:
+                raise HTTPException(403, "Only the author can delete this post")
+            comment_ids = await request.app.state.board_comments.delete_all(post_id)
+            for comment_id in comment_ids:
+                await request.app.state.comment_likes.delete(comment_id)
+            await request.app.state.post_likes.delete(post_id)
+            await request.app.state.board.delete(post_id)
+    except (RedisError, TimeoutError):
+        raise HTTPException(503, "Redis unavailable") from None
+    return None
+
+
 @router.delete("/posts/{post_id}/like")
 async def unlike_post(post_id: str, request: Request, current_user: User):
     try:
@@ -266,6 +320,22 @@ async def list_comments(post_id: str, request: Request, current_user: User, offs
         raise HTTPException(503, "Redis unavailable") from None
     enriched = [with_like_status(comment, *likes[comment["id"]]) for comment in comments]
     return {"comments": enriched, "total": total}
+
+
+@router.delete("/posts/{post_id}/comments/{comment_id}", status_code=204)
+async def delete_comment(post_id: str, comment_id: str, request: Request, current_user: User):
+    try:
+        async with asyncio.timeout(3):
+            comment = await request.app.state.board_comments.get_one(post_id, comment_id)
+            if not comment:
+                raise HTTPException(404, "Comment not found")
+            if comment["authorId"] != current_user["id"]:
+                raise HTTPException(403, "Only the author can delete this comment")
+            await request.app.state.board_comments.delete_one(post_id, comment_id)
+            await request.app.state.comment_likes.delete(comment_id)
+    except (RedisError, TimeoutError):
+        raise HTTPException(503, "Redis unavailable") from None
+    return None
 
 
 @router.post("/comments/{comment_id}/like")

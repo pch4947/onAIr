@@ -102,6 +102,7 @@ PositiveSeconds = Annotated[float, Field(ge=1, allow_inf_nan=False)]
 class ListenerInput(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000, pattern=r"\S")
     listenerId: str | None = Field(default=None, min_length=1, max_length=256)
+    listenerName: str | None = Field(default=None, min_length=1, max_length=50)
     kind: Literal["story", "mood"] = "story"
 
 
@@ -200,7 +201,8 @@ async def create_request(body: ListenerInput, request: Request,
     try:
         async with asyncio.timeout(3):
             entry = await request.app.state.requests.create(
-                body.prompt, body.listenerId or "anonymous", body.kind, idempotency_key)
+                body.prompt, body.listenerId or "anonymous", body.kind, idempotency_key,
+                listener_name=body.listenerName)
     except IdempotencyConflict:
         raise HTTPException(409, "Idempotency-Key already used with different input") from None
     except (RedisError, TimeoutError):
