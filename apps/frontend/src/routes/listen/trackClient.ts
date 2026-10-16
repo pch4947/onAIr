@@ -21,6 +21,11 @@ export function normalizeYoutubeLink(value: string): string | null {
   } catch { return null }
 }
 
+export function youtubeThumbnailFromRef(trackRef: string): string | null {
+  const videoId = trackRef.startsWith('yt:') ? trackRef.slice(3) : null
+  return videoId ? `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg` : null
+}
+
 const errors: Record<number, string> = {
   401: '로그인 후 다시 시도해주세요.',
   403: '음악을 신청할 권한이 없어요.',
@@ -58,7 +63,9 @@ export function createTrackClient(base: string, getToken: () => string | null) {
       const result = await call(`${encodeURIComponent(stationId)}/tracks/access`)
       return result.can_request === true
     },
-    async enqueue(stationId: string, url: string, key: string): Promise<{ track: { title: string } }> {
+    async enqueue(stationId: string, url: string, key: string): Promise<{
+      track: { title: string; artist: string; duration_ms: number; track_ref: string }
+    }> {
       return call(`${encodeURIComponent(stationId)}/tracks`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
         body: JSON.stringify({ url, source: 'request' }),

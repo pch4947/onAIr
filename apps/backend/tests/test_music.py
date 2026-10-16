@@ -84,6 +84,28 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             app.state.redis.get.return_value = None
             self.assertEqual((await client.get(path)).status_code, 404)
 
+    async def test_queue_is_public_and_keeps_only_music_segments_in_order(self):
+        app = create_app(Settings('127.0.0.1', 3000))
+        music1 = {'segment_id': 'music_a', 'track': {'title': '곡 A', 'artist': 'X', 'duration_ms': 1000}}
+        music2 = {'segment_id': 'music_b', 'track': {'title': '곡 B', 'artist': 'Y', 'duration_ms': 2000}}
+        submissions = {'music_a': json.dumps(music1), 'music_b': json.dumps(music2)}
+        app.state.redis = SimpleNamespace(
+            lrange=AsyncMock(return_value=['speech_1', 'music_a', 'speech_2', 'music_b']),
+            hmget=AsyncMock(side_effect=lambda key, ids: [submissions.get(i) for i in ids]),
+            hget=AsyncMock(return_value='music_a'))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
+            res = await client.get('/api/stations/st_local_dev/tracks/queue')
+            self.assertEqual(res.status_code, 200)
+            body = res.json()
+            self.assertEqual([item['segment_id'] for item in body['queue']], ['music_a', 'music_b'])
+            self.assertEqual(body['playingSegmentId'], 'music_a')
+
+    async def test_queue_unknown_station_is_404(self):
+        app = create_app(Settings('127.0.0.1', 3000))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
+            res = await client.get('/api/stations/other-station/tracks/queue')
+            self.assertEqual(res.status_code, 404)
+
     async def test_busy_retry_and_failed_download_never_enqueues(self):
         redis = SimpleNamespace(hget=AsyncMock(return_value=None), eval=AsyncMock(),
                                 get=AsyncMock(return_value=json.dumps({'status': 'started'})))

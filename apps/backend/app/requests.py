@@ -43,10 +43,12 @@ class RequestStore:
         self.station_id = station_id
         self.prefix = f'backend:{station_id}'
 
-    async def create(self, prompt, listener_id, kind, idempotency_key=None, listener_name=None):
+    async def create(self, prompt, listener_id, kind, idempotency_key=None, listener_name=None,
+                     track_title=None, track_artist=None, track_thumbnail_url=None):
         request_id = str(uuid4())
         entry = dict(id=request_id, prompt=prompt, listenerId=listener_id, listenerName=listener_name,
-                     kind=kind, status='requested',
+                     kind=kind, status='requested', trackTitle=track_title, trackArtist=track_artist,
+                     trackThumbnailUrl=track_thumbnail_url,
                      createdAt=datetime.now(timezone.utc).isoformat(timespec='milliseconds'))
         fingerprint = hashlib.sha256(json.dumps([prompt, listener_id, kind], ensure_ascii=False).encode()).hexdigest()
         # Separate automatic keys from client-provided keys.

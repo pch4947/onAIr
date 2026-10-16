@@ -6,14 +6,16 @@ import { Sidebar } from '@/app/Sidebar'
 import { useLivePlayback } from '@/player/useLivePlayback'
 import { useRealtimeConnection } from '@/realtime/useRealtimeConnection'
 import { useRealtimeStore } from '@/realtime/store'
-import { bookmarkReplay, getBroadcastState, getRequests, sendPresenceHeartbeat, submitRequest } from '@/shared/api'
+import {
+  bookmarkReplay, getBroadcastState, getMusicQueue, getRequests, sendPresenceHeartbeat, submitRequest,
+} from '@/shared/api'
 import { useCurrentUser } from '@/shared/useCurrentUser'
 import { ExperimentSurveyModal } from '@/routes/listen/ExperimentSurveyModal'
 import { SongRequestModal } from '@/routes/listen/SongRequestModal'
 import { SongQueueModal } from '@/routes/listen/SongQueueModal'
 import { StationStopButton } from '@/routes/listen/StationStopButton'
 import { EmojiIcon, MusicNoteIcon, ReplaySaveIcon, SendIcon, SongRequestAddIcon } from '@/routes/listen/icons'
-import { STATUS_VARIANT, STATUS_VARIANT_CLASS, isPendingStatus } from '@/routes/listen/requestStatus'
+import { STATUS_VARIANT, STATUS_VARIANT_CLASS } from '@/routes/listen/requestStatus'
 import { STATION_INFO } from '@/routes/listen/mock'
 import type { ConnectionStatus } from '@/realtime/client'
 import type { StreamStatus } from '@/shared/types'
@@ -83,6 +85,12 @@ export function ListenPage() {
     queryFn: getRequests,
     refetchInterval: REQUESTS_POLL_INTERVAL_MS,
   })
+  const musicQueueQuery = useQuery({
+    queryKey: ['music-queue', stationId],
+    queryFn: () => getMusicQueue(stationId!),
+    enabled: Boolean(stationId),
+    refetchInterval: REQUESTS_POLL_INTERVAL_MS,
+  })
 
   const stream = broadcastStateQuery.data?.stream
   const viewerCount = broadcastStateQuery.data?.viewerCount
@@ -100,8 +108,12 @@ export function ListenPage() {
     text: item.prompt,
     kind: item.kind,
     status: item.status,
+    trackTitle: item.trackTitle,
+    trackArtist: item.trackArtist,
+    trackThumbnailUrl: item.trackThumbnailUrl,
   }))
-  const songQueue = allRequests.filter((item) => item.kind === 'mood' && isPendingStatus(item.status))
+  const musicQueue = musicQueueQuery.data?.queue ?? []
+  const playingSegmentId = musicQueueQuery.data?.playingSegmentId ?? null
 
   const chatListRef = useRef<HTMLUListElement>(null)
   const isNearBottomRef = useRef(true)
@@ -127,6 +139,18 @@ export function ListenPage() {
       prompt: trimmed, listenerId: currentUser?.id, listenerName: currentUser?.name, kind: 'story',
     })
     setChatInput('')
+  }
+
+  const handleSongSubmitted = (track: { title: string; artist: string; thumbnailUrl: string | null }) => {
+    submitRequestMutation.mutate({
+      prompt: track.artist ? `${track.title} - ${track.artist}` : track.title,
+      listenerId: currentUser?.id,
+      listenerName: currentUser?.name,
+      kind: 'mood',
+      trackTitle: track.title,
+      trackArtist: track.artist || undefined,
+      trackThumbnailUrl: track.thumbnailUrl || undefined,
+    })
   }
 
 
@@ -255,7 +279,26 @@ export function ListenPage() {
                       {message.status.toUpperCase()}
                     </span>
                   </div>
-                  <p className="text-text">{message.text}</p>
+                  {message.trackTitle ? (
+                    <div className="flex items-center gap-2">
+                      {message.trackThumbnailUrl && (
+                        <img
+                          src={message.trackThumbnailUrl}
+                          alt=""
+                          referrerPolicy="no-referrer"
+                          className="size-10 shrink-0 rounded object-cover"
+                        />
+                      )}
+                      <div className="min-w-0">
+                        <p className="truncate text-text">{message.trackTitle}</p>
+                        {message.trackArtist && (
+                          <p className="truncate text-[10px] text-text-muted">{message.trackArtist}</p>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-text">{message.text}</p>
+                  )}
                 </li>
               ) : (
                 <li key={message.id} className="flex items-baseline gap-1.5">
@@ -340,7 +383,7 @@ export function ListenPage() {
               className="flex items-center gap-1 rounded-full bg-primary px-2.5 py-1 text-[10px] font-semibold text-white"
             >
               <MusicNoteIcon className="size-3" />
-              대기 {songQueue.length}
+              대기 {musicQueue.length}
             </button>
             <span className="text-[10px] text-text-muted">
               {chatInput.length}/{CHAT_MAX_LENGTH}
@@ -362,12 +405,13 @@ export function ListenPage() {
         <SongRequestModal
           onClose={() => setIsSongRequestOpen(false)}
           stationId={stationId}
+          onSubmitted={handleSongSubmitted}
         />
       )}
       {isQueueOpen && (
         <SongQueueModal
-          queue={songQueue}
-          currentUserId={currentUser?.id}
+          queue={musicQueue}
+          playingSegmentId={playingSegmentId}
           onClose={() => setIsQueueOpen(false)}
         />
       )}

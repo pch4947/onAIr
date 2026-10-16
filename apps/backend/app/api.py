@@ -104,6 +104,9 @@ class ListenerInput(BaseModel):
     listenerId: str | None = Field(default=None, min_length=1, max_length=256)
     listenerName: str | None = Field(default=None, min_length=1, max_length=50)
     kind: Literal["story", "mood"] = "story"
+    trackTitle: str | None = Field(default=None, min_length=1, max_length=200)
+    trackArtist: str | None = Field(default=None, min_length=1, max_length=200)
+    trackThumbnailUrl: str | None = Field(default=None, min_length=1, max_length=500)
 
 
 class TickInput(BaseModel):
@@ -214,7 +217,8 @@ async def create_request(body: ListenerInput, request: Request,
         async with asyncio.timeout(3):
             entry = await request.app.state.requests.create(
                 body.prompt, body.listenerId or "anonymous", body.kind, idempotency_key,
-                listener_name=body.listenerName)
+                listener_name=body.listenerName, track_title=body.trackTitle,
+                track_artist=body.trackArtist, track_thumbnail_url=body.trackThumbnailUrl)
     except IdempotencyConflict:
         raise HTTPException(409, "Idempotency-Key already used with different input") from None
     except (RedisError, TimeoutError):
