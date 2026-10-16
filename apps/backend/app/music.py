@@ -78,6 +78,30 @@ def search_candidates(payload, max_seconds):
     return result
 
 
+@router.get('/{station_id}/tracks/queue')
+async def track_queue(station_id: str, request: Request):
+    """Public: the actual upcoming music queue, in playback order.
+
+    Reads the shared playback queue (speech + music segment ids) and keeps only the
+    ids that are music submissions, preserving order. Already-played entries are gone
+    from the shared queue by the time the HLS publisher consumes them, so this is
+    naturally "what's left to play," not full history.
+    """
+    settings = request.app.state.settings
+    if station_id != settings.station_id:
+        raise HTTPException(404, 'Station not found')
+    prefix = f'backend:{station_id}'
+    try:
+        async with asyncio.timeout(3):
+            ids = await request.app.state.redis.lrange(prefix + ':queue', 0, 199)
+            submissions = await request.app.state.redis.hmget(prefix + ':music-submissions', ids) if ids else []
+            playing = await request.app.state.redis.hget(prefix + ':track-plan', 'playing')
+    except (RedisError, TimeoutError):
+        raise HTTPException(503, 'Redis unavailable') from None
+    queue = [json.loads(raw) for raw in submissions if raw]
+    return {'queue': queue, 'playingSegmentId': playing}
+
+
 @router.get('/{station_id}/tracks/access')
 async def track_access(station_id: str, request: Request, user: User):
     """Expose request readiness without exposing the host's private station record."""

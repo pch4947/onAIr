@@ -27,6 +27,28 @@ export interface RequestRecord {
   kind: 'story' | 'mood'
   status: string
   createdAt: string
+  trackTitle?: string | null
+  trackArtist?: string | null
+  trackThumbnailUrl?: string | null
+}
+
+export interface QueuedTrackInfo {
+  title: string
+  artist: string
+  duration_ms: number
+  track_ref?: string
+}
+
+export interface QueuedTrack {
+  segment_id: string
+  track: QueuedTrackInfo
+  source?: 'playlist' | 'request' | 'vote'
+  request_id?: string | null
+}
+
+export interface MusicQueueResponse {
+  queue: QueuedTrack[]
+  playingSegmentId: string | null
 }
 
 export interface SubmitRequestResponse {

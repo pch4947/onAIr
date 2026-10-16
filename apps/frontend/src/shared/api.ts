@@ -6,6 +6,7 @@ import type {
   BoardPost,
   BroadcastStateResponse,
   LikeStatus,
+  MusicQueueResponse,
   NotificationItem,
   ReplaySession,
   RequestRecord,
@@ -38,13 +39,17 @@ export async function submitRequest(input: {
   listenerId?: string
   listenerName?: string
   kind?: 'story' | 'mood'
+  trackTitle?: string
+  trackArtist?: string
+  trackThumbnailUrl?: string
 }): Promise<SubmitRequestResponse> {
   const res = await fetch(`${API_BASE}/api/requests`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      prompt: input.prompt, listenerId: input.listenerId,
-      listenerName: input.listenerName, kind: input.kind,
+      prompt: input.prompt, listenerId: input.listenerId, listenerName: input.listenerName,
+      kind: input.kind, trackTitle: input.trackTitle, trackArtist: input.trackArtist,
+      trackThumbnailUrl: input.trackThumbnailUrl,
     }),
   })
   if (!res.ok) {
@@ -59,6 +64,14 @@ export async function getRequests(): Promise<{ requests: RequestRecord[] }> {
     throw new Error(`GET /api/requests failed: ${res.status}`)
   }
   return res.json() as Promise<{ requests: RequestRecord[] }>
+}
+
+export async function getMusicQueue(stationId: string): Promise<MusicQueueResponse> {
+  const res = await fetch(`${API_BASE}/api/stations/${encodeURIComponent(stationId)}/tracks/queue`)
+  if (!res.ok) {
+    throw new Error(`GET /api/stations/${stationId}/tracks/queue failed: ${res.status}`)
+  }
+  return res.json() as Promise<MusicQueueResponse>
 }
 
 export async function signup(email: string, password: string, name: string): Promise<AuthResponse> {

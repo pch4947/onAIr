@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { getAccessToken } from '@/shared/authToken'
-import { createTrackClient, normalizeYoutubeLink } from './trackClient'
+import { createTrackClient, normalizeYoutubeLink, youtubeThumbnailFromRef } from './trackClient'
 import type { TrackCandidate } from './trackClient'
 
 const client = createTrackClient(import.meta.env.VITE_API_BASE_URL ?? '', getAccessToken)
@@ -12,12 +12,19 @@ const fieldLabelClass = 'text-[13px] font-medium text-label'
 const textInputClass =
   'h-10 w-full rounded-lg border border-field-border bg-field-bg px-3.5 text-[13px] text-text placeholder:text-field-placeholder'
 
+export interface SubmittedTrack {
+  title: string
+  artist: string
+  thumbnailUrl: string | null
+}
+
 interface SongRequestModalProps {
   onClose: () => void
   stationId?: string
+  onSubmitted?: (track: SubmittedTrack) => void
 }
 
-export function SongRequestModal({ onClose, stationId }: SongRequestModalProps) {
+export function SongRequestModal({ onClose, stationId, onSubmitted }: SongRequestModalProps) {
   const [link, setLink] = useState('')
   const [validation, setValidation] = useState('')
   const [candidates, setCandidates] = useState<TrackCandidate[] | null>(null)
@@ -67,7 +74,14 @@ export function SongRequestModal({ onClose, stationId }: SongRequestModalProps) 
     setValidation('')
     if (!retry.current || retry.current.url !== url) retry.current = { url, key: crypto.randomUUID() }
     submitting.current = true
-    try { await submitSongRequestMutation.mutateAsync(retry.current) } catch { /* Display mutation error below. */ }
+    try {
+      const result = await submitSongRequestMutation.mutateAsync(retry.current)
+      onSubmitted?.({
+        title: result.track.title,
+        artist: result.track.artist,
+        thumbnailUrl: youtubeThumbnailFromRef(result.track.track_ref),
+      })
+    } catch { /* Display mutation error below. */ }
     finally { submitting.current = false }
   }
 
