@@ -207,6 +207,29 @@ redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
 """ + REGISTER + "return ARGV[3]"
 
 
+async def fetch_oembed_title(video_id):
+    """Best-effort title/author via YouTube's public oEmbed endpoint — no auth, no Lavalink.
+
+    Used only when Lavalink's WEB metadata lookup was blocked and the title fell back to the
+    raw video id (docs/BACKEND_LAVALINK.md). Returns None on any failure; callers keep the
+    existing fallback.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
+            response = await client.get('https://www.youtube.com/oembed',
+                params={'url': 'https://www.youtube.com/watch?v=' + video_id, 'format': 'json'})
+        if response.status_code != 200:
+            return None
+        data = response.json()
+        title = data.get('title')
+        if not title or not isinstance(title, str):
+            return None
+        author = data.get('author_name')
+        return title[:256], (author[:256] if isinstance(author, str) else '')
+    except (httpx.HTTPError, ValueError):
+        return None
+
+
 async def run_process(args, timeout, *, env=None):
     process = await asyncio.create_subprocess_exec(
         *args, env=env, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
@@ -235,6 +258,11 @@ class MusicService:
         if audio.is_file() and manifest.is_file():
             metadata = json.loads(manifest.read_text(encoding='utf-8'))
             if metadata['track_ref'] == 'yt:' + video_id:
+                if metadata['title'] == video_id:
+                    enriched = await fetch_oembed_title(video_id)
+                    if enriched:
+                        metadata['title'], metadata['artist'] = enriched
+                        manifest.write_text(json.dumps(metadata), encoding='utf-8')
                 return audio, metadata
             raise HTTPException(409, 'Idempotency-Key already used for another video')
         with tempfile.TemporaryDirectory(prefix='onair-youtube-') as temp:
@@ -257,6 +285,10 @@ class MusicService:
                     raise HTTPException(503, 'Lavalink unavailable; contact the administrator') from None
                 raise
             metadata = json.loads((root / 'result.json').read_text(encoding='utf-8'))
+            if metadata['title'] == video_id:
+                enriched = await fetch_oembed_title(video_id)
+                if enriched:
+                    metadata['title'], metadata['artist'] = enriched
             source = (root / metadata.pop('source')).resolve()
             if source.parent != root.resolve() or not source.is_file():
                 raise HTTPException(502, 'Invalid downloaded audio')
