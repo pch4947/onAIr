@@ -18,7 +18,7 @@ from redis.asyncio import Redis
 from app.auth import get_current_user
 from app.config import Settings
 from app.main import create_app
-from app.music import MusicService, run_process, youtube_id
+from app.music import MusicService, fetch_oembed_title, run_process, youtube_id
 from app.streaming.hls import HlsPublisher
 from app.youtube_worker import validate_metadata
 
@@ -45,6 +45,78 @@ class ValidationTests(unittest.TestCase):
                         dict(live_status='is_upcoming'), dict(_type='playlist')]:
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 validate_metadata(info | changes, VIDEO, 600)
+
+
+class OembedTitleTests(unittest.IsolatedAsyncioTestCase):
+    def _upstream(self, response=None, side_effect=None):
+        upstream = AsyncMock()
+        upstream.__aenter__.return_value = upstream
+        if side_effect is not None:
+            upstream.get.side_effect = side_effect
+        else:
+            upstream.get.return_value = response
+        return upstream
+
+    async def test_returns_title_and_author_on_success(self):
+        upstream = self._upstream(httpx.Response(200, json={'title': '밤편지', 'author_name': '아이유'}))
+        with patch('app.music.httpx.AsyncClient', return_value=upstream):
+            result = await fetch_oembed_title(VIDEO)
+        self.assertEqual(result, ('밤편지', '아이유'))
+        self.assertEqual(upstream.get.call_args.kwargs['params'],
+                         {'url': f'https://www.youtube.com/watch?v={VIDEO}', 'format': 'json'})
+
+    async def test_missing_author_name_defaults_to_empty_string(self):
+        upstream = self._upstream(httpx.Response(200, json={'title': '밤편지'}))
+        with patch('app.music.httpx.AsyncClient', return_value=upstream):
+            self.assertEqual(await fetch_oembed_title(VIDEO), ('밤편지', ''))
+
+    async def test_non_200_or_missing_title_returns_none(self):
+        for response in (httpx.Response(404), httpx.Response(200, json={}),
+                         httpx.Response(200, json={'title': None})):
+            upstream = self._upstream(response)
+            with patch('app.music.httpx.AsyncClient', return_value=upstream):
+                self.assertIsNone(await fetch_oembed_title(VIDEO))
+
+    async def test_network_or_decode_errors_return_none(self):
+        for side_effect in (httpx.ReadTimeout('timeout'), httpx.ConnectError('offline')):
+            upstream = self._upstream(side_effect=side_effect)
+            with patch('app.music.httpx.AsyncClient', return_value=upstream):
+                self.assertIsNone(await fetch_oembed_title(VIDEO))
+
+    async def test_cached_track_with_id_as_title_gets_enriched_and_rewritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            audio_dir = Path(tmp)
+            settings = Settings('127.0.0.1', 3000, audio_dir=audio_dir)
+            service = MusicService(SimpleNamespace(), settings)
+            segment_id = 'music_cached'
+            directory = audio_dir / settings.station_id / 'youtube'
+            directory.mkdir(parents=True)
+            (directory / (segment_id + '.mp3')).write_bytes(b'fake-audio')
+            stale = dict(track_ref='yt:' + VIDEO, title=VIDEO, artist='', duration_ms=1000)
+            manifest = directory / (segment_id + '.json')
+            manifest.write_text(json.dumps(stale), encoding='utf-8')
+            upstream = self._upstream(httpx.Response(200, json={'title': '밤편지', 'author_name': '아이유'}))
+            with patch('app.music.httpx.AsyncClient', return_value=upstream):
+                audio, metadata = await service.prepare(VIDEO, segment_id)
+            self.assertEqual(metadata['title'], '밤편지')
+            self.assertEqual(metadata['artist'], '아이유')
+            self.assertEqual(json.loads(manifest.read_text(encoding='utf-8'))['title'], '밤편지')
+
+    async def test_cached_track_with_real_title_skips_oembed_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            audio_dir = Path(tmp)
+            settings = Settings('127.0.0.1', 3000, audio_dir=audio_dir)
+            service = MusicService(SimpleNamespace(), settings)
+            segment_id = 'music_cached2'
+            directory = audio_dir / settings.station_id / 'youtube'
+            directory.mkdir(parents=True)
+            (directory / (segment_id + '.mp3')).write_bytes(b'fake-audio')
+            good = dict(track_ref='yt:' + VIDEO, title='이미 좋은 제목', artist='가수', duration_ms=1000)
+            (directory / (segment_id + '.json')).write_text(json.dumps(good), encoding='utf-8')
+            with patch('app.music.httpx.AsyncClient') as factory:
+                audio, metadata = await service.prepare(VIDEO, segment_id)
+            factory.assert_not_called()
+            self.assertEqual(metadata['title'], '이미 좋은 제목')
 
 
 class ApiTests(unittest.IsolatedAsyncioTestCase):
