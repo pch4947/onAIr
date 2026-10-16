@@ -1,6 +1,6 @@
 // 01_Listen_스트리밍 방송 화면
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Sidebar } from '@/app/Sidebar'
 import { useLivePlayback } from '@/player/useLivePlayback'
@@ -102,6 +102,22 @@ export function ListenPage() {
     status: item.status,
   }))
   const songQueue = allRequests.filter((item) => item.kind === 'mood' && isPendingStatus(item.status))
+
+  const chatListRef = useRef<HTMLUListElement>(null)
+  const isNearBottomRef = useRef(true)
+
+  const handleChatScroll = () => {
+    const el = chatListRef.current
+    if (!el) return
+    isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+  }
+
+  useEffect(() => {
+    const el = chatListRef.current
+    if (el && isNearBottomRef.current) {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [chatMessages.length])
 
   const handleSendChat = (event: React.FormEvent) => {
     event.preventDefault()
@@ -216,7 +232,11 @@ export function ListenPage() {
             </span>
           </header>
 
-          <ul className="flex flex-1 flex-col gap-2 overflow-y-auto rounded-md bg-field-bg p-3 text-[11px] text-text">
+          <ul
+            ref={chatListRef}
+            onScroll={handleChatScroll}
+            className="flex flex-1 flex-col gap-2 overflow-y-auto rounded-md bg-field-bg p-3 text-[11px] text-text"
+          >
             {chatMessages.map((message) =>
               message.kind === 'mood' ? (
                 <li
