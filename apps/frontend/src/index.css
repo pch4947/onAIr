@@ -46,6 +46,13 @@
   --font-sans: 'Pretendard', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 }
 
+@media (width >= 48rem) {
+  :root {
+    --color-primary: #442bad;
+    --color-primary-strong: #453685;
+  }
+}
+
 @layer base {
   button {
     cursor: pointer;
