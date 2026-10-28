@@ -39,7 +39,7 @@ export function StationStopButton({ stationId, userId }: { stationId?: string; u
       stop.reset(); setTargetCreatedAt(station.data!.created_at); setConfirming(true)
     }}
       className="rounded bg-danger px-3 py-1 text-xs text-white disabled:opacity-60">
-      {pending ? '방송 종료·정리 중…' : '방송 종료·정리'}
+      {pending ? '방송 종료 중…' : '방송 종료'}
     </button>
     {confirming && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
       <section role="dialog" aria-modal="true" aria-labelledby="stop-title"

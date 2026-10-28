@@ -51,7 +51,7 @@ export function ReplayListItem({ replay, apiBase, onDelete }: ReplayListItemProp
             <button
               type="button"
               onClick={() => onDelete(replay)}
-              className="rounded-md border border-danger px-2.5 py-1.5 text-xs font-semibold text-danger"
+              className="rounded-md bg-danger px-2.5 py-1.5 text-xs font-semibold text-white"
             >
               삭제
             </button>

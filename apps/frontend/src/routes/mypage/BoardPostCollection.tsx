@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { HeartIcon } from '@/routes/board/LikeButton'
 import { PostDetailModal } from '@/routes/board/PostDetailModal'
 import type { BoardPost, LikeStatus } from '@/shared/types'
 
@@ -53,8 +54,10 @@ export function BoardPostCollection({ queryKey, fetcher, emptyText, removeOnUnli
             className="flex cursor-pointer flex-col gap-1 rounded-md border border-field-border bg-field-bg px-4 py-3.5"
           >
             <p className="text-sm font-semibold text-[#1a1a1f]">{post.title}</p>
-            <p className="text-xs text-text-muted">
-              {post.authorName} · ❤️ {post.likeCount}
+            <p className="flex items-center gap-1 text-xs text-text-muted">
+              {post.authorName} ·
+              <HeartIcon className={`size-3 ${post.liked ? 'text-live' : ''}`} />
+              {post.likeCount}
             </p>
           </li>
         ))}

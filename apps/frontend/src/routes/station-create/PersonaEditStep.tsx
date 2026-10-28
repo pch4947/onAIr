@@ -4,7 +4,7 @@ import type { Persona } from '@/shared/types'
 
 const fieldLabelClass = 'text-[13px] font-medium text-label'
 const textInputClass =
-  'h-10 w-full rounded-lg border border-field-border bg-field-bg px-3.5 text-[13px] text-text placeholder:text-field-placeholder'
+  'h-10 w-full rounded-lg border border-field-border bg-field-bg px-3.5 text-base text-text placeholder:text-field-placeholder md:text-[13px]'
 const errorTextClass = 'block text-xs text-danger'
 
 interface ListFieldProps {

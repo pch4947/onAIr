@@ -5,7 +5,7 @@ import { createBoardPost } from '@/shared/api'
 
 const fieldLabelClass = 'text-[13px] font-medium text-label'
 const textInputClass =
-  'h-10 w-full rounded-lg border border-field-border bg-field-bg px-3.5 text-[13px] text-text placeholder:text-field-placeholder'
+  'h-10 w-full rounded-lg border border-field-border bg-field-bg px-3.5 text-base text-text placeholder:text-field-placeholder md:text-[13px]'
 const errorTextClass = 'block text-xs text-danger'
 
 const URL_PATTERN = /^https?:\/\/\S+$/
@@ -81,7 +81,7 @@ export function NewPostModal({ onClose, onCreated }: NewPostModalProps) {
             value={story}
             onChange={(event) => setStory(event.target.value)}
             placeholder="오늘 있었던 이야기, 하고 싶은 말을 자유롭게 적어주세요..."
-            className="h-45 w-full resize-none rounded-lg border border-field-border bg-field-bg px-3.5 py-3 text-[13px] text-text placeholder:text-field-placeholder"
+            className="h-45 w-full resize-none rounded-lg border border-field-border bg-field-bg px-3.5 py-3 text-base text-text placeholder:text-field-placeholder md:text-[13px]"
           />
           <span className={errorTextClass}>{errors.story || ' '}</span>
         </label>

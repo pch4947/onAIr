@@ -74,19 +74,19 @@ export function BoardPage() {
     <div className="flex min-h-screen">
       <Sidebar active="board" />
 
-      <main className="flex-1 bg-bg p-8">
+      <main className="flex-1 bg-bg p-4 pb-24 md:p-8 md:pb-8">
         <header className="mb-5 flex flex-col gap-1">
-          <h1 className="text-[22px] font-semibold text-text">게시판</h1>
-          <p className="text-[13px] text-text-muted">사연과 듣고 싶은 곡을 자유롭게 남겨보세요</p>
+          <h1 className="text-center text-lg font-semibold text-text md:text-left md:text-[22px]">게시판</h1>
+          <p className="hidden text-[13px] text-text-muted md:block">사연과 듣고 싶은 곡을 자유롭게 남겨보세요</p>
         </header>
 
-        <div className="mb-5 flex h-16 items-center justify-between rounded-md border border-border bg-surface p-5">
+        <div className="mb-5 flex items-center justify-end md:h-16 md:justify-between md:rounded-md md:border md:border-border md:bg-surface md:p-5">
           <input
             type="text"
             placeholder="지금 떠오르는 이야기나 듣고 싶은 곡을 자유롭게 남겨보세요"
             readOnly
             onClick={() => setIsModalOpen(true)}
-            className="flex-1 bg-transparent text-[13px] text-text-muted placeholder:text-text-muted"
+            className="hidden flex-1 bg-transparent text-[13px] text-text-muted placeholder:text-text-muted md:block"
           />
           <button
             type="button"
@@ -105,10 +105,10 @@ export function BoardPage() {
               className="flex cursor-pointer flex-col gap-2 rounded-md border border-[#e6e6e6] bg-surface px-4 py-3.5"
             >
               <p className="text-[15px] font-semibold text-text">{post.title}</p>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-text">{post.authorName}</span>
-                  <span className="text-[11px] text-[#999]">· {formatTimeAgo(post.createdAt)}</span>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="truncate text-xs font-semibold text-text">{post.authorName}</span>
+                  <span className="shrink-0 text-[11px] text-[#999]">· {formatTimeAgo(post.createdAt)}</span>
                 </div>
                 <LikeButton
                   liked={post.liked}

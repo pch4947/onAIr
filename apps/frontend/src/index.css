@@ -5,8 +5,8 @@
   --color-surface: #ffffff;
   --color-sidebar: #1f1f26;
 
-  --color-primary: #3366e5;
-  --color-primary-strong: #4d66d9;
+  --color-primary: #5538ce;
+  --color-primary-strong: #52409e;
 
   --color-text: #262626;
   --color-text-muted: #808080;
@@ -44,6 +44,13 @@
   --radius-xl: 16px;
 
   --font-sans: 'Pretendard', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+@media (width >= 48rem) {
+  :root {
+    --color-primary: #442bad;
+    --color-primary-strong: #453685;
+  }
 }
 
 @layer base {

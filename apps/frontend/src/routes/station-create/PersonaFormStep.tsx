@@ -59,7 +59,7 @@ function toggleWithinLimit<T>(current: T[], value: T): T[] {
 
 const fieldLabelClass = 'text-[13px] font-medium text-label'
 const textInputClass =
-  'h-10 w-full rounded-lg border border-field-border bg-field-bg px-3.5 text-[13px] text-text placeholder:text-field-placeholder'
+  'h-10 w-full rounded-lg border border-field-border bg-field-bg px-3.5 text-base text-text placeholder:text-field-placeholder md:text-[13px]'
 const selectInputClass =
   'h-10 w-full appearance-none rounded-lg border border-field-border bg-field-bg pl-3.5 pr-9 text-[13px] text-text'
 const errorTextClass = 'block text-xs text-danger'
@@ -372,7 +372,7 @@ export function PersonaFormStep({ format, onBack, onSubmit, serverErrors = {} }:
           placeholder="예: 공부하는 사람 옆에 조용히 있어 주는 DJ"
           maxLength={100}
           rows={2}
-          className="h-16 w-full resize-none rounded-lg border border-field-border bg-field-bg px-3.5 py-2.5 text-[13px] text-text placeholder:text-field-placeholder"
+          className="h-16 w-full resize-none rounded-lg border border-field-border bg-field-bg px-3.5 py-2.5 text-base text-text placeholder:text-field-placeholder md:text-[13px]"
         />
         <span className={errors.hostNote ? errorTextClass : 'block text-xs text-text-muted'}>
           {errors.hostNote || serverErrors['form.host_note'] || `${hostNote.length}/100`}

@@ -10,11 +10,14 @@ import {
   bookmarkReplay, getBroadcastState, getMusicQueue, getRequests, sendPresenceHeartbeat, submitRequest,
 } from '@/shared/api'
 import { useCurrentUser } from '@/shared/useCurrentUser'
+import { randomId } from '@/shared/randomId'
 import { ExperimentSurveyModal } from '@/routes/listen/ExperimentSurveyModal'
 import { SongRequestModal } from '@/routes/listen/SongRequestModal'
 import { SongQueueModal } from '@/routes/listen/SongQueueModal'
 import { StationStopButton } from '@/routes/listen/StationStopButton'
-import { EmojiIcon, MusicNoteIcon, ReplaySaveIcon, SendIcon, SongRequestAddIcon } from '@/routes/listen/icons'
+import {
+  EmojiIcon, MusicNoteIcon, PauseIcon, PlayIcon, ReplaySaveIcon, SendIcon, SongRequestAddIcon, ViewIcon, VolumeIcon,
+} from '@/routes/listen/icons'
 import { STATUS_VARIANT, STATUS_VARIANT_CLASS } from '@/routes/listen/requestStatus'
 import { STATION_INFO } from '@/routes/listen/mock'
 import type { ConnectionStatus } from '@/realtime/client'
@@ -44,11 +47,11 @@ function getOrCreatePresenceClientId(): string {
   try {
     const existing = sessionStorage.getItem(PRESENCE_CLIENT_ID_KEY)
     if (existing) return existing
-    const generated = crypto.randomUUID()
+    const generated = randomId()
     sessionStorage.setItem(PRESENCE_CLIENT_ID_KEY, generated)
     return generated
   } catch {
-    return crypto.randomUUID()
+    return randomId()
   }
 }
 
@@ -57,6 +60,8 @@ export function ListenPage() {
   const [isSongRequestOpen, setIsSongRequestOpen] = useState(false)
   const [isEmojiPickerOpen, setIsEmojiPickerOpen] = useState(false)
   const [isQueueOpen, setIsQueueOpen] = useState(false)
+  const [isVolumeOpen, setIsVolumeOpen] = useState(false)
+  const [volume, setVolume] = useState(1)
   const [chatInput, setChatInput] = useState('')
   const [presenceClientId] = useState(getOrCreatePresenceClientId)
   useRealtimeConnection()
@@ -98,6 +103,11 @@ export function ListenPage() {
   const hlsPath = import.meta.env.VITE_HLS_URL || stream?.hlsUrl
   const hlsUrl = stream?.status === 'ready' && hlsPath ? new URL(hlsPath, apiBase).href : null
   const { audioRef, isPlaying, error: playbackError, togglePlay } = useLivePlayback(hlsUrl)
+
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.volume = volume
+  }, [audioRef, volume])
+
   const submitRequestMutation = useMutation({ mutationFn: submitRequest })
   const bookmarkLiveMutation = useMutation({ mutationFn: (sessionId: string) => bookmarkReplay(sessionId) })
 
@@ -155,17 +165,14 @@ export function ListenPage() {
 
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex h-dvh overflow-hidden md:h-screen">
       <Sidebar />
 
-      <main className="flex flex-1 gap-4 bg-field-bg p-3.5 pb-20">
-        <section className="flex h-full flex-1 flex-col gap-3.5">
-          <div className="relative flex-1 overflow-hidden rounded-lg bg-thumbnail">
-            <div className="absolute left-4 right-4 top-4 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="rounded-xl bg-live px-2.5 py-1 text-[11px] font-semibold text-white">
-                  {ended ? '종료' : ending ? '종료 중' : 'LIVE'}
-                </span>
+      <main className="flex h-full min-h-0 flex-1 flex-col gap-4 bg-field-bg p-3.5 pb-20 md:flex-row">
+        <section className="flex shrink-0 flex-col gap-3.5 md:h-full md:flex-1">
+          <div className="relative h-72 overflow-hidden rounded-lg bg-thumbnail md:h-full md:flex-1">
+            <div className="absolute inset-x-4 top-4 flex flex-wrap items-center justify-between gap-y-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[13px] font-semibold text-white">{STATION_INFO.name}</span>
                 <button
                   type="button"
@@ -175,11 +182,13 @@ export function ListenPage() {
                   className="flex items-center gap-1 rounded-full bg-black/45 px-2.5 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
                 >
                   <ReplaySaveIcon className="size-3.5" />
-                  {bookmarkLiveMutation.isPending
-                    ? '저장 중...'
-                    : bookmarkLiveMutation.isSuccess
-                      ? '저장됨'
-                      : '다시듣기 저장'}
+                  <span className="hidden sm:inline">
+                    {bookmarkLiveMutation.isPending
+                      ? '저장 중...'
+                      : bookmarkLiveMutation.isSuccess
+                        ? '저장됨'
+                        : '다시듣기 저장'}
+                  </span>
                 </button>
                 {bookmarkLiveMutation.isError && (
                   <span className="text-[11px] text-danger">
@@ -189,8 +198,11 @@ export function ListenPage() {
               </div>
               <div className="flex items-center gap-2 text-[11px] text-nav-inactive">
                 <StationStopButton stationId={stationId} userId={currentUser?.id} />
-                <span>{CONNECTION_STATUS_LABEL[connectionStatus]}</span>
-                <span>👁 {viewerCount ?? '-'}명 시청 중</span>
+                <span className="hidden sm:inline">{CONNECTION_STATUS_LABEL[connectionStatus]}</span>
+                <span className="flex items-center gap-1">
+                  <ViewIcon className="size-3" />
+                  {viewerCount ?? '-'}명 시청 중
+                </span>
               </div>
             </div>
 
@@ -204,8 +216,8 @@ export function ListenPage() {
             )}
 
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-              <div className="flex size-[120px] items-center justify-center rounded-xl bg-album">
-                <span className="text-4xl text-thumbnail-icon">♪</span>
+              <div className="flex size-20 items-center justify-center rounded-xl bg-album md:size-30">
+                <span className="text-2xl text-thumbnail-icon md:text-4xl">♪</span>
               </div>
             </div>
 
@@ -213,9 +225,8 @@ export function ListenPage() {
             {playbackError && <p role="alert" className="absolute bottom-36 left-4 text-sm text-red-300">{playbackError}</p>}
 
             <div className="absolute inset-x-0 bottom-0 flex flex-col gap-1.5 bg-black/35 px-4 py-3.5">
-              <p className="text-[11px] text-nav-inactive">공유 라이브 라디오</p>
               <p className="text-base font-semibold text-white">
-                {ended ? '방송이 종료되었습니다' : ending ? '방송 종료 후 정리 중입니다' : isPlaying ? '라이브 방송 청취 중' : hlsUrl ? '재생 버튼을 눌러 방송에 참여하세요' : '방송 준비 중…'}
+                {ended ? '방송이 종료되었습니다' : ending ? '방송 종료 후 정리 중입니다' : isPlaying ? '라이브 방송 청취 중' : hlsUrl ? '' : '방송 준비 중…'}
               </p>
               <div className="flex items-center gap-3">
                 <button
@@ -223,10 +234,35 @@ export function ListenPage() {
                   onClick={togglePlay}
                   disabled={!hlsUrl}
                   aria-label={isPlaying ? "방송 일시정지" : "방송 재생"}
-                  className="flex size-6.5 shrink-0 items-center justify-center rounded-full bg-[#e6e6e6] text-[10px] text-text"
+                  className="flex size-6.5 shrink-0 items-center justify-center rounded-full bg-[#e6e6e6] text-text"
                 >
-                  {isPlaying ? '⏸' : '▶'}
+                  {isPlaying ? <PauseIcon className="size-3" /> : <PlayIcon className="size-3" />}
                 </button>
+                <div className="relative shrink-0">
+                  {isVolumeOpen && (
+                    <div className="absolute bottom-full left-1/2 mb-2 -translate-x-1/2 rounded-md bg-black/80 px-2 py-3">
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={volume}
+                        onChange={(event) => setVolume(Number(event.target.value))}
+                        className="h-20 w-1 accent-primary"
+                        style={{ writingMode: 'vertical-lr', direction: 'rtl' }}
+                        aria-label="볼륨 조절"
+                      />
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setIsVolumeOpen((prev) => !prev)}
+                    aria-label="볼륨 조절 열기"
+                    className="flex size-6.5 shrink-0 items-center justify-center rounded-full bg-[#e6e6e6] text-text"
+                  >
+                    <VolumeIcon className="size-3" />
+                  </button>
+                </div>
                 <div className="h-[5px] flex-1 rounded-full bg-[#737380]">
                   <div
                     className="h-full rounded-full bg-primary"
@@ -248,11 +284,12 @@ export function ListenPage() {
           </div>
         </section>
 
-        <section className="flex h-full w-[360px] shrink-0 flex-col gap-3 rounded-md border border-border bg-surface p-4">
+        <section className="flex min-h-0 w-full flex-1 flex-col gap-3 rounded-md border border-border bg-surface p-4 md:h-full md:w-[clamp(300px,28vw,360px)] md:flex-none">
           <header className="flex items-center justify-between">
             <p className="text-sm font-semibold text-text">채팅</p>
-            <span className="text-[11px] text-text-muted">
-              👁 {viewerCount?.toLocaleString() ?? '-'}
+            <span className="flex items-center gap-1 text-[11px] text-text-muted">
+              <ViewIcon className="size-3" />
+              {viewerCount?.toLocaleString() ?? '-'}
             </span>
           </header>
 
@@ -347,7 +384,7 @@ export function ListenPage() {
                 onChange={(event) => setChatInput(event.target.value)}
                 maxLength={CHAT_MAX_LENGTH}
                 placeholder="메시지 보내기"
-                className="h-8 min-w-0 flex-1 bg-transparent text-[13px] text-text placeholder:text-field-placeholder outline-none"
+                className="h-8 min-w-0 flex-1 bg-transparent text-base text-text placeholder:text-field-placeholder outline-none md:text-[13px]"
               />
               <button
                 type="button"
@@ -395,7 +432,7 @@ export function ListenPage() {
       <button
         type="button"
         onClick={() => setIsSurveyOpen(true)}
-        className="fixed bottom-8 right-8 flex items-center gap-1.5 rounded-full bg-experiment px-3.5 py-2.5 text-[13px] font-semibold text-white shadow-lg"
+        className="fixed bottom-20 right-4 flex items-center gap-1.5 rounded-full bg-experiment px-3.5 py-2.5 text-[13px] font-semibold text-white shadow-lg md:bottom-8 md:right-8"
       >
         🧪 실험 참여
       </button>

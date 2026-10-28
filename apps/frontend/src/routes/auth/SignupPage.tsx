@@ -7,7 +7,7 @@ import { signup } from '@/shared/api'
 
 const fieldLabelClass = 'text-[13px] font-medium text-label'
 const textInputClass =
-  'h-10 w-full rounded-lg border border-field-border bg-field-bg px-3.5 text-[13px] text-text placeholder:text-field-placeholder'
+  'h-10 w-full rounded-lg border border-field-border bg-field-bg px-3.5 text-base text-text placeholder:text-field-placeholder md:text-[13px]'
 const errorTextClass = 'block text-xs text-danger'
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -95,8 +95,12 @@ export function SignupPage() {
     <div className="flex min-h-screen">
       <AuthBrandPanel />
 
-      <main className="flex flex-1 items-center justify-center bg-surface p-8">
+      <main className="flex flex-1 items-center justify-center bg-surface p-6 md:p-8">
         <form onSubmit={handleSubmit} className="flex w-full max-w-[360px] flex-col gap-3">
+          <div className="mb-3 flex items-center justify-center md:hidden">
+            <img src="/logo_icon.png" alt="onAIr" className="size-30" />
+          </div>
+
           <h2 className="text-[28px] font-bold text-text">회원가입</h2>
 
           <label className="flex flex-col gap-1.5">

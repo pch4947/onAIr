@@ -4,7 +4,9 @@ import { useQuery } from '@tanstack/react-query'
 import { getNotifications, markNotificationRead } from '@/shared/api'
 import { getNotificationPath } from '@/shared/notificationLink'
 import { useCurrentUser } from '@/shared/useCurrentUser'
+import { BoardIcon, HomeIcon, UserIcon } from '@/app/icons'
 import type { NotificationItem } from '@/shared/types'
+import type { ComponentType } from 'react'
 
 const TOAST_DURATION_MS = 5000
 const TOAST_TRANSITION_MS = 200
@@ -45,16 +47,23 @@ function NotificationToast({ notification, onClick, onExpire }: NotificationToas
   )
 }
 
-type NavKey = 'main' | 'admin' | 'board'
+type NavKey = 'main' | 'board' | 'mypage'
 
 interface SidebarProps {
   active?: NavKey
 }
 
-const NAV_ITEMS: { key: NavKey; label: string; icon: string; path: string }[] = [
-  { key: 'main', label: '홈 · 방송 선택', icon: '🏠', path: '/main' },
-  { key: 'admin', label: '운영자 콘솔', icon: '🛠', path: '/admin' },
-  { key: 'board', label: '게시판', icon: '🪧', path: '/board' },
+type NavItem = { key: NavKey; label: string; icon: ComponentType<{ className?: string }>; path: string }
+
+const NAV_ITEMS: NavItem[] = [
+  { key: 'main', label: '홈 · 방송 선택', icon: HomeIcon, path: '/main' },
+  { key: 'board', label: '게시판', icon: BoardIcon, path: '/board' },
+]
+
+const MOBILE_NAV_ITEMS: NavItem[] = [
+  { key: 'board', label: '게시판', icon: BoardIcon, path: '/board' },
+  { key: 'main', label: '홈', icon: HomeIcon, path: '/main' },
+  { key: 'mypage', label: '마이페이지', icon: UserIcon, path: '/mypage' },
 ]
 
 export function Sidebar({ active }: SidebarProps) {
@@ -95,7 +104,7 @@ export function Sidebar({ active }: SidebarProps) {
 
   return (
     <>
-      <div className="fixed right-4 top-4 z-50 flex w-80 flex-col gap-2">
+      <div className="fixed inset-x-4 top-4 z-50 flex flex-col gap-2 md:inset-x-auto md:right-4 md:w-80">
         {toasts.map((toast) => (
           <NotificationToast
             key={toast.id}
@@ -106,7 +115,8 @@ export function Sidebar({ active }: SidebarProps) {
         ))}
       </div>
 
-      <aside className="flex w-[200px] shrink-0 flex-col gap-7 bg-sidebar px-4 py-6">
+      {/* 데스크톱: 고정폭 좌측 사이드바 */}
+      <aside className="hidden w-50 shrink-0 flex-col gap-7 bg-sidebar px-4 py-6 md:flex">
         <button
           type="button"
           onClick={() => navigate('/mypage')}
@@ -131,15 +141,45 @@ export function Sidebar({ active }: SidebarProps) {
               onClick={() => navigate(item.path)}
               className={
                 active === item.key
-                  ? 'rounded-lg bg-primary px-3 py-2.5 text-left text-xs font-semibold text-white'
-                  : 'rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-nav-inactive'
+                  ? 'flex items-center gap-2 rounded-lg bg-primary px-3 py-2.5 text-left text-xs font-semibold text-white'
+                  : 'flex items-center gap-2 rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-nav-inactive'
               }
             >
-              {item.icon} {item.label}
+              <item.icon className="size-4.5" />
+              {item.label}
             </button>
           ))}
         </nav>
       </aside>
+
+      {/* 모바일: 하단 탭 바 */}
+      <nav className="fixed inset-x-0 bottom-0 z-40 flex h-16 items-center justify-around bg-linear-to-r from-[#6f387b]/90 via-[#3f327a]/90 to-[#17727b]/90 px-1 backdrop-blur-md md:hidden">
+        {MOBILE_NAV_ITEMS.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            onClick={() => navigate(item.path)}
+            className="relative flex flex-1 flex-col items-center gap-0.5 py-1"
+          >
+            {/* 로고 PNG는 상하 투명 여백이 커서 보이는 높이(약 26px)만 박스로 잡고 나머지는 넘치게 둔다 */}
+            <span className="flex h-7 w-12 items-center justify-center">
+              {item.key === 'main' ? (
+                <img src="/logo_icon.png" alt="" className="size-12 shrink-0" />
+              ) : (
+                <item.icon className={active === item.key ? 'size-5 text-white' : 'size-5 text-nav-inactive'} />
+              )}
+            </span>
+            <span className={active === item.key ? 'text-[10px] font-semibold text-white' : 'text-[10px] font-medium text-nav-inactive'}>
+              {item.label}
+            </span>
+            {item.key === 'mypage' && unreadCount > 0 && (
+              <span className="absolute right-3 top-0 flex size-4 shrink-0 items-center justify-center rounded-full bg-white text-[9px] font-bold leading-none text-primary">
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </span>
+            )}
+          </button>
+        ))}
+      </nav>
     </>
   )
 }
