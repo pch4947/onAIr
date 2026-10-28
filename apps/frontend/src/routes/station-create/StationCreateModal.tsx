@@ -10,6 +10,7 @@ import { PersonaFormStep } from '@/routes/station-create/PersonaFormStep'
 import { createStation, generatePersonaDrafts, getStation } from '@/routes/station-create/api'
 import { StationApiError } from '@/routes/station-create/client'
 import type { StationResult } from '@/routes/station-create/client'
+import { randomId } from '@/shared/randomId'
 import type { Persona, PersonaForm, StationFormat, StationInfo } from '@/shared/types'
 
 type Step = 'format' | 'form' | 'loading' | 'drafts' | 'edit' | 'submitting' | 'waiting'
@@ -89,7 +90,7 @@ export function StationCreateModal({ onClose }: StationCreateModalProps) {
     try {
       const input = { ...stationInfo, persona }
       const body = JSON.stringify(input)
-      if (!retry.current || retry.current.body !== body) retry.current = { body, key: crypto.randomUUID() }
+      if (!retry.current || retry.current.body !== body) retry.current = { body, key: randomId() }
       setStation(await createStation(input, retry.current.key))
       setStep('waiting')
     } catch (error) {

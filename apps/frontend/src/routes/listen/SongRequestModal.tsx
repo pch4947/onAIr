@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { getAccessToken } from '@/shared/authToken'
+import { randomId } from '@/shared/randomId'
 import { createTrackClient, normalizeYoutubeLink, youtubeThumbnailFromRef } from './trackClient'
 import type { TrackCandidate } from './trackClient'
 
@@ -10,7 +11,7 @@ const client = createTrackClient(import.meta.env.VITE_API_BASE_URL ?? '', getAcc
 
 const fieldLabelClass = 'text-[13px] font-medium text-label'
 const textInputClass =
-  'h-10 w-full rounded-lg border border-field-border bg-field-bg px-3.5 text-[13px] text-text placeholder:text-field-placeholder'
+  'h-10 w-full rounded-lg border border-field-border bg-field-bg px-3.5 text-base text-text placeholder:text-sm placeholder:text-field-placeholder md:text-[13px] md:placeholder:text-[13px]'
 
 export interface SubmittedTrack {
   title: string
@@ -72,7 +73,7 @@ export function SongRequestModal({ onClose, stationId, onSubmitted }: SongReques
     if (!directLink && !selected) { await handleSearch(); return }
     const url = directLink ?? selected!.url
     setValidation('')
-    if (!retry.current || retry.current.url !== url) retry.current = { url, key: crypto.randomUUID() }
+    if (!retry.current || retry.current.url !== url) retry.current = { url, key: randomId() }
     submitting.current = true
     try {
       const result = await submitSongRequestMutation.mutateAsync(retry.current)

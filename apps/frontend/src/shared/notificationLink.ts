@@ -5,5 +5,5 @@ export function getNotificationPath(notification: NotificationItem): string {
   if (notification.kind === 'comment' && notification.data.postId) {
     return `/board?post=${notification.data.postId}`
   }
-  return '/mypage'
+  return '/mypage/notifications'
 }

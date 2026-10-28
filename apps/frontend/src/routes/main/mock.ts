@@ -44,4 +44,16 @@ export const STATIONS: Station[] = [
     hashtags: ['#심야라디오', '#사연', '#포근한'],
     viewerCount: 22,
   },
+  {
+    id: '7',
+    title: '뉴스 브리핑 스테이션',
+    hashtags: ['#뉴스', '#시사', '#간결한'],
+    viewerCount: 9,
+  },
+  {
+    id: '8',
+    title: '주말 팝송 스테이션',
+    hashtags: ['#팝송', '#신나는', '#주말'],
+    viewerCount: 18,
+  },
 ]

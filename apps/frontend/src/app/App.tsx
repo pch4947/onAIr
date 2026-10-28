@@ -1,9 +1,9 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { MainPage } from '@/routes/main/MainPage'
 import { ListenPage } from '@/routes/listen/ListenPage'
-import { AdminPage } from '@/routes/admin/AdminPage'
 import { BoardPage } from '@/routes/board/BoardPage'
 import { MyPagePage } from '@/routes/mypage/MyPagePage'
+import { MyPageTabPage } from '@/routes/mypage/MyPageTabPage'
 import { LoginPage } from '@/routes/auth/LoginPage'
 import { SignupPage } from '@/routes/auth/SignupPage'
 
@@ -14,9 +14,9 @@ export function App() {
         <Route path="/" element={<Navigate to="/login" replace />} />
         <Route path="/main" element={<MainPage />} />
         <Route path="/listen" element={<ListenPage />} />
-        <Route path="/admin" element={<AdminPage />} />
         <Route path="/board" element={<BoardPage />} />
         <Route path="/mypage" element={<MyPagePage />} />
+        <Route path="/mypage/:tab" element={<MyPageTabPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<SignupPage />} />
         <Route path="*" element={<Navigate to="/login" replace />} />
