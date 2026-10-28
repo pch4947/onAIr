@@ -1,7 +1,4 @@
-"""Email/password auth: JWT issuance, the current-user dependency, and the auth routes.
-
-No social login here (Google/Naver/Kakao are separate follow-up work).
-"""
+"""Email/password auth: JWT issuance, the current-user dependency, and the auth routes."""
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 import asyncio
