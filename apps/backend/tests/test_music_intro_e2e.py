@@ -12,13 +12,14 @@ import shutil
 import tempfile
 import time
 import unittest
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 from redis.asyncio import Redis
 
 from app.config import Settings
 from app.messaging.consumer import EngineConsumer
-from app.music import ENQUEUE, run_process
+from app.music import ENQUEUE, MusicService, run_process
 from app.stations import StationInput, StationStore
 from app.streaming.hls import HlsPublisher
 from test_stations import BODY
@@ -104,14 +105,21 @@ class MusicIntroE2ETests(unittest.IsolatedAsyncioTestCase):
                 async def frozen():
                     return await redis.hget(prefix + ':track-plan', 'frozen') == 'music_first'
                 await wait_for(frozen, 'first introduction reservation', 60)
-                await enqueue('music_late', 'local:late', 'request')
+                service = MusicService(redis, settings)
+                service.prepare = AsyncMock(return_value=(source, dict(
+                    track_ref='yt:BaW_jenozKc', title='신청곡', artist='가수', duration_ms=duration)))
+                submitted = await service.enqueue('BaW_jenozKc', 'listener', 'request-key',
+                                                  'request', None, '청취자')
+                song_id = submitted['segment_id']
+                self.assertEqual(json.loads(await redis.hget(prefix + ':requests', song_id))['kind'], 'song_request')
                 self.assertEqual(await redis.hget(prefix + ':track-plan', 'next'), 'music_first')
                 async def completed():
-                    return publisher.journal.status('music_late') == 'PLAYED'
+                    state = await redis.hget(prefix + ':request-states', song_id)
+                    return publisher.journal.status(song_id) == 'PLAYED' and state and json.loads(state)['state'] == 'played'
                 await wait_for(completed, 'both introductions and tracks completed', 150)
 
                 rows = [json.loads(p) for (p,) in publisher.journal.db.execute('SELECT payload FROM jobs ORDER BY rowid')]
-                for id, ref in [('music_first', 'local:first'), ('music_late', 'local:late')]:
+                for id, ref in [('music_first', 'local:first'), (song_id, 'yt:BaW_jenozKc')]:
                     index = next(i for i, row in enumerate(rows) if row['id'] == id)
                     self.assertGreater(index, 0)
                     intro = rows[index - 1]
@@ -120,9 +128,12 @@ class MusicIntroE2ETests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(publisher.journal.status(intro['id']), 'PLAYED')
                 events = [f for _, f in await redis.xrange(f'engine:{station}:in')]
                 starts = [json.loads(f['payload'])['track_ref'] for f in events if f['type'] == 'track.started']
-                self.assertEqual(starts[:2], ['local:first', 'local:late'])
+                self.assertEqual(starts[:2], ['local:first', 'yt:BaW_jenozKc'])
                 announced = [json.loads(f['payload'])['track']['track_ref'] for f in events if f['type'] == 'track.queued']
-                self.assertEqual(announced[:2], ['local:first', 'local:late'])
+                self.assertEqual(announced[:2], ['local:first', 'yt:BaW_jenozKc'])
+                song_event = next(json.loads(f['payload']) for f in events if f['type'] == 'track.queued'
+                                  and json.loads(f['payload'])['track']['track_ref'] == 'yt:BaW_jenozKc')
+                self.assertEqual(song_event['nickname'], '청취자')
                 self.assertEqual(await redis.xlen(f'engine:{station}:out:dead'), 0)
                 self.assertIsNone(publisher.error)
             finally:

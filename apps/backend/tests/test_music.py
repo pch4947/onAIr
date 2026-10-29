@@ -8,6 +8,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+import wave
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -120,6 +121,38 @@ class OembedTitleTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ApiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_requested_track_commits_request_with_audio_and_retry_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings = Settings('127.0.0.1', 3000, audio_dir=root)
+            redis = SimpleNamespace(get=AsyncMock(return_value=json.dumps({'status': 'started'})),
+                                    hget=AsyncMock(return_value=None), eval=AsyncMock())
+            service = MusicService(redis, settings)
+            audio = root / settings.station_id / 'fixture.mp3'
+            audio.parent.mkdir(parents=True)
+            audio.write_bytes(b'fixture')
+            track = dict(track_ref='yt:' + VIDEO, title='밤편지', artist='아이유', duration_ms=1000)
+            service.prepare = AsyncMock(return_value=(audio, track))
+            async def commit(*args):
+                return args[15]  # Result JSON, after the 11 Redis keys and segment arguments.
+            redis.eval.side_effect = commit
+            result = await service.enqueue(VIDEO, 'listener', 'key', 'request', None, '청취자')
+            args = redis.eval.await_args.args
+            self.assertEqual(args[1], 11)
+            segment = json.loads(args[14])
+            event = json.loads(args[17])
+            request = json.loads(args[22])
+            self.assertEqual(segment['request_ref'], result['segment_id'])
+            self.assertEqual(request['id'], result['segment_id'])
+            self.assertEqual(request['kind'], 'song_request')
+            self.assertEqual(request['listenerName'], '청취자')
+            self.assertEqual(event['nickname'], '청취자')
+            redis.hget.return_value = json.dumps(result)
+            retry = await service.enqueue(VIDEO, 'listener', 'key', 'request', None, '청취자')
+            self.assertEqual(retry, result)
+            service.prepare.assert_awaited_once()
+            redis.eval.assert_awaited_once()
+
     async def test_authenticated_listener_state_and_accepted_queue(self):
         app = create_app(Settings('127.0.0.1', 3000, hls_enabled=True))
         app.state.redis = SimpleNamespace(get=AsyncMock(return_value=json.dumps(dict(owner_id='owner', status='started'))))
@@ -220,6 +253,23 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
 @unittest.skipUnless(os.environ.get('ONAIR_INTEGRATION_TEST') == '1' and os.environ.get('ONAIR_FFMPEG'),
                      'Requires Redis and FFmpeg; no external YouTube connection')
 class MusicIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_silent_intro_is_encoded_to_hls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'silent.wav'
+            with wave.open(str(source), 'wb') as wav:
+                wav.setnchannels(1)
+                wav.setsampwidth(2)
+                wav.setframerate(16000)
+                wav.writeframes(b'\x00\x00' * int(16000 * 2.88))
+            settings = Settings('127.0.0.1', 3000, hls_dir=root / 'hls',
+                                ffmpeg=os.environ['ONAIR_FFMPEG'])
+            publisher = HlsPublisher(None, settings)
+            publisher.directory.mkdir(parents=True)
+            chunks = await publisher.encode(source)
+            self.assertTrue(chunks)
+            self.assertTrue((publisher.directory / chunks[0][0]).is_file())
+
     async def test_download_boundary_to_redis_hls_and_idempotent_retry(self):
         station = 'st_music_' + uuid4().hex
         redis = Redis.from_url('redis://127.0.0.1:6379/0', decode_responses=True)
@@ -245,10 +295,15 @@ class MusicIntegrationTests(unittest.IsolatedAsyncioTestCase):
                     else:
                         await original(args, timeout)
                 with patch('app.music.run_process', side_effect=local_download):
-                    first = await service.enqueue(VIDEO, 'listener', 'one')
-                    second = await service.enqueue(VIDEO, 'listener', 'one')
+                    first = await service.enqueue(VIDEO, 'listener', 'one', 'request', None, '청취자')
+                    second = await service.enqueue(VIDEO, 'listener', 'one', 'request', None, '청취자')
                 self.assertEqual(first, second)
                 self.assertEqual(await redis.llen(prefix + ':queue'), 1)
+                request = json.loads(await redis.hget(prefix + ':requests', first['segment_id']))
+                self.assertEqual((request['kind'], request['listenerName']), ('song_request', '청취자'))
+                announcements = await redis.xrange(f'engine:{station}:in')
+                self.assertEqual(len(announcements), 1)
+                self.assertEqual(json.loads(announcements[0][1]['payload'])['nickname'], '청취자')
                 publisher = HlsPublisher(redis, settings)
                 stack.push_async_callback(publisher.stop)
                 await publisher.start()
@@ -271,9 +326,12 @@ class MusicIntegrationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertGreater(len(audio_response.content), 0)
                 await original([settings.ffmpeg, '-nostdin', '-v', 'error', '-i',
                                 str(publisher.directory / fragment), '-f', 'null', '-'], 15)
-                self.assertEqual((await service.enqueue(VIDEO, 'listener', 'one'))['segment_id'], first['segment_id'])
+                self.assertEqual((await service.enqueue(VIDEO, 'listener', 'one', 'request', None,
+                                                        '청취자'))['segment_id'], first['segment_id'])
                 async with asyncio.timeout(5):
-                    while await redis.llen(prefix + ':queue'):
+                    while (await redis.llen(prefix + ':queue') or
+                           not (state := await redis.hget(prefix + ':request-states', first['segment_id'])) or
+                           json.loads(state)['state'] != 'played'):
                         await asyncio.sleep(0.1)
         finally:
             for pattern in (prefix + ':*', 'engine:' + station + ':*'):

@@ -151,18 +151,6 @@ export function ListenPage() {
     setChatInput('')
   }
 
-  const handleSongSubmitted = (track: { title: string; artist: string; thumbnailUrl: string | null }) => {
-    submitRequestMutation.mutate({
-      prompt: track.artist ? `${track.title} - ${track.artist}` : track.title,
-      listenerId: currentUser?.id,
-      listenerName: currentUser?.name,
-      kind: 'mood',
-      trackTitle: track.title,
-      trackArtist: track.artist || undefined,
-      trackThumbnailUrl: track.thumbnailUrl || undefined,
-    })
-  }
-
 
   return (
     <div className="flex h-dvh overflow-hidden md:h-screen">
@@ -299,7 +287,7 @@ export function ListenPage() {
             className="flex flex-1 flex-col gap-2 overflow-y-auto rounded-md bg-field-bg p-3 text-[11px] text-text"
           >
             {chatMessages.map((message) =>
-              message.kind === 'mood' ? (
+              message.kind === 'mood' || message.kind === 'song_request' ? (
                 <li
                   key={message.id}
                   className="flex flex-col gap-1 rounded-md border border-primary/30 bg-primary/10 px-3 py-2"
@@ -311,7 +299,7 @@ export function ListenPage() {
                       <span className="shrink-0">님의 신청곡</span>
                     </span>
                     <span
-                      className={`shrink-0 rounded-xl px-2 py-0.5 text-[10px] font-semibold text-white ${STATUS_VARIANT_CLASS[STATUS_VARIANT[message.status] ?? 'queued']}`}
+                      className={`shrink-0 rounded-xl px-2 py-0.5 text-[10px] font-semibold text-white ${STATUS_VARIANT_CLASS[message.kind === 'song_request' && message.status === 'published' ? 'queued' : STATUS_VARIANT[message.status] ?? 'queued']}`}
                     >
                       {message.status.toUpperCase()}
                     </span>
@@ -442,7 +430,7 @@ export function ListenPage() {
         <SongRequestModal
           onClose={() => setIsSongRequestOpen(false)}
           stationId={stationId}
-          onSubmitted={handleSongSubmitted}
+          onSubmitted={() => { void requestsQuery.refetch(); void musicQueueQuery.refetch() }}
         />
       )}
       {isQueueOpen && (

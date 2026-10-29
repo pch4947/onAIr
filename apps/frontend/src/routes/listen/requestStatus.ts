@@ -22,9 +22,10 @@ export const STATUS_VARIANT: Record<string, StatusVariant> = {
   failed: 'rejected',
 }
 
-export const KIND_LABEL: Record<'story' | 'mood', string> = {
+export const KIND_LABEL: Record<'story' | 'mood' | 'song_request', string> = {
   story: '사연',
   mood: '신청곡',
+  song_request: '신청곡',
 }
 
 const PENDING_STATUSES = new Set(['requested', 'screened', 'queued', 'generating', 'generated', 'mixing'])

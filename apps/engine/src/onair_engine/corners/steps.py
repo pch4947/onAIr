@@ -73,7 +73,11 @@ def _artist_talk(m: Material) -> str:
 def _music_intro(m: Material) -> str:
     assert m.track is not None
     # 곡 제목·아티스트는 외부 텍스트다 (YouTube 메타데이터, F-34)
-    return "다음 곡을 소개하는 멘트를 2문장 이내로 작성하라.\n" + data_block(TRACK, track_line(m.track))
+    text = "다음 곡을 소개하는 멘트를 2문장 이내로 작성하라."
+    if nickname := m.track.get("requester_nickname"):
+        text += " 청취자의 신청곡임을 닉네임과 함께 소개한다."
+        return text + "\n" + data_block(TRACK, track_line(m.track) + "\n신청자: " + nickname)
+    return text + "\n" + data_block(TRACK, track_line(m.track))
 
 
 def _story(m: Material) -> str:

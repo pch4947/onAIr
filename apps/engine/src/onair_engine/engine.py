@@ -157,6 +157,12 @@ class StationEngine:
         track = payload.get("track")
         if not isinstance(track, dict) or not track.get("track_ref") or not track.get("title"):
             raise ValueError(f"track.queued에 곡 정보가 없다: {payload!r}"[:200])
+        track = dict(track)
+        nickname = payload.get("nickname")
+        if payload.get("source") == "request" and isinstance(nickname, str):
+            # Untrusted requester names must pass the same input filter as chat.
+            if nickname and self._safety.check_l0(nickname) is None:
+                track["requester_nickname"] = nickname[:50]
         self.tracks.queue(track)
 
     def on_track_started(self, payload: dict) -> None:
