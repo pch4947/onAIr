@@ -201,6 +201,12 @@ wsl redis-cli XRANGE engine:st_8f2a:out - + COUNT 3   # station.started 또는 s
 | type | payload | 의미 |
 |---|---|---|
 | `track.queued` | `{"track": {...}, "source": "playlist"\|"request"\|"vote", "request_id"?}` | 다음에 틀 곡. 백엔드는 **다음 곡을 항상 하나 미리 정해 둔다** — 첫 곡이 시작될 때, 그리고 곡이 시작될 때마다(`track.started` 직후) 그다음 곡을 보낸다. 새 `track.queued`는 이전 것을 대체한다 |
+
+현재 신청곡 등록 경로에서는 음원 큐와 `song_request` 표시 기록을 함께 저장하고,
+`track.queued`에 신청자 `nickname`과 `request_id`를 전달한다. 엔진은 닉네임을 L0 검사한 뒤
+곡 소개의 데이터 블록에 넣고, 음악 세그먼트의 방송 상태로 신청 기록을 갱신한다.
+이는 신청곡에 한정한 연결이다. 아래 v2의 범용 입력 라우터·FEATURE 상태 머신과
+신청 한마디 처리는 아직 구현되지 않았다.
 | `track.started` | `{"track_ref", "started_at"}` | 곡 재생이 시작됐다. 엔진은 `started_at + duration_ms`를 곡 종료 예상 시각으로 쓴다 |
 
 **역할 나눔** — **어떤 곡**을 틀지는 백엔드가, **언제** 틀지는 엔진 러닝오더가 정한다.

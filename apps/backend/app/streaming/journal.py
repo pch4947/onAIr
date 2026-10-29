@@ -86,8 +86,10 @@ class Journal:
                             'status=excluded.status, payload=excluded.payload',
                             (segment['id'], state, json.dumps(segment)))
             # Quotes can belong to any speech corner, not just request_reply.
-            # Non-speech assets (including legacy ack) do not complete requests.
-            request_id = segment.get('request_ref') if segment.get('kind') == 'speech' else None
+            # Music requests are completed by their own audio, not by an unrelated introduction.
+            ref = segment.get('request_ref')
+            request_id = ref if segment.get('kind') == 'speech' or (
+                segment.get('kind') == 'music' and ref == segment.get('id')) else None
             self._enqueue('encoding.failed' if state == 'FAILED' else 'state.transition',
                           dict(segment_id=segment['id'], state=state, at=at), request_id or '', at)
 

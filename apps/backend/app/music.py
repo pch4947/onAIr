@@ -11,6 +11,7 @@ import sys
 import tempfile
 import httpx
 import time
+from datetime import datetime, timezone
 from typing import Annotated, Literal
 from urllib.parse import parse_qs, urlsplit
 
@@ -189,8 +190,8 @@ class TrackInput(BaseModel):
 
 # Validate key types before any write: Lua errors do not roll back earlier writes.
 ENQUEUE = """
-local kinds = {'hash', 'hash', 'list', 'string', 'hash', 'hash', 'stream', 'hash', 'list'}
-for i=1,9 do
+local kinds = {'hash', 'hash', 'list', 'string', 'hash', 'hash', 'stream', 'hash', 'list', 'hash', 'list'}
+for i=1,#KEYS do
  local t = redis.call('TYPE', KEYS[i]).ok
  if t ~= 'none' and t ~= kinds[i] then return redis.error_reply('Unexpected music key type') end
 end
@@ -204,6 +205,10 @@ if old then return old end
 redis.call('HSET', KEYS[2], ARGV[1], ARGV[2])
 redis.call('RPUSH', KEYS[3], ARGV[1])
 redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
+if ARGV[10] and ARGV[10] ~= '' then
+ redis.call('HSET', KEYS[10], ARGV[1], ARGV[10])
+ redis.call('RPUSH', KEYS[11], cjson.encode({state='requested', at=tonumber(ARGV[7]), source='api', accepted=true}))
+end
 """ + REGISTER + "return ARGV[3]"
 
 
@@ -304,7 +309,7 @@ class MusicService:
             manifest.write_text(json.dumps(metadata), encoding='utf-8')
         return audio, metadata
 
-    async def enqueue(self, video_id, owner, retry_key, source='playlist', request_id=None):
+    async def enqueue(self, video_id, owner, retry_key, source='playlist', request_id=None, nickname=None):
         station_raw = await self.redis.get(self.prefix + ':station')
         station = json.loads(station_raw) if station_raw else {}
         generation = station.get('generation', '')
@@ -328,25 +333,40 @@ class MusicService:
             raise HTTPException(429, 'Another audio download is in progress; retry later', headers={'Retry-After': '5'})
         async with self.lock:
             audio, track = await self.prepare(video_id, segment_id)
+            # The song and its visible request share an ID and are committed together.
+            song_request_id = segment_id if source == 'request' and request_id is None else None
             segment = Segment(id=segment_id, station_id=self.settings.station_id,
                 audio_ref=audio.relative_to(self.settings.audio_dir).as_posix(), duration_ms=track['duration_ms'],
                 corner_type='music', kind='music', priority=50, reorderable=False,
-                request_ref=None, music_ref=track['track_ref'], created_at=time.time())
+                request_ref=song_request_id, music_ref=track['track_ref'], created_at=time.time())
             validate_audio(self.settings.audio_dir, segment)
             result = dict(segment_id=segment_id, track=track, status='queued',
                           hls_url=f'/hls/{self.settings.station_id}/index.m3u8', source=source, request_id=request_id)
             event_track = {**track, 'title': track['title'][:200], 'artist': track['artist'][:200]}
             event = {'track': event_track, 'source': source}
+            if song_request_id:
+                event['nickname'] = nickname or '익명'
+                event['request_id'] = song_request_id
+            entry = None
+            if song_request_id:
+                title, artist = track['title'][:200], track['artist'][:200]
+                entry = dict(id=song_request_id, prompt=f'{title} - {artist}' if artist else title,
+                    listenerId=owner, listenerName=nickname, kind='song_request', status='requested',
+                    trackTitle=title, trackArtist=artist or None,
+                    trackThumbnailUrl=f'https://i.ytimg.com/vi/{video_id}/hqdefault.jpg',
+                    createdAt=datetime.now(timezone.utc).isoformat(timespec='milliseconds'))
             if request_id:
                 event['request_id'] = request_id
             async with asyncio.timeout(3):
-                raw = await self.redis.eval(ENQUEUE, 9, self.prefix + ':music-submissions',
+                raw = await self.redis.eval(ENQUEUE, 11, self.prefix + ':music-submissions',
                     self.prefix + ':segments', self.prefix + ':queue', self.prefix + ':station',
                     self.prefix + ':tracks', self.prefix + ':track-plan', f'engine:{self.settings.station_id}:in',
                     self.prefix + ':playlist', self.prefix + ':playlist-order',
+                    self.prefix + ':requests', self.prefix + ':request-history:' + segment_id,
                     segment_id, json.dumps(segment.model_dump(), sort_keys=True, ensure_ascii=False),
                     json.dumps(result), owner, json.dumps(event), self.settings.station_id, str(time.time()),
-                    generation, str(created_at) if created_at is not None else '')
+                    generation, str(created_at) if created_at is not None else '',
+                    json.dumps(entry, ensure_ascii=False) if entry else '')
             if raw == 'unavailable':
                 raise HTTPException(409, 'Station is no longer started')
             return json.loads(raw)
@@ -375,7 +395,7 @@ async def enqueue_track(station_id: str, body: TrackInput, request: Request, use
         if body.source == 'playlist' and body.request_id is None:
             return await request.app.state.music.enqueue(youtube_id(body.url), user['id'], idempotency_key)
         return await request.app.state.music.enqueue(youtube_id(body.url), user['id'], idempotency_key,
-                                                     body.source, body.request_id)
+                                                     body.source, body.request_id, user.get('name'))
     except RedisError:
         raise HTTPException(503, 'Redis unavailable; retry with the same Idempotency-Key') from None
     except TimeoutError:

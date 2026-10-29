@@ -42,6 +42,12 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
                         redis = AsyncMock()
                         await journal.flush(redis)
                         self.assertEqual(redis.eval.call_args.args[-1], '')
+                for state in ('MIXING', 'PUBLISHED', 'PLAYED', 'FAILED'):
+                    journal.transition({**segment('music'), 'id': 'music_request',
+                                        'request_ref': 'music_request'}, state)
+                    redis = AsyncMock()
+                    await journal.flush(redis)
+                    self.assertEqual(redis.eval.call_args.args[-1], 'music_request')
             finally:
                 journal.close()
 

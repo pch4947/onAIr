@@ -152,6 +152,9 @@ tick은 정책 판단만 수행하며 요청을 소비하거나 오디오를 생
 ## 요청 접수와 엔진 전달
 
 `POST /api/requests`는 요청을 Redis에 저장하면서 엔진의 `request.arrived` 이벤트를 발행합니다.
+신청곡은 `POST /api/stations/{station_id}/tracks`로 접수합니다. 음원 준비에 성공하면
+서버가 신청곡 기록을 음원 큐와 함께 저장하며, 음원의 송출 상태가 해당 기록에 반영됩니다.
+신청곡을 표시하기 위해 별도의 `/api/requests` 요청을 보내지 않습니다.
 기존 prompt/listenerId는 유지하고 kind는 story(기본) 또는 mood입니다. 초기 상태는 queued에서 requested로 변경했습니다.
 엔진이 먼저 응답하면 POST에도 최신 상태가 반환될 수 있으며, 202 자체는 엔진 처리 완료를 뜻하지 않습니다.
 

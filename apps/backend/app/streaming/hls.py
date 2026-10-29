@@ -155,13 +155,14 @@ class HlsPublisher:
             if bgm_duration is not None:
                 args += ['-stream_loop', '-1', '-i', str(self.settings.bgm_audio),
                     '-filter_complex',
-                    '[0:a]loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000[voice];'
+                    '[0:a]adenorm=level=-90,loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000[voice];'
                     '[1:a]aresample=48000,volume=0.177828,afade=t=in:d=0.3,'
                     f'afade=t=out:st={max(0, bgm_duration - 0.3):.6f}:d=0.3[bed];'
                     '[voice][bed]amix=inputs=2:duration=first:normalize=0,'
                     'alimiter=limit=0.95:level=0[out]', '-map', '[out]', '-t', str(bgm_duration)]
             else:
-                args += ['-map', '0:a:0', '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11']
+                # loudnorm can emit NaN for short, completely silent TTS output.
+                args += ['-map', '0:a:0', '-af', 'adenorm=level=-90,loudnorm=I=-16:TP=-1.5:LRA=11']
             args += ["-vn",
                      "-ar", "48000", "-ac", "2", "-c:a", "aac", "-b:a", "128k",
                      "-f", "hls", "-hls_time", "4", "-hls_list_size", "0",
