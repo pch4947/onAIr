@@ -680,7 +680,7 @@ v2 합의 전까지 엔진은 v1을 유지한다. 합의 후 [ENGINE_ARCHITECTUR
 
 ### 10.12 TTS 제공자 전환 — Gemini TTS (제안, 2026-10-30)
 
-TTS를 Cartesia에서 Gemini TTS(`gemini-3.8-flash-tts`)로 바꾼다(지도교수 멘토링 — 선정 기준을 persona 반영 가능성으로). 설계는 [persona.md](persona.md) 9.3절. 백엔드·프론트와 합의 전 **제안**이다.
+TTS를 Cartesia에서 Gemini TTS(`gemini-3.8-flash-tts`)로 바꾼다(선정 기준을 persona 반영 가능성으로 바꿈). 설계는 [persona.md](persona.md) 9.3절. 백엔드·프론트와 합의 전 **제안**이다.
 
 **persona 필드**
 

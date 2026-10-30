@@ -5,7 +5,7 @@
 - 관련 문서: [PROJECT_PLAN.md](PROJECT_PLAN.md) (기획서 rev.12 — 4.2 요청 반영의 정의, 4.3 방송 형식·코너 모듈·DJ persona, 4.5 사람 DJ 대체 기준, 8장 연구 설계 초안), [CORNER_DESIGN.md](CORNER_DESIGN.md) (코너·입력 반영 설계), [ENGINE_ARCHITECTURE.md](ENGINE_ARCHITECTURE.md), [context-memory.md](context-memory.md) (기억 층 상세)
 - 표기: `[예시]` = 팀 합의 전 예시값, `[미정]` = 결정되지 않은 선택, **권장 이름** = 코드에 아직 없는 이름
 - 코드 기준: `main` + 페르소나 평가 작업 브랜치 (2026-10-08 확인).
-- **개정 (2026-10-30)**: TTS를 Cartesia에서 **Gemini TTS로 전환**(지도교수 멘토링 — TTS 선정 기준을 persona 반영 가능성으로). 목소리를 기본 보이스 선택 또는 **보이스 설명으로 생성(voice design)** 으로 넓히고, 목소리 기본 스타일 `voice_style`을 추가했다 — 2.1·2.3·3·9.3절.
+- **개정 (2026-10-30)**: TTS를 Cartesia에서 **Gemini TTS로 전환**(TTS 선정 기준을 persona 반영 가능성으로 바꿈). 목소리를 기본 보이스 선택 또는 **보이스 설명으로 생성(voice design)** 으로 넓히고, 목소리 기본 스타일 `voice_style`을 추가했다 — 2.1·2.3·3·9.3절.
 - **개정 (2026-10-12)**: 코너·입력 반영 재설계([CORNER_DESIGN.md](CORNER_DESIGN.md), 팀 합의 완료)에 맞춰 **행동 층을 폐지**했다 — 1절, 2.2절, 5·6·8절.
 - **결정 (2026-10-08, 팀 회의)**: 방 생성은 **제한된 선택지 폼**으로 받고, 엔진이 **LLM으로 persona 초안 여러 개를 만들어** 호스트가 고르고 고친다(3절). persona 저장소는 **백엔드 신규 DB**(2.4절), 스키마는 **Pydantic 공용 모델**(2.3절), `station.created`는 persona 본문을 싣는다([ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md) 3.3절).
 
@@ -389,7 +389,7 @@ AI VTuber 팬덤 연구(Neuro-sama)에서 팬의 83%가 "일관된 성격"을 �
 
 **제공자: Gemini TTS** (결정 2026-10-30, 기존 Cartesia Sonic 3.6에서 전환 — [ENGINE_ARCHITECTURE.md](ENGINE_ARCHITECTURE.md) 확인 3)
 
-- **선정 기준** — 지도교수 멘토링: 커스텀 DJ가 핵심이라면 TTS는 자연스러움만이 아니라 **persona(말투·음색·톤)를 얼마나 반영할 수 있는가**로 골라야 한다.
+- **선정 기준** — 커스텀 DJ가 핵심이므로 TTS는 자연스러움만이 아니라 **persona(말투·음색·톤)를 얼마나 반영할 수 있는가**로 골라야 한다.
 - **Cartesia의 한계** — 한국어에서 조절할 수 있는 것이 보이스 선택과 속도(0.6~1.5)·볼륨뿐이다. 감정 지정(`generation_config.emotion`)은 공식 문서상 영어 전용이다.
 - **Gemini로 되는 것** — 아래 세 가지를 persona에 연결한다.
 
