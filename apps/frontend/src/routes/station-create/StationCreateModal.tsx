@@ -136,9 +136,9 @@ export function StationCreateModal({ onClose }: StationCreateModalProps) {
         )}
         {step === 'waiting' && station && (
           <div className="flex flex-col gap-4" role="status">
-            <h2 className="text-xl font-semibold">{station.status === 'rejected' ? '방송을 시작하지 못했어요'
+            <h2 className="text-lg font-semibold">{station.status === 'rejected' ? '방송을 시작하지 못했어요'
               : station.status === 'started' && station.hls_ready ? '방송이 준비됐어요' : '방송을 준비하고 있어요'}</h2>
-            <p>{station.status === 'rejected' ? '선택한 목소리 또는 방송 생성 서비스에 문제가 있어요. 운영자에게 문의해주세요.'
+            <p className="text-[13px] leading-relaxed text-text-muted">{station.status === 'rejected' ? '선택한 목소리 또는 방송 생성 서비스에 문제가 있어요. 운영자에게 문의해주세요.'
               : station.status === 'preparing' ? 'DJ가 방송을 시작할 때까지 기다려주세요.'
               : !station.hls_ready ? 'DJ가 시작됐어요. 재생할 오디오를 준비하고 있어요.' : '청취 화면에서 재생 버튼을 눌러주세요.'}</p>
             {pollError && <><p role="alert">{pollError}</p><button type="button" onClick={() => setStation({ ...station })}>상태 다시 확인</button></>}
