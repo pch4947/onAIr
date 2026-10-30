@@ -2,9 +2,10 @@
 
 > **한 줄 요약** — persona는 DJ의 **표현**(이름·말투·목소리·예시 멘트)만 담고 방 생성 시 고정한다. 청취자 입력을 언제·무엇을 반영할지는 persona가 아니라 **형식·코너 계약과 선별기**가 정한다(2026-10-12 행동 층 폐지 — [CORNER_DESIGN.md](CORNER_DESIGN.md) 8.2절). 방송 중 갱신되는 기억 층은 [context-memory.md](context-memory.md).
 
-- 관련 문서: [PROJECT_PLAN.md](PROJECT_PLAN.md) (기획서 rev.11 — 4.2 요청 반영의 정의, 4.3 방송 형식·코너 모듈·DJ persona, 4.5 사람 DJ 대체 기준, 8장 연구 설계 초안), [CORNER_DESIGN.md](CORNER_DESIGN.md) (코너·입력 반영 설계), [ENGINE_ARCHITECTURE.md](ENGINE_ARCHITECTURE.md), [context-memory.md](context-memory.md) (기억 층 상세)
+- 관련 문서: [PROJECT_PLAN.md](PROJECT_PLAN.md) (기획서 rev.12 — 4.2 요청 반영의 정의, 4.3 방송 형식·코너 모듈·DJ persona, 4.5 사람 DJ 대체 기준, 8장 연구 설계 초안), [CORNER_DESIGN.md](CORNER_DESIGN.md) (코너·입력 반영 설계), [ENGINE_ARCHITECTURE.md](ENGINE_ARCHITECTURE.md), [context-memory.md](context-memory.md) (기억 층 상세)
 - 표기: `[예시]` = 팀 합의 전 예시값, `[미정]` = 결정되지 않은 선택, **권장 이름** = 코드에 아직 없는 이름
 - 코드 기준: `main` + 페르소나 평가 작업 브랜치 (2026-10-08 확인).
+- **개정 (2026-10-30)**: TTS를 Cartesia에서 **Gemini TTS로 전환**(지도교수 멘토링 — TTS 선정 기준을 persona 반영 가능성으로). 목소리를 기본 보이스 선택 또는 **보이스 설명으로 생성(voice design)** 으로 넓히고, 목소리 기본 스타일 `voice_style`을 추가했다 — 2.1·2.3·3·9.3절.
 - **개정 (2026-10-12)**: 코너·입력 반영 재설계([CORNER_DESIGN.md](CORNER_DESIGN.md), 팀 합의 완료)에 맞춰 **행동 층을 폐지**했다 — 1절, 2.2절, 5·6·8절.
 - **결정 (2026-10-08, 팀 회의)**: 방 생성은 **제한된 선택지 폼**으로 받고, 엔진이 **LLM으로 persona 초안 여러 개를 만들어** 호스트가 고르고 고친다(3절). persona 저장소는 **백엔드 신규 DB**(2.4절), 스키마는 **Pydantic 공용 모델**(2.3절), `station.created`는 persona 본문을 싣는다([ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md) 3.3절).
 
@@ -14,7 +15,7 @@
 |---|---|---|
 | 스테이션별 DJ 스타일 (`StationProfile`) | **부분 구현** | [domain.py](../apps/engine/src/onair_engine/domain.py) `StationProfile` — `dj_name`·`tone`·`concept` + `examples`·`forbidden`·`signature_phrases`. persona 파일([config/personas/](../apps/engine/config/personas/))로 분리. `voice`·`persona_id`는 `StationConfig`에 있다(#55). `style`·`music_taste`는 계측 사본에만 남고 프롬프트에는 아직 안 쓴다 |
 | 스테이션별 엔진 분리 | **구현됨** | [manager.py](../apps/engine/src/onair_engine/manager.py) `EngineManager.start_station(config)`가 방마다 `StationEngine`을 따로 만든다. 프롬프트·방송 맥락·사전 렌더 캐시 폴더·계측(`station_id`)이 방 단위로 나뉜다 |
-| 스테이션별 TTS 보이스 | **구현됨** | [engine.py](../apps/engine/src/onair_engine/engine.py) `StationEngine`이 `StationConfig.voice`(= `persona.voice`)로 TTS 어댑터를 만든다. `EngineSettings.tts_voice`는 로컬 실행용 기본값. Cartesia 보이스 목록 검증은 [manager.py](../apps/engine/src/onair_engine/manager.py) (#55) |
+| 스테이션별 TTS 보이스 | **구현됨** | [engine.py](../apps/engine/src/onair_engine/engine.py) `StationEngine`이 `StationConfig.voice`(= `persona.voice`)로 TTS 어댑터를 만든다. `EngineSettings.tts_voice`는 로컬 실행용 기본값. Cartesia 보이스 목록 검증은 [manager.py](../apps/engine/src/onair_engine/manager.py) (#55). **Gemini 전환(2026-10-30)은 미구현** — Gemini 어댑터, `voice_style` 전달, voice design REST가 필요하다(9.3절) |
 | 스테이션별 스타일 주입 경로 | **구현됨** | `onair-engine --serve`가 `engine:control`의 `station.created`마다 방을 띄운다 — [manager.py](../apps/engine/src/onair_engine/manager.py) `config_from_created` (#55). 로컬 실행은 여전히 yaml의 방 하나 |
 | 표현과 편성 설정의 분리 | **부분 구현** | `StationConfig.profile`(표현)과 `StationConfig.policy_name`(정책)이 별도 필드. 재설계 후 `policy_name`은 형식·코너·참여 강도·실험 조건으로 바뀐다(1.2절) — 미구현 |
 | 공통 시스템 프롬프트 | **부분 구현** | [corners/base.py](../apps/engine/src/onair_engine/corners/base.py) `system_prompt()` — 4절 순서로 정체성·말투·입버릇·금지 사항·말하기 원칙(`RADIO_CRAFT`)·출력 규칙·L1 지시 + few-shot 예시(데이터 블록). 시간 예산 블록 없음 |
@@ -73,7 +74,9 @@ persona:
     energy: low                       # low | mid | high
     humor: rare                       # rare | some | often
   music_taste: [발라드, 어쿠스틱]       # 고정 장르 목록에서 0~3개
-  voice: <Cartesia 보이스 ID>         # Cartesia 한국어 보이스 목록에서. 프롬프트에는 넣지 않는다 (9.3절)
+  voice: <Gemini 보이스 ID>           # 기본 보이스 이름(예: Kore) 또는 voice design으로 만든 voice_... ID. 프롬프트에는 넣지 않는다 (9.3절)
+  voice_style: 차분하고 나긋하게, 서두르지 않고   # 목소리 기본 스타일 — TTS 스타일 지시로만 쓴다. 감정·상황은 넣지 않는다 (9.3절)
+  voice_description: …               # voice design에 쓴 보이스 설명 (기본 보이스를 골랐으면 비움). 재현·분석용 기록
 
   # ── 엔진이 LLM으로 만든 초안 → 호스트가 고르고 고친 값 (3절) ──
   dj_name: 새벽                        # 호스트가 폼에 적었으면 그 값, 비웠으면 LLM 제안
@@ -141,6 +144,8 @@ class Persona(BaseModel):
     style: Style
     music_taste: list[Genre] = Field(default=[], max_length=3)
     voice: str                                                    # 제공자 보이스 목록 검사는 엔진이 한다
+    voice_style: str = Field(default="", max_length=60)           # 권장 이름. 비우면 스타일 지시 없이 합성
+    voice_description: str | None = Field(default=None, max_length=200)   # 권장 이름. voice design 입력 기록
     dj_name: str = Field(min_length=1, max_length=20)
     concept: str = Field(min_length=1, max_length=60)
     tone: str = Field(min_length=1, max_length=100)
@@ -189,13 +194,15 @@ class ExperimentSpec(BaseModel):
 **방향**: LLM을 적극적으로 써서 DJ 스타일을 다양하게 만들되, LLM을 쓰는 시점을 **방 생성 한 번**으로 묶는다. 방송 중에는 저장된 값만 쓴다. 다양성은 생성에서, 일관성은 고정에서 얻는다.
 
 ```
-① 호스트가 폼 입력 — formality·energy·humor·music_taste·voice (+ 선택: dj_name, host_note 한두 줄)
+① 호스트가 폼 입력 — formality·energy·humor·music_taste (+ 선택: voice — 기본 보이스를 미리 고를 때, dj_name, host_note 한두 줄)
      방 정보: 첫 노래(YouTube 링크), 방송 시간(30~60분), 오늘의 주제(선택)
 ② 백엔드 → 엔진  POST /v1/personas/drafts  {form, count: 3}
 ③ 엔진: 규칙으로 style → tone 기본 문장
-        LLM으로 초안 3개 생성 — 이름·컨셉 제안, tone 묘사, 예시 멘트 5개, 입버릇, 금지 사항
+        LLM으로 초안 3개 생성 — 이름·컨셉 제안, tone 묘사, 예시 멘트 5개, 입버릇, 금지 사항,
+                                보이스 설명(1~2문장)·voice_style
         초안마다 스키마 검증 + L2 검사 → 실패한 초안은 다시 생성 (최대 2회)
 ④ 호스트가 초안 하나를 고르고 필요하면 고친다 (다시 생성 버튼)
+   목소리: 기본 보이스 중 선택, 또는 "이 설명으로 목소리 만들기" → 엔진이 voice design → 샘플 미리 듣기 (9.3절)
 ⑤ 백엔드 → 엔진  POST /v1/personas/check  {persona} — 고친 텍스트의 스키마 + L0 검사
 ⑥ 백엔드 DB에 저장 → station.created(persona 본문)로 방송 시작
 ⑦ 방송 중에는 고정 — 매 멘트마다 persona를 다시 해석하지 않는다
@@ -205,7 +212,7 @@ class ExperimentSpec(BaseModel):
 
   | 규칙 (같은 입력 → 같은 결과) | LLM (창작) | 호스트가 직접 |
   |---|---|---|
-  | `style` → `tone` 기본 문장 (예: polite + low + rare → "차분한 존댓말, 농담은 드물게") | 이름·컨셉 제안, tone 묘사 보강, 예시 멘트, 입버릇, 금지 사항, 오늘의 주제(비었을 때) | 보이스, 첫 노래, 방송 시간, 초안 선택·수정 |
+  | `style` → `tone` 기본 문장 (예: polite + low + rare → "차분한 존댓말, 농담은 드물게") | 이름·컨셉 제안, tone 묘사 보강, 예시 멘트, 입버릇, 금지 사항, 오늘의 주제(비었을 때), **보이스 설명·`voice_style`** (2026-10-30) | 보이스(기본 보이스 선택 또는 설명으로 생성한 것 중 선택), 첫 노래, 방송 시간, 초안 선택·수정 |
 
   - 선택지 값을 LLM에 맡기지 않는 이유: 실험용 방에서 말투를 고정하려면 같은 입력에 같은 기본 말투가 나와야 한다. 그리고 선택지 조합을 조건으로 주면 "따뜻하고 차분한 DJ"로 수렴하지 않고 결과가 오히려 다양하게 갈린다.
   - 입력 반영 방식(언제·무엇을 반영할지)은 LLM이 추론하지 않는다 — 형식·코너 계약과 참여 강도는 호스트가 폼에서 고른다(1.1절).
@@ -214,7 +221,7 @@ class ExperimentSpec(BaseModel):
   - **비용·지연** — 변환은 방 생성 시 한 번이고, 방송 중 프롬프트에는 정리된 값만 들어간다.
 - **안전** — `host_note`와 호스트가 고친 텍스트는 L0 검사를 거치고 데이터 블록으로만 프롬프트에 들어간다. LLM이 만든 초안은 L2 검사를 거친다.
 - **초안 생성 프롬프트의 출력** — 초안은 JSON으로 받아야 하므로, 대본용 출력 정리(`clean_script` — 기호·따옴표 제거)를 거치지 않는 원문 출력 모드가 LLM 어댑터에 필요하다 (구현 항목).
-- **목소리**는 호스트가 목록에서 고른다(9.3절). 접착 요소(`GlueBank`)가 방송 시작 전에 그 목소리로 사전 렌더링되기 때문에 방 생성 시 확정돼야 한다.
+- **목소리**는 호스트가 기본 보이스 목록에서 고르거나 초안의 보이스 설명으로 만든다(9.3절). 접착 요소(`GlueBank`)가 방송 시작 전에 그 목소리로 사전 렌더링되기 때문에 방 생성 시 확정돼야 한다.
 - **실험용 방**은 폼 대신 사전 정의 **프리셋**을 쓴다(8절). 현재 엔진의 비교용 프리셋 3종([config/personas/](../apps/engine/config/personas/))은 초안 생성 프롬프트의 예시로도 쓸 수 있다.
 - **나중 과제** — 생성된 persona를 방송 전에 평가 도구(`python -m onair_engine.eval`)로 짧게 시험해 캐릭터 이탈을 미리 걸러낼 수 있다. MVP 범위 밖.
 
@@ -302,6 +309,7 @@ AI VTuber 팬덤 연구(Neuro-sama)에서 팬의 83%가 "일관된 성격"을 �
 | 기준 | 지표 | 데이터 원천 |
 |---|---|---|
 | **일관성 (1순위)** | **캐릭터 이탈률** — 멘트 샘플 중 persona 명세 위반 비율 (루브릭 또는 LLM-judge) | 송출 이력의 멘트 원문 + persona 명세 |
+| 일관성 — 목소리 (2026-10-30) | **목소리 일치도** — 같은 persona 세그먼트를 섞어 들려주고 같은 DJ로 들리는지 사람이 판정. persona 구분 블라인드 테스트(목소리만 듣고 어느 persona인지 맞힌 비율) `[미정: 표본 수]` | 송출 오디오 + persona 명세 (9.3절) |
 | 맥락 연결 | ④ 반영 비율, 반복 표현 비율 | 요청 기록 ([context-memory.md](context-memory.md) 5절), 송출 이력 |
 | 반응 시점 | `L_reflect`·`quote_age` 분포, `topic_match` 비율 | 입력 기록(`input_log`), 백엔드 `segment.started` |
 | 침묵 처리 | 무채팅 구간 최대 공백, 자율 멘트 간격 | 송출 이력, 채팅 수신 시각 |
@@ -374,15 +382,48 @@ AI VTuber 팬덤 연구(Neuro-sama)에서 팬의 83%가 "일관된 성격"을 �
 
 - **④의 페이로드는 본문을 싣는다** (결정 2026-10-08). 엔진이 persona 저장소를 몰라도 되고, 이벤트 하나로 방송 시작에 필요한 것이 다 온다. 필드는 [ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md) 3.3절.
 
-### 9.3 목소리
+### 9.3 목소리 (개정 2026-10-30 — Gemini TTS)
 
-- 청취자가 방 사이의 차이를 가장 먼저 느끼는 것은 목소리다. 그래서 목소리를 **표현 층의 일부**로 둔다. 다만 프롬프트에는 넣지 않고 TTS 어댑터를 만들 때만 쓴다.
-- **현재 코드와의 차이** — `EngineSettings.tts_voice`가 엔진 전체 설정이라, `StationEngine`마다 `make_tts(settings.tts, voice=settings.tts_voice)`로 같은 보이스를 쓴다. 권장 변경:
-  - `StationConfig`(또는 그 안의 persona)에 보이스를 두고, `StationEngine.__init__`에서 그 값으로 TTS 어댑터를 만든다.
-  - `EngineSettings.tts_voice`는 persona에 보이스가 없을 때의 기본값으로만 남긴다.
-- **TTS 제공자는 엔진 전체 설정으로 둔다.** 방마다 제공자가 다르면 비용·지연 비교가 흐려지고 실험 조건에 변수가 하나 더 생긴다. `voice_id`는 그 제공자의 보이스 목록 안에서만 고른다(2.3절 검증).
-- **선택 방식** (결정 2026-10-08) — 호스트가 폼에서 보이스 목록 중 직접 고른다. 목록은 Cartesia 한국어 보이스다 — TTS 제공자 결정 2026-10-08 (ENGINE_ARCHITECTURE 확인 3). 엔진의 `list_cartesia_voices()`(`onair-engine --list-voices`)가 목록과 검증의 원천이다.
-- 목소리는 방 생성 시 확정돼 있어야 한다. 접착 요소 캐시(현재 [ack.py](../apps/engine/src/onair_engine/ack.py) `AckCache.prerender`, 재설계 후 `GlueBank`)가 방송 시작 전에 그 목소리로 렌더링되기 때문이다.
+- 청취자가 방 사이의 차이를 가장 먼저 느끼는 것은 목소리다. 그래서 목소리를 **표현 층의 일부**로 둔다. 다만 대본 프롬프트에는 넣지 않고 TTS 호출에만 쓴다.
+- **TTS 제공자는 엔진 전체 설정으로 둔다.** 방마다 제공자가 다르면 비용·지연 비교가 흐려지고 실험 조건에 변수가 하나 더 생긴다. `voice`는 그 제공자의 보이스 안에서만 고른다(2.3절 검증).
+
+**제공자: Gemini TTS** (결정 2026-10-30, 기존 Cartesia Sonic 3.6에서 전환 — [ENGINE_ARCHITECTURE.md](ENGINE_ARCHITECTURE.md) 확인 3)
+
+- **선정 기준** — 지도교수 멘토링: 커스텀 DJ가 핵심이라면 TTS는 자연스러움만이 아니라 **persona(말투·음색·톤)를 얼마나 반영할 수 있는가**로 골라야 한다.
+- **Cartesia의 한계** — 한국어에서 조절할 수 있는 것이 보이스 선택과 속도(0.6~1.5)·볼륨뿐이다. 감정 지정(`generation_config.emotion`)은 공식 문서상 영어 전용이다.
+- **Gemini로 되는 것** — 아래 세 가지를 persona에 연결한다.
+
+| Gemini 기능 | persona에서 오는 값 | 언제 정하나 |
+|---|---|---|
+| **voice design** — 보이스 설명 문장으로 새 목소리 생성 | `voice_description` → 만들어진 `voice` ID | 방 생성(3절 ④) |
+| **기본 보이스** 30개 + 확장 보이스 라이브러리 | `voice` (예: `Kore`) | 방 생성 |
+| **스타일 지시** (`speech_metadata.style`, 자연어) | `voice_style` + 코너의 상황 스타일 | 방 생성 + 코너 정의(고정값) |
+
+**목소리를 고르는 두 경로**
+
+1. **기본 보이스** — 호스트가 목록에서 미리 듣고 고른다. 엔진 `GET /v1/voices`가 목록의 원천이다(제공자만 바뀌고 응답 형식은 그대로).
+2. **voice design** — persona 초안의 보이스 설명으로 엔진이 목소리를 만들고(`POST /v1beta/voices`, `type: prompted`, 언어 `ko-KR`), 응답의 샘플 오디오를 호스트가 미리 듣는다. 확정하면 `voice_...` ID를 `voice`에, 설명을 `voice_description`에 저장한다.
+
+- **보이스 설명 작성 규칙** (Gemini 공식 가이드) — **바뀌지 않는 특징만** 1~2문장으로 쓴다: 나이대, 음색, 억양, 기본 말투. 감정·상황은 넣지 않는다(목소리 정체성이 흔들린다). LLM 초안 프롬프트가 이 규칙을 따르고, 결과는 L2 검사를 거친다. 실존 인물의 이름·목소리 묘사는 금지 사항으로 거른다.
+- **저장 한도** — 저장형 보이스는 프로젝트당 200개, 마지막 사용 후 1년 TTL이다. 미리 듣기만 하고 버린 보이스가 한도를 채우지 않도록, 미리 듣기는 비저장형(7일 TTL)으로 만들고 확정 시에만 저장하는 방식을 우선 검토한다 `[미정: 비저장형으로 만든 목소리를 그대로 저장할 수 있는지 API 확인]`.
+
+**스타일 지시 — 고르는 것은 규칙** (1.1절 원칙 유지)
+
+- TTS 호출의 스타일 = **persona `voice_style`**(목소리 기본 톤, 예: "차분하고 나긋하게") + **코너의 상황 스타일**(권장 이름 `CornerSpec.tts_style`, 예: `story_corner` "공감하듯 부드럽게", 뉴스 코너 "중립적이고 또박또박"). 둘 다 고정값이므로 **(persona, 코너) 쌍마다 스타일 문장이 하나로 정해진다.**
+- 멘트마다 LLM이 감정·스타일을 고르게 하지 않는다. 공식 가이드도 스타일은 비우거나 일정하게 두라고 권한다 — 지시가 바뀌거나 길어지면 목소리가 흔들린다.
+- 뉴스 형식은 persona `voice_style`을 쓰지 않고 코너 스타일만 쓴다 — persona의 유머·입버릇을 끄는 것과 같은 이유다([CORNER_DESIGN.md](CORNER_DESIGN.md) 6.4절).
+- 결합 방식(두 문장을 이어 붙일지, 코너 스타일이 있으면 그것만 쓸지)과 코너별 스타일 문구는 `[미정]` — 청취 테스트 후 정한다.
+- **인라인 태그**(`<short pause>`, `<laugh>` 등)는 MVP에서 쓰지 않는다. 대본 출력 규칙은 지금처럼 지문·기호를 금지한다. 쓰게 되면 허용 목록의 태그만 L2를 통과시킨다 `[미정]`.
+
+**일관성** — 자연어 스타일 지시는 결과가 매번 조금씩 다르다. 그래서 목소리 일관성을 평가 항목으로 둔다(7절). 같은 persona로 만든 세그먼트끼리 같은 DJ로 들리는지를 보며, 접착 요소는 방송 시작 때 한 번 렌더링한 오디오를 재사용한다(`GlueBank`).
+
+**현재 코드와의 차이** — 코드는 아직 `cartesia` 어댑터다(`StationConfig.voice`로 어댑터를 만드는 구조는 그대로 쓴다).
+
+- `pipeline/tts.py`에 Gemini 어댑터(권장 이름 `GeminiTtsClient`)를 추가하고 `make_tts`에 등록한다. 스타일 지시를 받도록 `TtsClient.synthesize`에 `style` 인자를 더한다.
+- TTS 캐시 키(`cache_namespace`)에 모델·보이스·**스타일 문장**을 넣는다 — 같은 문장이라도 스타일이 다르면 다른 오디오다.
+- `--list-voices`, `persona.voice` 검증, `GET /v1/voices`의 원천을 Gemini 보이스 목록으로 바꾼다. voice design용 엔진 REST를 추가한다([ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md) 10.12절).
+- `cartesia` 어댑터는 지연·품질 비교 측정용으로 남긴다. 방송용 기본값은 Gemini다.
+- 목소리는 방 생성 시 확정돼 있어야 한다. 접착 요소 캐시(`GlueBank`)가 방송 시작 전에 그 목소리로 렌더링되기 때문이다.
 
 ### 9.4 방송 시작 시점의 사본을 남긴다 (권장)
 
