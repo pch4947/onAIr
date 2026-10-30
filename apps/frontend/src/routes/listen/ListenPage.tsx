@@ -1,6 +1,7 @@
 // 01_Listen_스트리밍 방송 화면
 
 import { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Sidebar } from '@/app/Sidebar'
 import { useLivePlayback } from '@/player/useLivePlayback'
@@ -16,7 +17,8 @@ import { SongRequestModal } from '@/routes/listen/SongRequestModal'
 import { SongQueueModal } from '@/routes/listen/SongQueueModal'
 import { StationStopButton } from '@/routes/listen/StationStopButton'
 import {
-  EmojiIcon, MusicNoteIcon, PauseIcon, PlayIcon, ReplaySaveIcon, SendIcon, SongRequestAddIcon, ViewIcon, VolumeIcon,
+  BackIcon, EmojiIcon, MusicNoteIcon, PauseIcon, PlayIcon, ReplaySaveIcon, SendIcon, SongRequestAddIcon, ViewIcon,
+  VolumeIcon,
 } from '@/routes/listen/icons'
 import { STATUS_VARIANT, STATUS_VARIANT_CLASS } from '@/routes/listen/requestStatus'
 import { STATION_INFO } from '@/routes/listen/mock'
@@ -56,6 +58,7 @@ function getOrCreatePresenceClientId(): string {
 }
 
 export function ListenPage() {
+  const navigate = useNavigate()
   const [isSurveyOpen, setIsSurveyOpen] = useState(false)
   const [isSongRequestOpen, setIsSongRequestOpen] = useState(false)
   const [isEmojiPickerOpen, setIsEmojiPickerOpen] = useState(false)
@@ -156,8 +159,16 @@ export function ListenPage() {
     <div className="flex h-dvh overflow-hidden md:h-screen">
       <Sidebar />
 
-      <main className="flex h-full min-h-0 flex-1 flex-col gap-4 bg-field-bg p-3.5 pb-20 md:flex-row">
+      <main className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col gap-4 bg-field-bg p-3.5 pb-20 md:flex-row">
         <section className="flex shrink-0 flex-col gap-3.5 md:h-full md:flex-1">
+          <button
+            type="button"
+            onClick={() => navigate(-1)}
+            aria-label="뒤로가기"
+            className="flex w-fit shrink-0 items-center text-text-muted"
+          >
+            <BackIcon className="size-4.5" />
+          </button>
           <div className="relative h-72 overflow-hidden rounded-lg bg-thumbnail md:h-full md:flex-1">
             <div className="absolute inset-x-4 top-4 flex flex-wrap items-center justify-between gap-y-2">
               <div className="flex flex-wrap items-center gap-2">
