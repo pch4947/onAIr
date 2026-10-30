@@ -282,6 +282,7 @@ class CornerSpec:                       # config/formats/*.yaml에서 로드
     constraints: Constraints            # 예: subjectivity=none, source_required
     budget_sec: tuple[int, int]         # 클락이 배정하는 시간 범위
     exit: ExitRule                      # 전환 조건
+    tts_style: str = ""                 # 권장 이름. 코너의 상황 스타일 지시 (예: story_corner "공감하듯 부드럽게") — persona.voice_style과 합쳐 TTS에 넘긴다 (2026-10-30, persona.md 9.3절)
 
 class CornerRun:                        # 방송 중 코너 1회 진행의 상태
     spec: CornerSpec
@@ -633,7 +634,7 @@ while 방송 중:
 | U12 | 일반 방(실험 아닌 방)의 선별 기준·결합 방식 기본값 | **화제 관련성 우선 + 선결합** | 5.1, 8.3 |
 | U13 | `segment.insert_before`가 거절됐을 때 | **인용 세그먼트를 버린다** — 늦게 나간 인용은 의미가 없다. 입력은 창이 남아 있으면 풀로 되돌린다 | 5.1.2, 12 |
 | U14 | 기억 관리 프레임워크(Letta 등) | **쓰지 않는다** — 엔진 안의 작은 모듈로 둔다 | [context-memory.md](context-memory.md) 2절 |
-| U15 | 채팅 텍스트 TTS 정규화(`ㅋㅋ`→"크크", `ㅠㅠ`→"유유" 등) | **Cartesia pronunciation dictionary로 한다** — 사전을 만들어 두고 TTS 요청에 `pronunciation_dict_id`를 넘긴다. 사전은 정확히 일치하는 문자열만 바꾸므로 반복 길이가 다른 표기(`ㅋㅋ`, `ㅋㅋㅋㅋ`)는 항목을 길이별로 넣는다 | [ENGINE_ARCHITECTURE.md](ENGINE_ARCHITECTURE.md) 확인 3 |
+| U15 | 채팅 텍스트 TTS 정규화(`ㅋㅋ`→"크크", `ㅠㅠ`→"유유" 등) | ~~Cartesia pronunciation dictionary로 한다~~ → **변경 (2026-10-30, TTS를 Gemini로 전환)**: Gemini에는 발음 사전이 없으므로 **엔진이 TTS 호출 직전에 텍스트로 바꾼다.** 매핑 규칙(반복 길이별 처리 포함)은 그대로 쓰고, 코드에서는 정규식으로 반복 길이를 한 번에 처리한다 | [ENGINE_ARCHITECTURE.md](ENGINE_ARCHITECTURE.md) 확인 3 |
 
 ### 14.2 미정 · 확인 필요
 
