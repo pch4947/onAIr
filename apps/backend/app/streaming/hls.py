@@ -151,7 +151,7 @@ class HlsPublisher:
             if source:
                 args += ["-i", str(source)]
             else:
-                args += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", "4"]
+                args += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", "2"]
             if bgm_duration is not None:
                 args += ['-stream_loop', '-1', '-i', str(self.settings.bgm_audio),
                     '-filter_complex',
