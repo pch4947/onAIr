@@ -54,16 +54,29 @@ onair-engine --tts edge --max-segments 15 --demo-request "요즘 잠이 안 와�
 
 - 오디오: `var/audio/st_local_dev/seg_xxx.mp3` (코너 콜 같은 접착 문구는 `glue/`)
 - 보이스 변경: 설정 파일 `pipeline.tts_voice` (기본 `ko-KR-SunHiNeural`, 남성 `ko-KR-InJoonNeural`)
-- API 키 없이 듣는 청취 테스트용 어댑터입니다. 비공식 엔드포인트이므로 운영에는 쓰지 않습니다 (운영은 Cartesia).
+- API 키 없이 듣는 청취 테스트용 어댑터입니다. 비공식 엔드포인트이므로 운영에는 쓰지 않습니다 (운영은 Gemini).
 
-### Cartesia TTS (운영 — 2026-10-08 확정)
+### Gemini TTS (운영 — 2026-10-30 확정)
 
-1. [play.cartesia.ai/keys](https://play.cartesia.ai/keys)에서 API 키를 만들어 `.env`의 `CARTESIA_API_KEY`에 넣습니다.
-2. 한국어 보이스 목록을 보고 쓸 보이스 ID를 고릅니다.
-3. 설정 파일 `pipeline.tts_voice`에 그 ID를 넣고 실행합니다. 보이스 기본값은 없습니다 (방마다 호스트가 고르는 값).
+1. [Google AI Studio](https://aistudio.google.com/apikey)에서 API 키를 만들어 `.env`의 `GEMINI_API_KEY`에 넣습니다. Gemini LLM 어댑터와 같은 키입니다.
+2. 보이스 목록을 보고 쓸 보이스 ID를 고릅니다.
+3. 설정 파일 `pipeline.tts_voice`에 그 ID를 넣고 실행합니다. 비우면 `kore`로 합성합니다 (운영에서는 방마다 `persona.voice`를 씁니다).
 
 ```powershell
-onair-engine --list-voices          # ID<탭>이름<탭>성별
+onair-engine --list-voices          # ID<탭>이름<탭>성별<탭>한국어 여부
+onair-engine --tts gemini --max-segments 15 --demo-request "요즘 잠이 안 와요"
+```
+
+- 모델은 `gemini-3.8-flash-tts`, 출력은 WAV(24kHz, mono, 16-bit)입니다. 언어는 입력에서 자동 감지합니다.
+- 추가 의존성은 없습니다 (표준 라이브러리 REST 호출).
+- 스타일 지시(`voice_style`)·voice design·채팅 텍스트 정규화는 아직 없습니다. 생성 지연도 아직 실측하지 않았습니다.
+
+### Cartesia TTS (비교 측정용)
+
+1. [play.cartesia.ai/keys](https://play.cartesia.ai/keys)에서 API 키를 만들어 `.env`의 `CARTESIA_API_KEY`에 넣습니다.
+2. 설정 파일 `pipeline.tts_voice`에 Cartesia 보이스 ID를 넣고 실행합니다. 기본값은 없습니다.
+
+```powershell
 onair-engine --tts cartesia --max-segments 15 --demo-request "요즘 잠이 안 와요"
 ```
 
@@ -183,7 +196,7 @@ onair-engine --transport redis --serve
 
 - `engine:control`의 `station.created`마다 방을 하나씩 띄웁니다 (설정 파일의 `station`은 쓰지 않음). 페이로드 검증은 [packages/onair_schema](../../packages/onair_schema/) `StationCreated`로 합니다.
 - 검증·형식 설정·보이스 확인·접착 요소 사전 렌더링을 통과하면 `station.started`(확정 주제), 아니면 `station.rejected`(`reason`, `detail`)를 그 방의 `:out`으로 보냅니다. 넣어 보는 명령은 계약 문서 3.3절에 있습니다.
-- `pipeline.tts: cartesia`면 `persona.voice`가 Cartesia 한국어 보이스 목록에 있는지 확인합니다.
+- `pipeline.tts: gemini`(또는 `cartesia`)면 `persona.voice`가 그 제공자의 보이스 목록에 있는지 확인합니다.
 - 받은 `station.created` 원문은 계측 SQLite `station_log`에 persona 사본으로 남습니다.
 - 엔진 REST(아래)도 함께 열립니다.
 
@@ -200,7 +213,7 @@ onair-engine --api --llm openai --llm-model gpt-6-luna   # 실제 LLM으로 초�
 |---|---|
 | `POST /v1/personas/drafts` | 폼(`PersonaForm`) → persona 초안 N개. 기본 말투는 폼 선택지에서 규칙으로, 이름·컨셉·예시 멘트 등은 LLM이 만든다. 스키마·안전(L2)·말투 이탈 검사에서 떨어진 초안만 최대 2회 다시 만든다 |
 | `POST /v1/personas/check` | 호스트가 고친 persona — 스키마·L0·보이스 검사. 실패하면 `422 {"errors": [{"field", "reason"}]}` |
-| `GET /v1/voices` | 폼의 보이스 선택지 — Cartesia 한국어 원어민 보이스(실측 16개). `?native_only=false`면 다국어 보이스 포함 |
+| `GET /v1/voices` | 폼의 보이스 선택지 — Gemini 보이스 중 한국어로 표시된 것. `?native_only=false`면 전체 |
 | `GET /v1/engine/status` | 떠 있는 방, 진행 중 생성 수, 최근 10분 생성 지연 P95 |
 | `GET /v1/stations/{id}/decisions?after=&limit=` | 결정 로그 페이지 (`next`를 다음 `after`로) |
 | `GET /health` | 프로세스 생존 (인증 없음) |
@@ -238,4 +251,4 @@ src/onair_engine/
 ## 다음 단계
 
 설계 문서 9장 단계별 구현 계획(M3~M6)과 10장 확인 필요 사항을 참고하세요.
-제공자는 확정됐습니다(확인 3) — LLM `gpt-6-luna`(openai), TTS Cartesia. `generation_log`의 llm/tts 단계 지연은 버퍼 기준값(F-31) 실측에 씁니다.
+제공자는 확정됐습니다(확인 3) — LLM `gpt-6-luna`(openai), TTS Gemini(2026-10-30 변경). `generation_log`의 llm/tts 단계 지연은 버퍼 기준값(F-31) 실측에 씁니다.
