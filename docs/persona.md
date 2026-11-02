@@ -15,7 +15,7 @@
 |---|---|---|
 | 스테이션별 DJ 스타일 (`StationProfile`) | **부분 구현** | [domain.py](../apps/engine/src/onair_engine/domain.py) `StationProfile` — `dj_name`·`tone`·`concept` + `examples`·`forbidden`·`signature_phrases`. persona 파일([config/personas/](../apps/engine/config/personas/))로 분리. `voice`·`persona_id`는 `StationConfig`에 있다(#55). `style`·`music_taste`는 계측 사본에만 남고 프롬프트에는 아직 안 쓴다 |
 | 스테이션별 엔진 분리 | **구현됨** | [manager.py](../apps/engine/src/onair_engine/manager.py) `EngineManager.start_station(config)`가 방마다 `StationEngine`을 따로 만든다. 프롬프트·방송 맥락·사전 렌더 캐시 폴더·계측(`station_id`)이 방 단위로 나뉜다 |
-| 스테이션별 TTS 보이스 | **구현됨** | [engine.py](../apps/engine/src/onair_engine/engine.py) `StationEngine`이 `StationConfig.voice`(= `persona.voice`)로 TTS 어댑터를 만든다. `EngineSettings.tts_voice`는 로컬 실행용 기본값. Cartesia 보이스 목록 검증은 [manager.py](../apps/engine/src/onair_engine/manager.py) (#55). **Gemini 전환(2026-10-30)은 미구현** — Gemini 어댑터, `voice_style` 전달, voice design REST가 필요하다(9.3절) |
+| 스테이션별 TTS 보이스 | **구현됨** | [engine.py](../apps/engine/src/onair_engine/engine.py) `StationEngine`이 `StationConfig.voice`(= `persona.voice`)로 TTS 어댑터를 만든다. `EngineSettings.tts_voice`는 로컬 실행용 기본값. 보이스 목록 검증은 [manager.py](../apps/engine/src/onair_engine/manager.py) (#55). **Gemini 제공자 전환은 구현됨(#153)** — `voice_style` 전달, voice design REST는 미구현(9.3절) |
 | 스테이션별 스타일 주입 경로 | **구현됨** | `onair-engine --serve`가 `engine:control`의 `station.created`마다 방을 띄운다 — [manager.py](../apps/engine/src/onair_engine/manager.py) `config_from_created` (#55). 로컬 실행은 여전히 yaml의 방 하나 |
 | 표현과 편성 설정의 분리 | **부분 구현** | `StationConfig.profile`(표현)과 `StationConfig.policy_name`(정책)이 별도 필드. 재설계 후 `policy_name`은 형식·코너·참여 강도·실험 조건으로 바뀐다(1.2절) — 미구현 |
 | 공통 시스템 프롬프트 | **부분 구현** | [corners/base.py](../apps/engine/src/onair_engine/corners/base.py) `system_prompt()` — 4절 순서로 정체성·말투·입버릇·금지 사항·말하기 원칙(`RADIO_CRAFT`)·출력 규칙·L1 지시 + few-shot 예시(데이터 블록). 시간 예산 블록 없음 |
@@ -74,7 +74,7 @@ persona:
     energy: low                       # low | mid | high
     humor: rare                       # rare | some | often
   music_taste: [발라드, 어쿠스틱]       # 고정 장르 목록에서 0~3개
-  voice: <Gemini 보이스 ID>           # 기본 보이스 이름(예: Kore) 또는 voice design으로 만든 voice_... ID. 프롬프트에는 넣지 않는다 (9.3절)
+  voice: <Gemini 보이스 ID>           # 보이스 라이브러리 ID(예: kore, ko-kr-podcaster-1) 또는 voice design으로 만든 voice_... ID. 프롬프트에는 넣지 않는다 (9.3절)
   voice_style: 차분하고 나긋하게, 서두르지 않고   # 목소리 기본 스타일 — TTS 스타일 지시로만 쓴다. 감정·상황은 넣지 않는다 (9.3절)
   voice_description: …               # voice design에 쓴 보이스 설명 (기본 보이스를 골랐으면 비움). 재현·분석용 기록
 
@@ -396,7 +396,7 @@ AI VTuber 팬덤 연구(Neuro-sama)에서 팬의 83%가 "일관된 성격"을 �
 | Gemini 기능 | persona에서 오는 값 | 언제 정하나 |
 |---|---|---|
 | **voice design** — 보이스 설명 문장으로 새 목소리 생성 | `voice_description` → 만들어진 `voice` ID | 방 생성(3절 ④) |
-| **기본 보이스** 30개 + 확장 보이스 라이브러리 | `voice` (예: `Kore`) | 방 생성 |
+| **보이스 라이브러리** 2,114개, 그중 한국어 표시 117개 (2026-11-02 실측) | `voice` (예: `kore`, `ko-kr-podcaster-1`) | 방 생성 |
 | **스타일 지시** (`speech_metadata.style`, 자연어) | `voice_style` + 코너의 상황 스타일 | 방 생성 + 코너 정의(고정값) |
 
 **목소리를 고르는 두 경로**
@@ -417,11 +417,13 @@ AI VTuber 팬덤 연구(Neuro-sama)에서 팬의 83%가 "일관된 성격"을 �
 
 **일관성** — 자연어 스타일 지시는 결과가 매번 조금씩 다르다. 그래서 목소리 일관성을 평가 항목으로 둔다(7절). 같은 persona로 만든 세그먼트끼리 같은 DJ로 들리는지를 보며, 접착 요소는 방송 시작 때 한 번 렌더링한 오디오를 재사용한다(`GlueBank`).
 
-**현재 코드와의 차이** — 코드는 아직 `cartesia` 어댑터다(`StationConfig.voice`로 어댑터를 만드는 구조는 그대로 쓴다).
+**폼의 보이스 선택지** — 한국어 표시 117개는 고르기에 너무 많고 이름도 "Authoritative Advisor 1" 같은 영어다. 방송에 맞는 계열(`ko-kr-podcaster`·`ko-kr-storyteller` 등)로 좁히는 방안을 검토한다 `[미정]`. 라이브러리 ID는 소문자이고 검증은 대소문자를 구분한다.
 
-- `pipeline/tts.py`에 Gemini 어댑터(권장 이름 `GeminiTtsClient`)를 추가하고 `make_tts`에 등록한다. 스타일 지시를 받도록 `TtsClient.synthesize`에 `style` 인자를 더한다.
+**현재 코드와의 차이** — 제공자 전환은 구현됐다(`GeminiTtsClient`, #153). 남은 것은 다음과 같다(`StationConfig.voice`로 어댑터를 만드는 구조는 그대로 쓴다).
+
+- 스타일 지시를 받도록 `TtsClient.synthesize`에 `style` 인자를 더한다.
 - TTS 캐시 키(`cache_namespace`)에 모델·보이스·**스타일 문장**을 넣는다 — 같은 문장이라도 스타일이 다르면 다른 오디오다.
-- `--list-voices`, `persona.voice` 검증, `GET /v1/voices`의 원천을 Gemini 보이스 목록으로 바꾼다. voice design용 엔진 REST를 추가한다([ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md) 10.12절).
+- voice design용 엔진 REST를 추가한다([ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md) 10.12절).
 - `cartesia` 어댑터는 지연·품질 비교 측정용으로 남긴다. 방송용 기본값은 Gemini다.
 - 목소리는 방 생성 시 확정돼 있어야 한다. 접착 요소 캐시(`GlueBank`)가 방송 시작 전에 그 목소리로 렌더링되기 때문이다.
 

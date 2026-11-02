@@ -164,7 +164,7 @@ wsl redis-cli XRANGE engine:st_8f2a:out - + COUNT 3   # station.started 또는 s
 | `persona.style.energy` | `low`\|`mid`\|`high` | O | — | | 말투 |
 | `persona.style.humor` | `rare`\|`some`\|`often` | O | — | | 말투 |
 | `persona.music_taste` | 문자열 배열 | | `[]` | 0~3개, 고정 장르 목록 중에서 | 곡 소개 멘트의 취향 표현 |
-| `persona.voice` | 문자열 | O | — | 엔진 TTS 제공자의 한국어 보이스 ID 중에서 — 현재 구현은 Cartesia, **Gemini로 전환 예정**(10.12절) | TTS 어댑터, ack 사전 렌더링 |
+| `persona.voice` | 문자열 | O | — | 엔진 TTS 제공자의 보이스 ID 중에서 — 운영은 **Gemini**(#153, 10.12절) | TTS 어댑터, ack 사전 렌더링 |
 | `persona.dj_name` | 문자열 | O | — | 1~20자 | 시스템 프롬프트 정체성 |
 | `persona.concept` | 문자열 | O | — | 1~60자 | 시스템 프롬프트 정체성 |
 | `persona.tone` | 문자열 | O | — | 1~100자 | 시스템 프롬프트 말투 |
@@ -316,7 +316,7 @@ DJ가 실제 곡의 끝부분·인트로 위에 겹쳐 말하고 그동안 곡 �
 - **audio_ref**: 루트 기준 POSIX 상대 경로 — `{station_id}/seg_xxx.mp3`, `{station_id}/ack/ack_N.mp3`. 백엔드는 루트 밖으로 벗어나는 경로(`..`, 절대 경로)를 거부하고 파일 존재를 확인한다.
 - **곡 음원**: 공유 폴더에 두지 않는다. 백엔드가 YouTube에서 직접 재생한다 (3.4절). 엔진은 곡 오디오에 접근하지 않는다.
 - **원자적 쓰기**: 엔진은 같은 디렉토리에 `.{이름}.{랜덤}.tmp{확장자}`로 쓴 뒤 `os.replace`로 교체하고, 교체가 끝난 뒤에만 메시지를 발행한다. 메시지를 받았다면 파일은 완성본이다. 백엔드는 `.`으로 시작하는 파일을 무시한다.
-- **포맷**: 제공자 원본 그대로 쓴다(cartesia·google·edge는 mp3, dummy는 wav). 확장자로 구분한다. 샘플레이트와 음량(loudnorm)은 백엔드 FFmpeg가 HLS로 변환할 때 정규화한다.
+- **포맷**: 제공자 원본 그대로 쓴다(cartesia·google·edge는 mp3, gemini·dummy는 wav). 확장자로 구분한다. 샘플레이트와 음량(loudnorm)은 백엔드 FFmpeg가 HLS로 변환할 때 정규화한다.
 - **duration_ms**: 엔진이 파일에서 실측한다(mutagen).
 - **읽기 전용**: 오디오 파일은 엔진 TTS 캐시와 하드링크로 내용을 공유할 수 있으므로 제자리에서 수정하지 않는다. 삭제는 괜찮다.
 - **TTS 캐시**: 엔진 전용이며 공유 루트 밖(`var/tts_cache`)에 있다. 백엔드와 무관하다.
@@ -686,7 +686,7 @@ TTS를 Cartesia에서 Gemini TTS(`gemini-3.8-flash-tts`)로 바꾼다(선정 기
 
 | 필드 | 변경 | 제한 `[예시]` | 엔진에서 쓰는 곳 |
 |---|---|---|---|
-| `persona.voice` | 값이 **Gemini 보이스 ID**로 바뀐다 — 기본 보이스 이름(예: `Kore`) 또는 voice design으로 만든 `voice_...` ID | 엔진 보이스 목록 또는 엔진이 만든 보이스 중에서 | TTS 호출, 접착 요소 사전 렌더링 |
+| `persona.voice` | 값이 **Gemini 보이스 ID**로 바뀐다 — 보이스 라이브러리 ID(예: `kore`, `ko-kr-podcaster-1`) 또는 voice design으로 만든 `voice_...` ID | 엔진 보이스 목록 또는 엔진이 만든 보이스 중에서 | TTS 호출, 접착 요소 사전 렌더링 |
 | `persona.voice_style` | **추가** (선택) | 0~60자 | TTS 스타일 지시 — 목소리 기본 톤. 코너 스타일과 합쳐 쓴다 |
 | `persona.voice_description` | **추가** (선택) | 0~200자 | voice design 입력 기록. 엔진은 방송 중에 쓰지 않고 계측 사본에만 남긴다 |
 
@@ -697,7 +697,7 @@ TTS를 Cartesia에서 Gemini TTS(`gemini-3.8-flash-tts`)로 바꾼다(선정 기
 
 | endpoint | 변경 |
 |---|---|
-| `GET /v1/voices` | 응답 형식 그대로, 원천만 Gemini 기본 보이스 목록으로 바뀐다(`provider: "gemini"`). 미리 듣기 샘플 URL 추가 여부 `[확정 전]` |
+| `GET /v1/voices` | 응답 형식 그대로, 원천만 Gemini 보이스 라이브러리로 바뀐다(`provider: "gemini"`, 구현 #153). `native`는 한국어 표시 보이스(117개, 2026-11-02 실측)이고, `native_only=false`면 전체(2,114개)다. 다른 언어로 표시된 보이스도 한국어를 읽을 수 있어 검증은 전체 목록으로 한다. `gender` 값은 `female`·`male`·`neutral`이다. 미리 듣기 샘플 URL 추가 여부 `[확정 전]` |
 | `POST /v1/personas/drafts` | 초안에 `voice_description`·`voice_style`이 들어간다. 폼의 `voice`는 선택이 된다 — 비우면 호스트가 초안을 고른 뒤 정한다 |
 | `POST /v1/voices/design` | **신설** (권장 이름) — `{"description", "gender"?}` → `200 {"voice", "sample_audio_ref"}`. 엔진이 Gemini voice design(언어 `ko-KR`)을 호출하고 샘플 오디오를 공유 오디오 루트(5장)에 둔다. `422` 설명 L0 위반, `503` TTS 사용 불가. 저장형·비저장형 처리는 [persona.md](persona.md) 9.3절 `[확정 전]` |
 | `POST /v1/personas/check` | 보이스 검사 대상에 엔진이 만든 `voice_...` ID를 포함한다 |
