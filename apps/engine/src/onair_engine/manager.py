@@ -16,7 +16,7 @@ from pydantic import ValidationError
 
 from .domain import StationConfig, StationProfile
 from .engine import EngineSettings, StationEngine, StationRejected
-from .pipeline.tts import list_cartesia_voices
+from .pipeline.tts import VOICE_LISTERS
 from .transport import Transport, make_transport
 
 try:
@@ -64,12 +64,13 @@ class EngineManager:
     def __init__(self, settings: EngineSettings,
                  transport_factory: Callable[[str], Transport] | None = None,
                  voice_catalog: Callable[[], Iterable[str]] | None = None):
-        """voice_catalog: TTS 제공자의 보이스 ID 목록. None이면 cartesia일 때만 API로 조회하고,
+        """voice_catalog: TTS 제공자의 보이스 ID 목록. None이면 gemini·cartesia일 때만 API로 조회하고,
         다른 제공자(로컬 테스트용 dummy·edge·google)는 보이스를 검사하지 않는다."""
         self.settings = settings
         self._transport_factory = transport_factory or self._make_transport
-        if voice_catalog is None and settings.tts == "cartesia":
-            voice_catalog = lambda: [v["id"] for v in list_cartesia_voices()]
+        if voice_catalog is None and settings.tts in VOICE_LISTERS:
+            lister = VOICE_LISTERS[settings.tts]
+            voice_catalog = lambda: [v["id"] for v in lister()]
         self._voice_catalog = voice_catalog
         self._voice_ids: set[str] | None = None
         self._stations: dict[str, StationEngine] = {}
@@ -82,7 +83,7 @@ class EngineManager:
 
     @property
     def checks_voice(self) -> bool:
-        """보이스 목록을 검사하는가 — cartesia면 예, 로컬 테스트용 제공자면 아니오."""
+        """보이스 목록을 검사하는가 — gemini·cartesia면 예, 로컬 테스트용 제공자면 아니오."""
         return self._voice_catalog is not None
 
     def _make_transport(self, station_id: str) -> Transport:

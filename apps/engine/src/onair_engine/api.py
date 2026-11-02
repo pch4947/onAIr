@@ -24,7 +24,7 @@ from .engine import EngineSettings, StationRejected
 from .manager import EngineManager
 from .personas import DraftsFailed, FormRejected, PersonaDrafter
 from .pipeline.llm import LlmError
-from .pipeline.tts import list_cartesia_voices
+from .pipeline.tts import VOICE_LISTERS
 from .telemetry import read_decisions, recent_latency_p95_ms
 
 logger = logging.getLogger(__name__)
@@ -50,8 +50,8 @@ VOICE_CACHE_SEC = 600.0  # 보이스 목록은 거의 안 바뀐다 — 폼을 �
 
 
 def default_voice_lister(tts: str) -> Callable[[], list[dict]]:
-    if tts == "cartesia":
-        return list_cartesia_voices
+    if tts in VOICE_LISTERS:
+        return VOICE_LISTERS[tts]
     if tts == "dummy":
         return lambda: DUMMY_VOICES
     return list  # 빈 목록 — google·edge는 청취 테스트용이라 폼에서 고르지 않는다

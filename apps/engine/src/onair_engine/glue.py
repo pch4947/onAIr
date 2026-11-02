@@ -7,6 +7,7 @@ persona 말투로 LLM이 한 번 다듬는 것은 이후 과제다 — 지금은
 """
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from .domain import SegmentKind, StationProfile, to_audio_ref
@@ -16,6 +17,8 @@ from .pipeline.tts import TtsClient
 
 # 백엔드는 glue를 멘트와 같이 BGM 더킹하고, music_ref가 있으면 곡 소개로 다룬다 (#103)
 WIRE_KIND = SegmentKind.GLUE
+# Gemini TTS는 짧은 문구도 약 7초 걸린다 — 순서대로 합성하면 방송 시작이 그만큼 늦어진다
+PRERENDER_CONCURRENCY = 3
 
 
 class GlueBank:
@@ -41,13 +44,29 @@ class GlueBank:
         return out
 
     async def prerender(self) -> None:
-        for i, ((corner, which), text) in enumerate(sorted(self.texts().items())):
+        items = sorted(self.texts().items())
+        for (corner, which), text in items:
             # DJ 이름은 호스트 입력이다 — 고정 문구라도 L2를 거친다
             if violation := self._safety.check_l2(text):
                 raise ValueError(f"접착 문구가 안전 규칙에 걸림 ({corner}.{which}): {violation}")
+
+        slots = asyncio.Semaphore(PRERENDER_CONCURRENCY)
+
+        async def render(i: int, corner: str, which: str, text: str) -> None:
             path = self._dir / f"{corner}_{which}_{i}{self._tts.file_ext}"
-            duration_ms = await self._tts.synthesize(text, path)
+            async with slots:
+                duration_ms = await self._tts.synthesize(text, path)
             self._entries[(corner, which)] = (to_audio_ref(self._root, path), duration_ms)
+
+        tasks = [asyncio.create_task(render(i, corner, which, text))
+                 for i, ((corner, which), text) in enumerate(items)]
+        try:
+            await asyncio.gather(*tasks)
+        except BaseException:  # 하나라도 실패하면 방송을 시작하지 않으므로 남은 합성을 멈춘다
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
 
     def get(self, corner: str, which: str) -> tuple[str, int] | None:
         return self._entries.get((corner, which))

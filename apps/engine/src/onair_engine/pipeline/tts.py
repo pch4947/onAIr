@@ -1,5 +1,5 @@
 """TTS 어댑터 — dummy(무음 wav), edge(청취 테스트), google(Cloud Text-to-Speech API),
-cartesia(운영 TTS — Sonic REST API).
+gemini(운영 TTS — Gemini TTS), cartesia(비교 측정용 — Sonic REST API).
 
 어댑터는 out_path에 오디오를 쓰기만 한다. 원자적 쓰기와 캐시는 audio.CachedTts가 감싼다.
 제공자를 바꿀 때(유료 모델, 로컬 오픈소스 TTS) TtsClient 프로토콜만 지키면 된다.
@@ -177,7 +177,7 @@ def _cartesia_request(url: str, api_key: str, timeout: float, body: dict | None 
 
 
 class CartesiaTtsClient:
-    """Cartesia Sonic REST (POST /tts/bytes) — 운영 TTS (2026-10-08 팀 청취 테스트로 확정).
+    """Cartesia Sonic REST (POST /tts/bytes) — 비교 측정용 (운영은 2026-10-30부터 Gemini).
 
     보이스는 Cartesia 보이스 ID(UUID)이고 기본값이 없다 — 방마다 호스트가 고르는 값이기 때문이다.
     한국어 보이스 목록은 list_cartesia_voices()(onair-engine --list-voices)로 본다.
@@ -253,6 +253,116 @@ def list_cartesia_voices(language: str = "ko", *, api_key: str | None = None,
             return voices
 
 
+GEMINI_API = "https://generativelanguage.googleapis.com/v1beta"
+DEFAULT_GEMINI_TTS_MODEL = "gemini-3.8-flash-tts"
+DEFAULT_GEMINI_VOICE = "kore"  # 로컬 실행용 — 운영은 방마다 persona.voice로 정한다
+
+
+def _gemini_key(api_key: str | None) -> str:
+    api_key = api_key or os.environ.get("GEMINI_API_KEY")
+    if not api_key:  # 방송 도중이 아니라 기동 시점에 실패시킨다
+        raise RuntimeError("gemini TTS를 쓰려면 GEMINI_API_KEY가 필요합니다 (apps/engine/.env 또는 환경변수)")
+    return api_key
+
+
+def _gemini_request(url: str, api_key: str, timeout: float, body: dict | None = None) -> dict:
+    """body가 있으면 POST(JSON), 없으면 GET. 응답 JSON을 돌려준다."""
+    data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
+    req = urllib.request.Request(url, data=data, method="POST" if data else "GET")
+    if data:
+        req.add_header("Content-Type", "application/json; charset=utf-8")
+    req.add_header("x-goog-api-key", api_key)
+    req.add_header("User-Agent", f"onair-engine/{__version__}")  # LLM 어댑터와 같은 이유 (llm._post_json)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        # 400(보이스 ID 오류)·403(키)·429(한도)의 원인은 응답 본문에 있다
+        detail = exc.read().decode("utf-8", "replace")[:300]
+        raise RuntimeError(f"gemini TTS {exc.code}: {detail}") from exc
+
+
+def _gemini_audio(payload: dict) -> bytes:
+    """응답에서 마지막 오디오 블록을 꺼낸다 — steps[type=model_output].content[type=audio].data."""
+    blocks = [c for step in payload.get("steps", []) if step.get("type") == "model_output"
+              for c in step.get("content", []) if c.get("type") == "audio"]
+    if not blocks or not blocks[-1].get("data"):
+        raise RuntimeError(f"gemini TTS 응답에 오디오가 없습니다: {str(payload)[:200]}")
+    return base64.b64decode(blocks[-1]["data"])
+
+
+class GeminiTtsClient:
+    """Gemini TTS (POST /interactions) — 운영 TTS (2026-10-30 결정).
+
+    보이스는 기본 보이스 ID(kore 등) 또는 voice design으로 만든 voice_... ID다. 언어는 입력에서
+    자동 감지되므로 지정하지 않는다. 응답의 base64를 풀면 WAV(24kHz, mono, 16-bit)다.
+    """
+
+    file_ext = ".wav"
+
+    def __init__(self, voice: str = DEFAULT_GEMINI_VOICE, *, api_key: str | None = None,
+                 model: str = DEFAULT_GEMINI_TTS_MODEL, base_url: str = GEMINI_API,
+                 timeout: float = 30.0):
+        self._api_key = _gemini_key(api_key)
+        self.voice = voice
+        self.model = model
+        self._endpoint = f"{base_url.rstrip('/')}/interactions"
+        self._timeout = timeout
+        self.cache_namespace = f"gemini/{model}/{voice}"
+
+    async def synthesize(self, text: str, out_path: Path) -> int:
+        body = {
+            "model": self.model,
+            "input": [{"type": "user_input", "content": [{"type": "text", "text": text}]}],
+            "response_format": {"type": "audio"},
+            "generation_config": {"speech_config": [{"voice": self.voice}]},
+        }
+        payload = await asyncio.to_thread(_gemini_request, self._endpoint, self._api_key,
+                                          self._timeout, body)
+        audio = _gemini_audio(payload)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_bytes(audio)
+        duration_ms = measure_duration_ms(out_path)
+        if duration_ms is None:
+            raise RuntimeError(f"gemini TTS 응답을 오디오로 해석할 수 없습니다: {out_path}")
+        return duration_ms
+
+
+def _gemini_native(voice: dict, language: str) -> bool:
+    code = voice.get("language_code") or ""
+    codes = [code] if isinstance(code, str) else code
+    return any(str(c).lower().startswith(language) for c in codes)
+
+
+def list_gemini_voices(language: str = "ko", *, api_key: str | None = None,
+                       base_url: str = GEMINI_API, timeout: float = 15.0) -> list[dict]:
+    """보이스 전체 — [{"id", "name", "gender", "description", "native"}]. 페이지를 끝까지 넘긴다.
+
+    Gemini는 입력 언어를 자동 감지하므로 다른 언어로 표시된 보이스도 한국어를 읽을 수 있다.
+    그래서 서버에서 언어로 거르지 않고, persona voice 검증은 전체 목록으로 한다.
+    native는 보이스의 language_code가 그 언어인지다 — 폼의 기본 선택지가 된다.
+    """
+    api_key = _gemini_key(api_key)
+    voices: list[dict] = []
+    token: str | None = None
+    while True:
+        query = {"page_size": "1000"}
+        if token:
+            query["page_token"] = token
+        url = f"{base_url.rstrip('/')}/voices?{urllib.parse.urlencode(query)}"
+        page = _gemini_request(url, api_key, timeout)
+        voices += [{"id": v["id"], "name": v.get("display_name") or v["id"],
+                    "gender": v.get("gender"), "description": v.get("description", ""),
+                    "native": _gemini_native(v, language)} for v in page.get("voices", [])]
+        token = page.get("next_page_token")
+        if not token:
+            return voices
+
+
+# 방 생성 폼의 보이스 목록과 persona voice 검증을 제공하는 운영 제공자
+VOICE_LISTERS = {"gemini": list_gemini_voices, "cartesia": list_cartesia_voices}
+
+
 def make_tts(kind: str, *, voice: str | None = None) -> TtsClient:
     if kind == "dummy":
         return DummyTtsClient()
@@ -260,6 +370,8 @@ def make_tts(kind: str, *, voice: str | None = None) -> TtsClient:
         return EdgeTtsClient(voice or DEFAULT_EDGE_VOICE)
     if kind == "google":
         return GoogleTtsClient(voice or DEFAULT_GOOGLE_VOICE)
+    if kind == "gemini":
+        return GeminiTtsClient(voice or DEFAULT_GEMINI_VOICE)
     if kind == "cartesia":
         return CartesiaTtsClient(voice)
     raise ValueError(f"unknown tts adapter: {kind}")

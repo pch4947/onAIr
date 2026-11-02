@@ -15,7 +15,7 @@ from .engine import EngineSettings
 from .manager import EngineManager
 from .pipeline.llm import make_llm
 from .pipeline.safety import SafetyChecker
-from .pipeline.tts import list_cartesia_voices
+from .pipeline.tts import list_gemini_voices
 from .transport import RedisControlChannel
 
 logger = logging.getLogger(__name__)
@@ -149,10 +149,10 @@ def cli(argv: list[str] | None = None) -> None:
     parser.add_argument("--format", choices=["music", "talk", "news"], default=None,
                         help="설정 파일의 station.format을 덮어쓴다 (config/formats/*.yaml)")
     add_llm_args(parser)
-    parser.add_argument("--tts", choices=["dummy", "google", "edge", "cartesia"], default=None,
+    parser.add_argument("--tts", choices=["dummy", "google", "edge", "gemini", "cartesia"], default=None,
                         help="설정 파일의 pipeline.tts를 덮어쓴다")
     parser.add_argument("--list-voices", action="store_true",
-                        help="Cartesia 한국어 보이스 목록(ID·이름·성별·원어민 여부)을 출력하고 종료 — "
+                        help="Gemini 보이스 목록(ID·이름·성별·한국어 여부)을 출력하고 종료 — "
                              "pipeline.tts_voice에 쓸 ID")
     parser.add_argument("--transport", choices=["stdout", "http", "redis"], default=None,
                         help="설정 파일의 transport.kind 덮어쓰기 (관통 테스트용)")
@@ -167,8 +167,8 @@ def cli(argv: list[str] | None = None) -> None:
     # load_config가 ONAIR_REDIS_URL 등을 읽으므로 그보다 먼저 불러온다
     load_env()
     if args.list_voices:
-        for v in list_cartesia_voices():
-            native = "native" if v["native"] else "multilingual"
+        for v in list_gemini_voices():
+            native = "ko" if v["native"] else "other"
             print(f"{v['id']}\t{v['name']}\t{v['gender'] or '-'}\t{native}")
         return
 
