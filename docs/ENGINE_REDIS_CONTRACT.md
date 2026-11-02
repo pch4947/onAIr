@@ -164,7 +164,7 @@ wsl redis-cli XRANGE engine:st_8f2a:out - + COUNT 3   # station.started 또는 s
 | `persona.style.energy` | `low`\|`mid`\|`high` | O | — | | 말투 |
 | `persona.style.humor` | `rare`\|`some`\|`often` | O | — | | 말투 |
 | `persona.music_taste` | 문자열 배열 | | `[]` | 0~3개, 고정 장르 목록 중에서 | 곡 소개 멘트의 취향 표현 |
-| `persona.voice` | 문자열 | O | — | 엔진 TTS 제공자(Cartesia)의 한국어 보이스 ID 중에서 | TTS 어댑터, ack 사전 렌더링 |
+| `persona.voice` | 문자열 | O | — | 엔진 TTS 제공자의 한국어 보이스 ID 중에서 — 현재 구현은 Cartesia, **Gemini로 전환 예정**(10.12절) | TTS 어댑터, ack 사전 렌더링 |
 | `persona.dj_name` | 문자열 | O | — | 1~20자 | 시스템 프롬프트 정체성 |
 | `persona.concept` | 문자열 | O | — | 1~60자 | 시스템 프롬프트 정체성 |
 | `persona.tone` | 문자열 | O | — | 1~100자 | 시스템 프롬프트 말투 |
@@ -500,6 +500,7 @@ wsl redis-cli XADD engine:st_local_dev:in '*' type request.arrived contract_vers
 | `vote.open` / `vote.result` | E→B / B→E | **신설** — 투표 열기 / 집계 결과. 창은 기준 세그먼트의 재생 시작부터 (10.8) |
 | `segment.insert_before` | E→B | **신설 `[실험 조건 후보]` `[확정 전]`** — 지연 결합용. M6 별도 작업 (10.9) |
 | `board.story` | B→E | 변경 없음. `tags`에 양자택일형 고민 표시 추가 `[미정]` |
+| `station.created` `persona` | B→E | TTS Gemini 전환 — `voice` 값이 Gemini 보이스 ID로 바뀌고 `voice_style`·`voice_description` 추가. voice design REST 신설 (10.12) |
 | `engine.health` | E→B | `order_position`·`next_slot`·`policy_name` → `corner`·`step`·`experiment`, 풀·inbox 크기 추가 (필드 추가는 버전 무관, 3.1.1) |
 | `request.cancelled` | B→E | 풀·inbox에 있으면 빼고 `cancelled`. 이미 `selected`면 제출 전 결과를 통째로 버리고 그 단계를 다시 만든다 (10.1.1) `[확정 전]` |
 
@@ -676,3 +677,30 @@ v2 합의 전까지 엔진은 v1을 유지한다. 합의 후 [ENGINE_ARCHITECTUR
 | C5 | `segment.insert_before` — 수락·거절 응답(`segment.insert_result`), 중복 처리, 큐 선택과의 동시성 제어 | M6 | 10.9 |
 
 결정된 것: `segment.started`는 모든 세그먼트에 보내고 입력 없는 통보는 엔진이 무시한다, 상태는 받은 시점에 바꾸되 지표는 `started_at`으로 계산한다, 재전달은 `segment_id` 단위로 멱등 처리한다(10.6).
+
+### 10.12 TTS 제공자 전환 — Gemini TTS (제안, 2026-10-30)
+
+TTS를 Cartesia에서 Gemini TTS(`gemini-3.8-flash-tts`)로 바꾼다(선정 기준을 persona 반영 가능성으로 바꿈). 설계는 [persona.md](persona.md) 9.3절. 백엔드·프론트와 합의 전 **제안**이다.
+
+**persona 필드**
+
+| 필드 | 변경 | 제한 `[예시]` | 엔진에서 쓰는 곳 |
+|---|---|---|---|
+| `persona.voice` | 값이 **Gemini 보이스 ID**로 바뀐다 — 기본 보이스 이름(예: `Kore`) 또는 voice design으로 만든 `voice_...` ID | 엔진 보이스 목록 또는 엔진이 만든 보이스 중에서 | TTS 호출, 접착 요소 사전 렌더링 |
+| `persona.voice_style` | **추가** (선택) | 0~60자 | TTS 스타일 지시 — 목소리 기본 톤. 코너 스타일과 합쳐 쓴다 |
+| `persona.voice_description` | **추가** (선택) | 0~200자 | voice design 입력 기록. 엔진은 방송 중에 쓰지 않고 계측 사본에만 남긴다 |
+
+- 필드 추가지만 엔진 스키마(`Persona`)가 모르는 필드를 거부하므로(`extra="forbid"`), **엔진이 먼저 새 스키마를 배포**한 뒤 백엔드가 보낸다.
+- 기존에 저장된 Cartesia 보이스 ID persona는 Gemini에서 쓸 수 없다. 엔진은 `station.rejected`(`unknown_voice`)로 돌려보낸다 — 전환 시 백엔드 DB의 기존 persona를 기본 보이스로 바꾸거나 다시 고르게 한다 `[확정 전: 이전 방식]`.
+
+**엔진 REST**
+
+| endpoint | 변경 |
+|---|---|
+| `GET /v1/voices` | 응답 형식 그대로, 원천만 Gemini 기본 보이스 목록으로 바뀐다(`provider: "gemini"`). 미리 듣기 샘플 URL 추가 여부 `[확정 전]` |
+| `POST /v1/personas/drafts` | 초안에 `voice_description`·`voice_style`이 들어간다. 폼의 `voice`는 선택이 된다 — 비우면 호스트가 초안을 고른 뒤 정한다 |
+| `POST /v1/voices/design` | **신설** (권장 이름) — `{"description", "gender"?}` → `200 {"voice", "sample_audio_ref"}`. 엔진이 Gemini voice design(언어 `ko-KR`)을 호출하고 샘플 오디오를 공유 오디오 루트(5장)에 둔다. `422` 설명 L0 위반, `503` TTS 사용 불가. 저장형·비저장형 처리는 [persona.md](persona.md) 9.3절 `[확정 전]` |
+| `POST /v1/personas/check` | 보이스 검사 대상에 엔진이 만든 `voice_...` ID를 포함한다 |
+
+**오디오** — Gemini 출력은 WAV(24kHz, mono, 16-bit)라 `audio_ref` 확장자가 `.wav`가 된다. 백엔드 FFmpeg가 HLS로 변환할 때 정규화하므로(5장) 처리 방식은 그대로다.
+
