@@ -202,13 +202,27 @@ def test_situations():
 
 
 @pytest.mark.parametrize("request_args", [
-    {"who": "last"},  # 직전 인용과 같은 사람
     {"body": "가" * 61},  # 말로 인용하기에 너무 길다
     {"body": "ㅋㅋㅋㅋ"},  # 인용할 글자가 없다
     {"body": "이건 금칙어 입니다"},  # L2
 ])
 def test_ineligible_inputs(request_args):
-    assert _select(_selector(), [_req(**request_args)], last="last").picked == []
+    assert _select(_selector(), [_req(**request_args)]).picked == []
+
+
+def test_last_requester_is_skipped_only_when_someone_else_can_be_quoted():
+    mine = _req("mine", who="last", at=9.0)
+    other = _req("other", who="b", at=1.0)
+    result = _select(_selector("recency"), [mine, other], last="last")
+    assert result.picked == [other]
+    assert [c["request_id"] for c in result.candidates] == ["other"]
+    assert _select(_selector("recency"), [mine], last="last").picked == [mine]
+
+
+def test_rule_violation_does_not_count_as_someone_else():
+    mine = _req("mine", who="last")
+    blocked = _req("blocked", body="이건 금칙어 입니다", who="b")
+    assert _select(_selector(), [mine, blocked], last="last").picked == [mine]
 
 
 def test_same_text_counts_once():
