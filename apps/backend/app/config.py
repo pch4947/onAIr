@@ -20,7 +20,7 @@ class Settings:
     hls_dir: Path = Path(__file__).resolve().parents[1] / "var" / "hls"
     ffmpeg: str = "ffmpeg"
     fallback_audio: Path | None = None
-    fallback_mode: str = "music"
+    fallback_mode: str = "silence"
     buffer_low_seconds: float = 15
     broadcast_delay_seconds: float = 12
     station_id: str = "st_local_dev"
@@ -52,7 +52,7 @@ def load_settings() -> Settings:
     audio_dir = Path(os.environ.get("ONAIR_AUDIO_DIR", str(Settings.audio_dir))).expanduser()
     if not audio_dir.is_absolute():
         raise ValueError("ONAIR_AUDIO_DIR must be an absolute path")
-    fallback_mode = os.environ.get("ONAIR_FALLBACK_MODE", "music")
+    fallback_mode = os.environ.get("ONAIR_FALLBACK_MODE", "silence")
     if fallback_mode not in {"music", "silence"}:
         raise ValueError("ONAIR_FALLBACK_MODE must be music or silence")
     fallback = os.environ.get("ONAIR_FALLBACK_AUDIO")

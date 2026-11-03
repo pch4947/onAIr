@@ -52,8 +52,7 @@ Redis 조회 실패는 요청·세그먼트 API에서 503으로 응답한다. HL
 - `fallbackActive`: 발행기가 현재 폴백을 발행 중인지 표시한다. 청취자 재생 상태는 fragment 조회를 사용한다.
 - `queueAvailable`, `pendingStateEvents`: 큐 조회 가능 여부와 미전송 상태 이벤트 수.
 
-원본을 준비하는 동안 기본 폴백은 자체 생성한 짧은 멜로디다. `ONAIR_FALLBACK_AUDIO`로 로컬 파일을 지정하거나
-`ONAIR_FALLBACK_MODE=silence`로 무음을 선택할 수 있다. 폴백 음악 변환 실패 시 무음으로 대체한다.
+원본을 준비하는 동안 기본 폴백은 무음이다. `ONAIR_FALLBACK_MODE=music`으로 설정하면 자체 생성한 짧은 멜로디를 사용하며, `ONAIR_FALLBACK_AUDIO`로 로컬 파일을 지정할 수 있다. 폴백 음악 변환 실패 시 무음으로 대체한다.
 원본이 준비되면 현재 폴백 묶음 이후 이어서 발행한다. 조각 metadata 상태는 `segment / fallback / silence / unavailable`이다.
 `backpressure` 이벤트는 임계 상태 변경 또는 약 10초마다 엔진 입력 스트림에 전달한다.
 

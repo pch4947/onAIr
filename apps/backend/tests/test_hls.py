@@ -42,6 +42,8 @@ class HlsTests(unittest.IsolatedAsyncioTestCase):
             initial_sequence = publisher.sequence
             for _ in range(5):
                 chunks = await publisher.encode(None)
+                self.assertEqual(len(chunks), 1)
+                self.assertAlmostEqual(chunks[0][1], 2, delta=0.1)
                 for index, (name, duration) in enumerate(chunks):
                     publisher.publish(name, duration, index == 0)
             self.assertGreater(publisher.sequence, initial_sequence)
