@@ -4,13 +4,20 @@ import base64
 import io
 import json
 import threading
+import time
 import wave
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from onair_engine.pipeline.tts import GeminiTtsClient, list_gemini_voices, make_tts
+from onair_engine.pipeline.tts import (
+    GeminiTtsClient,
+    TtsQuotaError,
+    _quota_wait_sec,
+    list_gemini_voices,
+    make_tts,
+)
 
 
 def _wav_bytes(ms: int, rate: int = 24000) -> bytes:
@@ -96,6 +103,46 @@ def test_api_error_is_raised_with_detail(tmp_path):
             asyncio.run(tts.synthesize("테스트", tmp_path / "seg.wav"))
     finally:
         server.shutdown()
+
+
+def test_quota_error_blocks_calls_until_the_wait_passes(tmp_path):
+    day_limit = b'{"error": {"message": "limit: 100 requests per day on Tier 1. Please retry in 2h3m4s"}}'
+    base_url, received, server = _serve([(429, day_limit)])
+    try:
+        tts = GeminiTtsClient("kore", api_key="test-key", base_url=base_url)
+        with pytest.raises(TtsQuotaError) as first:
+            asyncio.run(tts.synthesize("테스트", tmp_path / "seg.wav"))
+        with pytest.raises(TtsQuotaError):
+            asyncio.run(tts.synthesize("테스트", tmp_path / "seg.wav"))
+    finally:
+        server.shutdown()
+    assert first.value.retry_after == 7384
+    assert len(received) == 1, "막힌 동안에는 호출하지 않는다"
+    assert tts.blocked_until > time.time() + 7000
+
+
+def test_calls_resume_after_the_quota_wait(tmp_path):
+    base_url, received, server = _serve([(200, _audio_response(_wav_bytes(100)))])
+    try:
+        tts = GeminiTtsClient("kore", api_key="test-key", base_url=base_url)
+        tts.blocked_until = time.time() - 1
+        assert asyncio.run(tts.synthesize("테스트", tmp_path / "seg.wav")) == 100
+    finally:
+        server.shutdown()
+    assert len(received) == 1
+
+
+@pytest.mark.parametrize(("header", "detail", "expected"), [
+    ("30", "Please retry in 23s", 30.0),  # 헤더 우선
+    ("Wed, 21 Oct 2026 07:28:00 GMT", "Please retry in 23s or upgrade", 23.0),
+    (None, "Please retry in 1m30s.", 90.0),
+    (None, "Please retry in 1.5s", 1.5),
+    (None, "Please retry in 500ms", 60.0),  # 모르는 단위는 기본값
+    (None, "limit: 100 requests per day on Tier 1", 3600.0),
+    (None, "limit: 10 requests per minute on Tier 1", 60.0),
+])
+def test_quota_wait_sec(header, detail, expected):
+    assert _quota_wait_sec(header, detail) == expected
 
 
 def test_response_without_audio_is_rejected(tmp_path):

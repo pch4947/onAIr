@@ -51,6 +51,8 @@ def _glue(sub: SegmentSubmission) -> bool:
 class FakePipeline:
     """단계 이름을 세그먼트 id로 돌려준다. 앞 단계일수록 오래 걸린다 — 끝난 순서가 뒤집힌다."""
 
+    tts_blocked_until = 0.0
+
     def __init__(self):
         self.calls = 0
 
