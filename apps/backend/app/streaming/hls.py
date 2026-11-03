@@ -492,8 +492,11 @@ class HlsPublisher:
                 for index, (name, duration) in enumerate(chunks):
                     await asyncio.sleep(max(0, self.next_publish - time.monotonic()))
                     self.publish(name, duration, index == 0)
-                    if index == 0 and segment and segment['kind'] == 'music' and segment.get('music_ref'):
-                        self.journal.track_started(segment, time.time() + self.settings.broadcast_delay_seconds)
+                    if index == 0 and segment:
+                        started_at = time.time() + self.settings.broadcast_delay_seconds
+                        self.journal.segment_started(segment, started_at)
+                        if segment['kind'] == 'music' and segment.get('music_ref'):
+                            self.journal.track_started(segment, started_at)
                     start = time.monotonic() + self.settings.broadcast_delay_seconds
                     self.timeline.append((start, start + duration, segment is not None))
                     self.next_publish = time.monotonic() + duration

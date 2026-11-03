@@ -68,6 +68,7 @@ class Journal:
           CREATE TABLE IF NOT EXISTS measurements(id INTEGER PRIMARY KEY, segment_id TEXT, stage TEXT,
             at REAL, duration_ms REAL);
           CREATE TABLE IF NOT EXISTS track_starts(segment_id TEXT PRIMARY KEY, started_at REAL);
+          CREATE TABLE IF NOT EXISTS segment_starts(segment_id TEXT PRIMARY KEY, started_at REAL);
         ''')
 
     def close(self):
@@ -113,6 +114,15 @@ class Journal:
                 self.db.execute('INSERT INTO outbox(id,body,request_id) VALUES(?,?,?)',
                     ('evt_' + uuid.uuid4().hex, json.dumps(event), ''))
 
+    def segment_started(self, segment, started_at):
+        # The first start wins; a recovered segment replayed later keeps its original time.
+        with self.db:
+            inserted = self.db.execute('INSERT OR IGNORE INTO segment_starts VALUES(?,?)',
+                                      (segment['id'], started_at)).rowcount
+            if inserted:
+                self._enqueue('segment.started', dict(segment_id=segment['id'], started_at=started_at),
+                              at=started_at)
+
     def measure(self, segment_id, stage, duration_ms):
         with self.db:
             self.db.execute('INSERT INTO measurements(segment_id,stage,at,duration_ms) VALUES(?,?,?,?)',
@@ -128,9 +138,10 @@ class Journal:
         for seq, event_id, body, request_id in self.db.execute(
                 'SELECT seq,id,body,request_id FROM outbox ORDER BY seq LIMIT ?', (limit,)).fetchall():
             event = json.loads(body)
+            # Start notices wait for the server broadcast time they announce.
+            if event['type'] in ('track.started', 'segment.started') and event['payload']['started_at'] > time.time():
+                continue
             if event['type'] == 'track.started':
-                if event['payload']['started_at'] > time.time():
-                    continue
                 await deliver_start(redis, self.station, event_id, body, self.repeat_playlist)
             else:
                 segment_id = event['payload'].get('segment_id', '')

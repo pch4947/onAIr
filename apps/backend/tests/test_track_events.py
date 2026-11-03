@@ -38,6 +38,31 @@ class TrackClockTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 journal.close()
 
+    async def test_segment_start_keeps_first_time_and_waits_for_broadcast_time(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'clock.sqlite'
+            speech = segment('speech')
+            started_at = time.time() + 0.3
+            journal = Journal(path, 'st_test')
+            journal.segment_started(speech, started_at)
+            journal.close()
+            journal = Journal(path, 'st_test')
+            try:
+                # A recovered replay must not resend or move the start time.
+                journal.segment_started(speech, time.time() + 60)
+                redis = AsyncMock()
+                await journal.flush(redis)
+                redis.eval.assert_not_awaited()
+                self.assertEqual(journal.pending(), 1)
+                await asyncio.sleep(0.4)
+                await journal.flush(redis)
+                event = json.loads(redis.eval.await_args.args[-2])
+                self.assertEqual(event['type'], 'segment.started')
+                self.assertEqual(event['payload'], dict(segment_id=speech['id'], started_at=started_at))
+                self.assertEqual(journal.pending(), 0)
+            finally:
+                journal.close()
+
     async def test_intro_mode_waits_for_intro_then_selects_reserved_music(self):
         redis = AsyncMock()
         publisher = HlsPublisher(redis, Settings('127.0.0.1', 3000, track_intro_enabled=True))
@@ -175,6 +200,14 @@ class TrackRedisTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(starts), 1)
                 self.assertEqual(starts[0]['track_ref'], 'yt:one')
                 self.assertLessEqual(starts[0]['started_at'], time.time())
+                segment_starts = {}
+                async with asyncio.timeout(5):
+                    while set(segment_starts) != {'intro', 'one'}:
+                        segment_starts = {p['segment_id']: p['started_at'] for p in (
+                            json.loads(e['payload']) for e in await self.events() if e['type'] == 'segment.started')}
+                        await asyncio.sleep(0.1)
+                self.assertLess(segment_starts['intro'], segment_starts['one'])
+                self.assertEqual(segment_starts['one'], starts[0]['started_at'])
                 self.assertTrue((publisher.directory / 'index.m3u8').is_file())
             finally:
                 await publisher.stop()
