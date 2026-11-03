@@ -228,7 +228,7 @@ class Scheduler:
         while not stop.is_set() and time.time() < self._end_at:
             if max_segments is not None and self._seq >= max_segments:
                 break
-            self._expire_inputs(time.time())
+            await self._expire_inputs(time.time())
             ctx = self._snapshot()
             if (ctx.inflight_generations >= self.max_concurrent
                     or ctx.generated_buffer_sec >= self.target_buffer_sec):
@@ -246,7 +246,7 @@ class Scheduler:
             if planned.step.kind == "glue":
                 await self._publish_glue(ctx, planned)
             else:
-                job = self._build_job(planned)
+                job = await self._build_job(planned)
                 selection = job.material.extra.pop("selection", None)
                 self.telemetry.log_decision(ctx, Decision(
                     action="generate", corner_type=job.corner_type, step=job.step,
@@ -259,7 +259,7 @@ class Scheduler:
         while self._inflight > 0:  # 진행 중 생성 마무리 대기
             await asyncio.sleep(0.1)
         if max_segments is None:  # 방송 종료 — 남은 입력은 반영되지 못했다 (관통 테스트는 중간에 끊을 뿐이다)
-            self._log_expired(self.pool.drain())
+            await self._mark_expired(self.pool.drain())
 
     # ── 클락 · 코너 ──────────────────────────────────────────────────
 
@@ -313,7 +313,7 @@ class Scheduler:
             self.telemetry.log_corner(*key, "skip", self._produced_ms)
         return None
 
-    def _build_job(self, planned: PlannedStep) -> GenerationJob:
+    async def _build_job(self, planned: PlannedStep) -> GenerationJob:
         corner, step = planned.corner, planned.step
         material = Material(items=list(planned.items), label=planned.label,
                             topic=self._run.thread.topic if self._run else self.topic)
@@ -330,7 +330,7 @@ class Scheduler:
             material.extra["covered"] = list(self.sources.covered_news)
             self.sources.covered_news.clear()  # 다음 순환은 새로 센다
         anchor = self._anchor_for(planned)
-        self._expire_inputs(time.time())
+        await self._expire_inputs(time.time())
         material.quotes = self._take_quotes(corner.mode("chat"), step.kind, anchor, material)
         return GenerationJob(
             job_id=new_id("job"), corner_type=corner.corner_type, step=step.kind,
@@ -361,15 +361,13 @@ class Scheduler:
         self._last_anchor = anchor
         return anchor
 
-    def _expire_inputs(self, now: float) -> None:
+    async def _expire_inputs(self, now: float) -> None:
         seq = self._last_anchor.seq if self._last_anchor else None
-        self._log_expired(self.pool.expire(now, seq))
+        await self._mark_expired(self.pool.expire(now, seq))
 
-    def _log_expired(self, requests: list[ListenerRequest]) -> None:
-        """백엔드에는 알리지 않는다 — 계약 v1 상태에 expired가 없다. 화면에는 대기로 남는다."""
+    async def _mark_expired(self, requests: list[ListenerRequest]) -> None:
         for req in requests:
-            req.state = RequestState.EXPIRED
-            self.telemetry.log_request_state(req.request_id, req.state)
+            await self._transition(req, RequestState.EXPIRED)
 
     def _take_quotes(self, chat_mode, step_kind: str, anchor: Anchor,
                      material: Material) -> list[ListenerRequest]:

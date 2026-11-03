@@ -40,8 +40,8 @@ class RequestState(StrEnum):
     GENERATING = "generating"
     GENERATED = "generated"
     REJECTED = "rejected"
-    # 계측 전용 — 계약 v1 백엔드는 이 값을 받지 않으므로 통보하지 않는다 (계약 10.4절 합의 전까지)
     EXPIRED = "expired"
+    # 계측 전용 — 계약 v1 백엔드는 이 값을 받지 않으므로 통보하지 않는다 (계약 10.4절 합의 전까지)
     REFLECTED = "reflected"
 
 

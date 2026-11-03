@@ -47,7 +47,7 @@
 | type | payload | 상태 |
 |---|---|---|
 | `segment.submitted` | `SegmentSubmission` (설계 문서 5.1) | 구현 |
-| `request.state` | `{"request_id", "state"}` — state: `screened` `queued` `generating` `generated` `rejected` `cancelled` | 구현 (`cancelled`는 미구현 — 3.2 `request.cancelled`) |
+| `request.state` | `{"request_id", "state"}` — state: `screened` `queued` `generating` `generated` `rejected` `expired` `cancelled` | 구현 (`cancelled`는 미구현 — 3.2 `request.cancelled`). `expired`는 창이 지나도록 선택되지 못했거나 방송이 끝난 입력의 종결 상태 — 기존 값의 의미가 바뀌지 않아 `contract_version`은 1 그대로 (#157) |
 | `engine.health` | 3.1.1 참고 — 운영자 콘솔이 쓰는 스테이션 현재 상태 | 미구현 |
 | `station.started` | `{"topic"}` — 검증 통과, ack 사전 렌더링 완료. 첫 세그먼트가 곧 나온다. `topic`은 이 방송의 확정된 주제(호스트가 비웠으면 엔진이 생성한 값) — 백엔드는 이 주제로 게시판 사연 후보를 고른다 (3.5절) | 구현 (호스트가 비운 주제는 아직 컨셉을 그대로 쓴다 — LLM 생성은 오프닝 코너 작업에서) |
 | `station.rejected` | `{"reason": "invalid_payload"\|"unknown_voice"\|"llm_unavailable"\|"tts_unavailable", "detail"}` — 방송을 시작하지 않았다. `detail`은 사람이 읽는 원인 (예: `persona.examples: List should have at most 5 items after validation, not 6`). `tts_unavailable`은 TTS 키 누락·보이스 목록 조회 실패·ack 사전 렌더링 실패 (#55에서 추가 — 양쪽 구현 전이라 v1 안에서 확정) | 구현 |
@@ -569,7 +569,7 @@ wsl redis-cli XADD engine:st_local_dev:in '*' type request.arrived contract_vers
 | `not_on_air` | 이 형식은 방송에 반영하지 않음 (뉴스) | O |
 | `selected` | 세그먼트에 들어감 (생성 중) | |
 | `reflected` | 그 입력이 들어간 세그먼트가 재생되기 시작함 — payload에 `segment_id`, `started_at`(10.6) | O |
-| `expired` | 창이 지나도록 선택되지 못함 / 방송 종료. **백엔드 합의 전까지 엔진은 보내지 않는다** — 계측에만 남긴다([CORNER_DESIGN.md](CORNER_DESIGN.md) 5.8절) | O |
+| `expired` | 창이 지나도록 선택되지 못함 / 방송 종료. v1에 먼저 추가해 양쪽에 구현됐다(#157) | O |
 | `rejected` | 안전 검사 탈락 | O |
 | `cancelled` | 취소됨 (v1과 같음) | O |
 
