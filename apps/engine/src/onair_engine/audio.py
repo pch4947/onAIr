@@ -12,6 +12,7 @@ import shutil
 import uuid
 from pathlib import Path
 
+from .pipeline.normalize import normalize_for_tts
 from .pipeline.tts import TtsClient, measure_duration_ms
 
 
@@ -36,6 +37,7 @@ class CachedTts:
         self.misses = 0
 
     async def synthesize(self, text: str, out_path: Path) -> int:
+        text = normalize_for_tts(text)  # 캐시 키도 정규화된 텍스트 기준이다
         out_path = Path(out_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         if self._cache_dir is None:

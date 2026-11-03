@@ -123,4 +123,4 @@ def test_format_fields_are_checked(extra, loc):
 def test_experiment_condition():
     created = StationCreated.model_validate({**PAYLOAD, "experiment": {
         "condition": "relevance_early", "selector": "relevance"}})
-    assert created.experiment.window_sec == 90 and created.experiment.binding == "early"
+    assert created.experiment.window_sec == 60 and created.experiment.binding == "early"

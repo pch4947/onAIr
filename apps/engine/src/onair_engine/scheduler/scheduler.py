@@ -6,8 +6,9 @@ LLM은 무엇을 말할지 결정하지 않는다. 클락이 코너를, 코너�
 제출 순서는 편성 순서다 — 생성은 병렬로 하지만, 먼저 끝난 멘트가 앞 순서를 새치기하지 않게
 순번(seq)대로 내보낸다. 코너 콜(접착 요소)이 이전 코너의 마지막 멘트보다 먼저 나가면 안 된다.
 
-청취자 요청 — 입력 라우팅(InputRouter·QuoteSelector)은 M4다. 그 전까지는 과도기 처리로,
-채팅 인용을 허용하는 코너의 다음 인용 가능 단계에 대기 요청 1건을 넣는다(v1 요청 상태 그대로).
+청취자 채팅 — 도착하면 유형을 나누고 풀에 쌓아 두었다가, 인용을 허용하는 단계를 만들 때 선별기가
+고른다(CORNER_DESIGN 5.1.3, 5.7절). 나머지 입력 라우팅(READ·FEATURE)은 아직 없다.
+백엔드에는 v1 상태만 통보한다 — 만료·반영 확정은 계측에만 남는다.
 요청별 방송 ack는 보내지 않는다 (CORNER_DESIGN D5).
 """
 from __future__ import annotations
@@ -19,6 +20,8 @@ import time
 from ..corners.run import CornerRun, MaterialSources, PlannedStep, Thread
 from ..corners.steps import STEP_KINDS
 from ..domain import (
+    Anchor,
+    ChatType,
     Decision,
     GenerationJob,
     ListenerRequest,
@@ -32,6 +35,11 @@ from ..domain import (
 from ..format.clock import Clock, ClockEntry
 from ..format.spec import QUOTABLE, FormatSpec, Intensity
 from ..glue import WIRE_KIND, GlueBank
+from ..inputs.classify import classify, keywords
+from ..inputs.on_air import OnAirTimeline
+from ..inputs.pool import QuotePool
+from ..inputs.rules import ChatRules
+from ..inputs.selector import RELEVANCE, QuoteSelector
 from ..pipeline.pipeline import GenerationPipeline
 from ..telemetry import Telemetry
 from ..transport import Transport
@@ -55,7 +63,8 @@ class Scheduler:
     def __init__(self, *, config: StationConfig, fmt: FormatSpec, clock: Clock,
                  sources: MaterialSources, intensity: Intensity, topic: str,
                  pipeline: GenerationPipeline, glue: GlueBank, transport: Transport,
-                 telemetry: Telemetry, target_buffer_sec: float = 30.0, max_concurrent: int = 2):
+                 telemetry: Telemetry, chat_rules: ChatRules, violates,
+                 target_buffer_sec: float = 30.0, max_concurrent: int = 2):
         self.config = config
         self.fmt = fmt
         self.clock = clock
@@ -69,7 +78,24 @@ class Scheduler:
         self.target_buffer_sec = target_buffer_sec
         self.max_concurrent = max_concurrent
         self._sem = asyncio.Semaphore(max_concurrent)
-        self._pending: list[ListenerRequest] = []
+        self.chat_rules = chat_rules
+        self.timeline = OnAirTimeline()
+        # 일반 방의 기본 기준은 화제 관련성 우선(U12). 실험용 방은 조건이 정한다
+        experiment = config.experiment or {}
+        self.pool = QuotePool(
+            reaction_window_sec=experiment.get("window_sec", chat_rules.reaction_window_sec),
+            standalone_window_sec=chat_rules.standalone_window_sec,
+            track_end=self.timeline.track_end,
+        )
+        self.selector = QuoteSelector(
+            experiment.get("selector", RELEVANCE), flood_threshold=chat_rules.flood_threshold,
+            max_quote_chars=chat_rules.max_quote_chars, violates=violates,
+        )
+        self._anchor_no = 0
+        self._last_anchor: Anchor | None = None  # 생성 쪽 최신 앵커 — 접착 문구는 이것을 잇는다
+        self._run_anchor: Anchor | None = None  # 지금 코너의 화제 앵커 — 항목 없는 단계가 처음 나올 때 만든다
+        self._last_requester: str | None = None
+        self._quoted: dict[str, tuple[ListenerRequest, GenerationJob]] = {}  # segment_id -> 인용한 입력
         self._inflight = 0
         # 첫 곡은 백엔드가 방송 시작과 함께 튼다 — 엔딩 시점 계산에는 넣지만 버퍼에는 넣지 않는다.
         # 그래야 오프닝을 곡이 나가는 동안 미리 만들어 둔다(첫 멘트의 생성 지연을 곡이 가려 준다)
@@ -88,7 +114,7 @@ class Scheduler:
         # 순서 보장 제출 — 순번 발급, 다음에 낼 순번, 끝났지만 앞 순번을 기다리는 결과
         self._seq = 0
         self._next_pub = 0
-        self._ready: dict[int, tuple[SegmentSubmission | None, int]] = {}
+        self._ready: dict[int, tuple[SegmentSubmission | None, int, Anchor | None]] = {}
         self._pub_lock = asyncio.Lock()
 
     @property
@@ -97,16 +123,51 @@ class Scheduler:
 
     @property
     def pending_count(self) -> int:
-        return len(self._pending)
+        return len(self.pool)
 
     @property
     def current_corner(self) -> str | None:
         return self._run.spec.corner_type if self._run else None
 
     def enqueue_request(self, req: ListenerRequest) -> None:
+        anchor = self.timeline.current(req.received_at)
+        req.chat_type, req.rule = classify(req.body, anchor, self.chat_rules)
+        if anchor is not None:
+            req.anchor_id, req.anchor_seq = anchor.id, anchor.seq
+        self.telemetry.log_input(req, anchor.kind if anchor else None)
         req.state = RequestState.QUEUED
         self.telemetry.log_request_state(req.request_id, req.state)
-        self._pending.append(req)
+        self.pool.add(req)
+
+    def on_track_started(self, track_ref: str, started_at: float) -> None:
+        self.timeline.sync_track(track_ref, started_at)
+
+    def on_segment_played(self, segment_id: str, at: float) -> None:
+        speech_ms = self.timeline.speech_ms(segment_id)
+        if speech_ms is not None:  # 모르는 세그먼트 — 백엔드가 혼자 트는 곡 등
+            self.on_segment_started(segment_id, at - speech_ms / 1000)
+
+    def on_segment_started(self, segment_id: str, started_at: float) -> None:
+        """재생 시작 확인 — 인용이 들어 있으면 반영 확정 (CORNER_DESIGN 9.3, 9.4절). 재전달은 무시한다."""
+        if not self.timeline.sync_started(segment_id, started_at):
+            return
+        quoted = self._quoted.pop(segment_id, None)
+        if quoted is None:
+            return
+        req, job = quoted
+        req.state = RequestState.REFLECTED
+        self.telemetry.log_request_state(req.request_id, req.state)
+        # 곡 재생 중에 도착한 반응은 곡 위에서 말할 수 없어 기다린다 — 그 구조적 대기를 뺀다
+        song_end = self.timeline.track_end(req.anchor_id)
+        waited = max(0.0, song_end - req.received_at) if song_end else 0.0
+        topic_match = None
+        if req.chat_type == ChatType.REACTION and req.anchor_seq is not None and job.anchor is not None:
+            topic_match = job.anchor.seq - req.anchor_seq <= 1
+        self.telemetry.log_reflection(
+            req=req, segment_id=segment_id, started_at=started_at,
+            quote_age_net=started_at - req.received_at - waited,
+            topic_match=topic_match, script_chars=job.script_chars,
+        )
 
     def report_backpressure(self, d_total_ms: float, severity: str, at: float | None = None) -> None:
         """백엔드가 잰 실제 남은 방송 분량(계약 3.2절 backpressure).
@@ -143,7 +204,7 @@ class Scheduler:
         buffer_sec, source = self._buffer_sec(now)
         return ScheduleContext(
             now=now,
-            pending_requests=list(self._pending),
+            pending_requests=list(self.pool.items),
             generated_buffer_sec=buffer_sec,
             inflight_generations=self._inflight,
             backpressure=self._backpressure,
@@ -157,9 +218,17 @@ class Scheduler:
         """max_segments는 관통 테스트용 — N개를 편성한 뒤 종료한다."""
         self._started_at = time.time()
         self._end_at = self._started_at + self.config.broadcast_minutes * 60
+        if self._first_song_ms and self.config.first_song.get("track_ref"):
+            song = self.config.first_song
+            self._last_anchor = self.timeline.new_anchor(
+                self._next_anchor_id("track"), "track",
+                keywords(f"{song.get('title', '')} {song.get('artist', '')}"))
+            self.timeline.append(None, self._last_anchor, 0, self._started_at,
+                                 track_ref=song["track_ref"], track_ms=self._first_song_ms)
         while not stop.is_set() and time.time() < self._end_at:
             if max_segments is not None and self._seq >= max_segments:
                 break
+            self._expire_inputs(time.time())
             ctx = self._snapshot()
             if (ctx.inflight_generations >= self.max_concurrent
                     or ctx.generated_buffer_sec >= self.target_buffer_sec):
@@ -178,14 +247,19 @@ class Scheduler:
                 await self._publish_glue(ctx, planned)
             else:
                 job = self._build_job(planned)
+                selection = job.material.extra.pop("selection", None)
                 self.telemetry.log_decision(ctx, Decision(
                     action="generate", corner_type=job.corner_type, step=job.step,
-                    quotes=[q.request_id for q in job.material.quotes]))
+                    quotes=[q.request_id for q in job.material.quotes],
+                    situation=selection.situation if selection else None,
+                    criterion=selection.criterion if selection else None))
                 seq = self._reserve()
                 asyncio.create_task(self._generate(job, seq))
             await asyncio.sleep(0)  # 생성 태스크에 실행 양보
         while self._inflight > 0:  # 진행 중 생성 마무리 대기
             await asyncio.sleep(0.1)
+        if max_segments is None:  # 방송 종료 — 남은 입력은 반영되지 못했다 (관통 테스트는 중간에 끊을 뿐이다)
+            self._log_expired(self.pool.drain())
 
     # ── 클락 · 코너 ──────────────────────────────────────────────────
 
@@ -204,8 +278,10 @@ class Scheduler:
                         return _WAIT
                     continue
                 self._skip_logged.clear()
+                topic = entry.label or self.topic
+                self._run_anchor = None
                 self._run = CornerRun(entry, sources=self.sources, intensity=self.intensity,
-                                      thread=Thread(topic=entry.label or self.topic),
+                                      thread=Thread(topic=topic, keywords=sorted(keywords(topic))),
                                       started_ms=self._produced_ms)
                 self.telemetry.log_corner(entry.corner.corner_type, entry.label, "enter",
                                           self._produced_ms)
@@ -253,23 +329,70 @@ class Scheduler:
         elif step.kind == "news_recap":
             material.extra["covered"] = list(self.sources.covered_news)
             self.sources.covered_news.clear()  # 다음 순환은 새로 센다
-        material.quotes = self._take_quotes(corner.mode("chat"), step.kind)
+        anchor = self._anchor_for(planned)
+        self._expire_inputs(time.time())
+        material.quotes = self._take_quotes(corner.mode("chat"), step.kind, anchor, material)
         return GenerationJob(
             job_id=new_id("job"), corner_type=corner.corner_type, step=step.kind,
-            material=material, plain=corner.subjectivity == "none",
+            material=material, plain=corner.subjectivity == "none", anchor=anchor,
         )
 
-    def _take_quotes(self, chat_mode, step_kind: str) -> list[ListenerRequest]:
-        """과도기 인용 (M4 QuoteSelector 전) — 코너 계약과 참여 강도가 허용하면 가장 오래 기다린 요청."""
-        if not self._pending or chat_mode not in QUOTABLE or not STEP_KINDS[step_kind].quotable:
+    def _next_anchor_id(self, kind: str) -> str:
+        self._anchor_no += 1
+        return f"{kind}:{self._anchor_no}"
+
+    def _anchor_for(self, planned: PlannedStep) -> Anchor:
+        """이 단계가 다루는 것. 곡 소개와 그 곡은 같은 앵커다. 접착 문구는 앵커를 바꾸지 않는다."""
+        source, items = planned.step.items, planned.items
+        if source == "track" and items:
+            track = items[0]
+            anchor = self.timeline.new_anchor(
+                self._next_anchor_id("track"), "track",
+                keywords(f"{track.get('title', '')} {track.get('artist', '')}"))
+        elif source in ("board_story", "message") and items:
+            kind = "story" if source == "board_story" else "message"
+            anchor = self.timeline.new_anchor(self._next_anchor_id(kind), kind,
+                                              keywords(items[0].get("body")))
+        else:
+            if self._run_anchor is None:
+                words = self._run.thread.keywords if self._run else keywords(self.topic)
+                self._run_anchor = self.timeline.new_anchor(self._next_anchor_id("topic"), "topic", words)
+            anchor = self._run_anchor
+        self._last_anchor = anchor
+        return anchor
+
+    def _expire_inputs(self, now: float) -> None:
+        seq = self._last_anchor.seq if self._last_anchor else None
+        self._log_expired(self.pool.expire(now, seq))
+
+    def _log_expired(self, requests: list[ListenerRequest]) -> None:
+        """백엔드에는 알리지 않는다 — 계약 v1 상태에 expired가 없다. 화면에는 대기로 남는다."""
+        for req in requests:
+            req.state = RequestState.EXPIRED
+            self.telemetry.log_request_state(req.request_id, req.state)
+
+    def _take_quotes(self, chat_mode, step_kind: str, anchor: Anchor,
+                     material: Material) -> list[ListenerRequest]:
+        """코너 계약과 참여 강도가 허용하면 선별기가 고른다 (CORNER_DESIGN 5.1, 5.7절)."""
+        if not len(self.pool) or chat_mode not in QUOTABLE or not STEP_KINDS[step_kind].quotable:
             return []
         limit = min(self.intensity.quote_limit, _V1_QUOTES_PER_SEGMENT)
         now = time.time()
         if limit <= 0 or now - self._last_quote_at < self.intensity.quote_gap_sec:
             return []
+        topic_words = anchor.keywords | keywords(material.topic)
+        selection = self.selector.select(
+            self.pool.items, limit=limit, arrivals=self.pool.recent_arrivals(now),
+            last_requester=self._last_requester, topic_words=topic_words)
+        self.telemetry.log_selection(selection, anchor.id)
+        material.extra["selection"] = selection
+        if not selection.picked:
+            return []
         self._last_quote_at = now
-        quotes, self._pending = self._pending[:limit], self._pending[limit:]
-        return quotes
+        self._last_requester = selection.picked[-1].requester_ref
+        for req in selection.picked:
+            self.pool.remove(req)
+        return selection.picked
 
     # ── 생성 · 제출 ──────────────────────────────────────────────────
 
@@ -283,7 +406,7 @@ class Scheduler:
             duration_ms=duration_ms, corner_type=corner, kind=WIRE_KIND,
             priority=50, reorderable=False,
         )
-        await self._complete(self._reserve(), sub)
+        await self._complete(self._reserve(), sub, anchor=self._last_anchor)
 
     async def _generate(self, job: GenerationJob, seq: int) -> None:
         self._inflight += 1
@@ -299,6 +422,7 @@ class Scheduler:
                     return
                 for req in job.material.quotes:
                     if sub.request_ref == req.request_id:
+                        self._quoted[sub.id] = (req, job)
                         await self._transition(req, RequestState.GENERATED)
                     else:  # 인용이 빠졌거나 제공자 장애로 filler 대체됨 — 반영되지 않았다
                         await self._requeue_or_reject(req)
@@ -314,16 +438,19 @@ class Scheduler:
             self._inflight -= 1
             # 실패해도 순번은 비워야 뒤 순번이 나간다. 곡 길이는 백엔드가 실제로 틀 곡(music_ref)만 센다
             track_ms = int((job.material.track or {}).get("duration_ms") or 0)
-            await self._complete(seq, sub, track_ms if sub and sub.music_ref else 0)
+            await self._complete(seq, sub, track_ms if sub and sub.music_ref else 0, job.anchor)
 
     async def _requeue_or_reject(self, req: ListenerRequest) -> None:
+        self.selector.forget(req)
+        if self._last_requester == req.requester_ref:  # 인용이 나가지 않았으니 연속 금지에 걸지 않는다
+            self._last_requester = None
         failures = self._failures.get(req.request_id, 0) + 1
         self._failures[req.request_id] = failures
         if failures >= _MAX_REQUEST_FAILURES:
             await self._transition(req, RequestState.REJECTED)
             return
         await self._transition(req, RequestState.QUEUED)
-        self._pending.insert(0, req)  # 이미 기다린 요청이므로 맨 앞으로
+        self.pool.put_back(req)
 
     async def _transition(self, req: ListenerRequest, state: RequestState) -> None:
         req.state = state
@@ -335,17 +462,22 @@ class Scheduler:
         self._seq += 1
         return seq
 
-    async def _complete(self, seq: int, sub: SegmentSubmission | None, track_ms: int = 0) -> None:
+    async def _complete(self, seq: int, sub: SegmentSubmission | None, track_ms: int = 0,
+                        anchor: Anchor | None = None) -> None:
         """순번 seq의 결과를 받아, 앞 순번이 다 나갔으면 차례대로 제출한다."""
-        self._ready[seq] = (sub, track_ms)
+        self._ready[seq] = (sub, track_ms, anchor)
         async with self._pub_lock:
             while self._next_pub in self._ready:
-                ready, ms = self._ready.pop(self._next_pub)
+                ready, ms, seg_anchor = self._ready.pop(self._next_pub)
                 self._next_pub += 1
                 if ready is not None:
-                    await self._publish(ready, ms)
+                    await self._publish(ready, ms, seg_anchor)
 
-    async def _publish(self, sub: SegmentSubmission, track_ms: int = 0) -> None:
+    async def _publish(self, sub: SegmentSubmission, track_ms: int = 0,
+                       anchor: Anchor | None = None) -> None:
+        if anchor is not None:  # 첫 곡 전이나 앵커 없는 접착 문구는 송출 위치를 옮기지 않는다
+            self.timeline.append(sub.id, anchor, sub.duration_ms, time.time(),
+                                 track_ref=sub.music_ref, track_ms=track_ms)
         # 곡 소개 멘트 뒤에는 백엔드가 그 곡을 바로 튼다 — 곡 길이만큼 방송이 채워진다
         self._produced_ms += sub.duration_ms + track_ms
         self._submitted += 1

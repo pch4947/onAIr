@@ -40,7 +40,7 @@ class ExperimentSpec(BaseModel):
 
     condition: text(32)  # 조건 이름 — 분석 시 그룹 키
     selector: Literal["recency", "relevance", "diversity"]
-    window_sec: int = Field(default=90, ge=30, le=300)  # 인용 후보 창 W [예시]
+    window_sec: int = Field(default=60, ge=30, le=300)  # 인용 후보 창 W [예시]
     binding: Literal["early", "late"] = "early"  # 선결합 / 지연 결합
     aggregate_ack: bool = True  # 집계 언급·예고 on/off (RQ-A 보조 조건)
 

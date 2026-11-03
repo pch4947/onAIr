@@ -91,6 +91,7 @@ class GenerationPipeline:
             logger.exception("LLM_FAILED %s %s", job.job_id, job.corner_type)
             return await self._fallback(job)
         t1 = time.time()
+        job.script_chars = len(script.text)
         self._log(job, "llm", t0, t1, "ok")
         if script.text.strip() == REJECT:
             self._log(job, "l1", t1, t1, "reject")

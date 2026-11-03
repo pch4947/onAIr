@@ -28,6 +28,19 @@ CREATE TABLE IF NOT EXISTS corner_log (
 CREATE TABLE IF NOT EXISTS station_log (
     station_id TEXT, at REAL, event TEXT, payload_json TEXT
 );
+CREATE TABLE IF NOT EXISTS input_log (
+    request_id TEXT, station_id TEXT, received_at REAL, chat_type TEXT, rule TEXT,
+    anchor_id TEXT, anchor_kind TEXT
+);
+CREATE TABLE IF NOT EXISTS selection_log (
+    station_id TEXT, at REAL, situation TEXT, criterion TEXT, arrivals INTEGER,
+    anchor_id TEXT, candidates_json TEXT, picked_json TEXT
+);
+CREATE TABLE IF NOT EXISTS reflection_log (
+    request_id TEXT, station_id TEXT, segment_id TEXT, chat_type TEXT, received_at REAL,
+    started_at REAL, quote_age REAL, quote_age_net REAL, topic_match INTEGER,
+    script_chars INTEGER, quote_chars INTEGER
+);
 """
 
 
@@ -81,6 +94,29 @@ def recent_latency_p95_ms(sqlite_path: str | Path, window_sec: float = 600.0) ->
     return round(totals[rank] * 1000)
 
 
+def reflection_summary(sqlite_path: str | Path, station_id: str, q_max_sec: float = 120.0) -> dict:
+    """반영 평가 지표 (CORNER_DESIGN 9.5절). 비율은 분모가 0이면 None."""
+    path = Path(sqlite_path)
+    if not path.exists():
+        return {}
+    arrived = dict(_read(path, "SELECT chat_type, COUNT(*) FROM input_log WHERE station_id = ? "
+                               "GROUP BY chat_type", (station_id,)))
+    reflected = dict(_read(path, "SELECT chat_type, COUNT(*) FROM reflection_log WHERE station_id = ? "
+                                 "GROUP BY chat_type", (station_id,)))
+    rows = _read(path, "SELECT quote_age_net, topic_match FROM reflection_log "
+                       "WHERE station_id = ? AND chat_type = 'reaction'", (station_id,))
+
+    def ratio(part: int, whole: int) -> float | None:
+        return part / whole if whole else None
+
+    return {
+        "reaction_reflection_rate": ratio(reflected.get("reaction", 0), arrived.get("reaction", 0)),
+        "standalone_reflection_rate": ratio(reflected.get("standalone", 0), arrived.get("standalone", 0)),
+        "timely_rate": ratio(sum(1 for net, _ in rows if net <= q_max_sec), len(rows)),
+        "topic_match_rate": ratio(sum(1 for _, match in rows if match), len(rows)),
+    }
+
+
 class Telemetry:
     def __init__(self, sqlite_path: str | Path, station_id: str):
         path = Path(sqlite_path)
@@ -129,6 +165,33 @@ class Telemetry:
         self._db.execute(
             "INSERT INTO station_log VALUES (?,?,?,?)",
             (self.station_id, time.time(), event, json.dumps(payload, ensure_ascii=False)),
+        )
+        self._db.commit()
+
+    def log_input(self, req, anchor_kind: str | None) -> None:
+        self._db.execute(
+            "INSERT INTO input_log VALUES (?,?,?,?,?,?,?)",
+            (req.request_id, self.station_id, req.received_at, str(req.chat_type), req.rule,
+             req.anchor_id, anchor_kind),
+        )
+        self._db.commit()
+
+    def log_selection(self, selection, anchor_id: str | None) -> None:
+        self._db.execute(
+            "INSERT INTO selection_log VALUES (?,?,?,?,?,?,?,?)",
+            (self.station_id, time.time(), selection.situation, selection.criterion,
+             selection.arrivals, anchor_id, json.dumps(selection.candidates, ensure_ascii=False),
+             json.dumps([r.request_id for r in selection.picked])),
+        )
+        self._db.commit()
+
+    def log_reflection(self, *, req, segment_id: str, started_at: float, quote_age_net: float,
+                       topic_match: bool | None, script_chars: int) -> None:
+        self._db.execute(
+            "INSERT INTO reflection_log VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (req.request_id, self.station_id, segment_id, str(req.chat_type), req.received_at,
+             started_at, started_at - req.received_at, quote_age_net,
+             None if topic_match is None else int(topic_match), script_chars, len(req.body)),
         )
         self._db.commit()
 

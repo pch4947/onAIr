@@ -12,6 +12,7 @@ from .corners.run import MaterialSources, TrackSource
 from .domain import ListenerRequest, RequestState, StationConfig, new_id
 from .format import Clock, load_format
 from .glue import GlueBank
+from .inputs.rules import load_chat_rules
 from .pipeline.llm import make_llm
 from .pipeline.pipeline import GenerationPipeline
 from .pipeline.safety import SafetyChecker
@@ -33,6 +34,7 @@ class EngineSettings:
     audio_dir: Path = field(default_factory=lambda: Path("var/audio"))  # 공유 오디오 루트
     sqlite_path: Path = field(default_factory=lambda: Path("var/engine_metrics.sqlite"))
     safety_rules_path: Path = field(default_factory=lambda: Path("config/safety_rules.yaml"))
+    chat_rules_path: Path = field(default_factory=lambda: Path("config/chat_rules.yaml"))
     formats_dir: Path = field(default_factory=lambda: Path("config/formats"))  # 형식·코너 정의
     llm: str = "dummy"
     llm_model: str | None = None  # None이면 어댑터 기본 모델 (openai는 필수)
@@ -75,6 +77,7 @@ class StationEngine:
             fmt = load_format(config.format, settings.formats_dir)
             clock = Clock(fmt, main_corners=config.corners, sections=config.news_sections)
             intensity = fmt.intensity[config.intensity]
+            chat_rules = load_chat_rules(settings.chat_rules_path)
         except (ValueError, TypeError, KeyError, OSError) as exc:
             raise StationRejected("invalid_payload", f"형식 설정: {exc}"[:300]) from exc
         try:
@@ -111,6 +114,7 @@ class StationEngine:
             config=config, fmt=fmt, clock=clock, sources=self.sources, intensity=intensity,
             topic=self.topic, pipeline=pipeline, glue=self.glue,
             transport=transport, telemetry=self.telemetry,
+            chat_rules=chat_rules, violates=safety.check_l2,
             target_buffer_sec=settings.target_buffer_sec,
             max_concurrent=settings.max_concurrent_generations,
         )
@@ -166,8 +170,21 @@ class StationEngine:
         self.tracks.queue(track)
 
     def on_track_started(self, payload: dict) -> None:
-        """곡 재생 시작 — 지금은 계측만 한다. 곡 길이는 소개 멘트를 낼 때 이미 버퍼에 더했다."""
+        """곡 재생 시작 — 송출 위치를 보정한다. 곡 길이는 소개 멘트를 낼 때 이미 버퍼에 더했다."""
         self.telemetry.log_station("track.started", payload)
+        track_ref, started_at = payload.get("track_ref"), payload.get("started_at")
+        if isinstance(track_ref, str) and isinstance(started_at, (int, float)):
+            self.scheduler.on_track_started(track_ref, float(started_at))
+
+    def on_segment_started(self, segment_id: object, started_at: object) -> None:
+        """세그먼트 재생 시작 (계약 v2 10.6절)."""
+        if isinstance(segment_id, str) and isinstance(started_at, (int, float)):
+            self.scheduler.on_segment_started(segment_id, float(started_at))
+
+    def on_segment_played(self, segment_id: object, at: object) -> None:
+        """재생 완료 (계약 v1 state.transition PLAYED) — 길이를 빼서 시작 시각으로 쓴다."""
+        if isinstance(segment_id, str) and isinstance(at, (int, float)):
+            self.scheduler.on_segment_played(segment_id, float(at))
 
     async def reject_stale_request(self, request_id: str) -> None:
         """너무 늦게 받은 요청 — 답하지 않고 종결한다. 백엔드 상태가 requested로 남지 않게 rejected로 알린다."""

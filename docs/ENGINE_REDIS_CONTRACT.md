@@ -569,7 +569,7 @@ wsl redis-cli XADD engine:st_local_dev:in '*' type request.arrived contract_vers
 | `not_on_air` | 이 형식은 방송에 반영하지 않음 (뉴스) | O |
 | `selected` | 세그먼트에 들어감 (생성 중) | |
 | `reflected` | 그 입력이 들어간 세그먼트가 재생되기 시작함 — payload에 `segment_id`, `started_at`(10.6) | O |
-| `expired` | 창이 지나도록 선택되지 못함 / 방송 종료 | O |
+| `expired` | 창이 지나도록 선택되지 못함 / 방송 종료. **백엔드 합의 전까지 엔진은 보내지 않는다** — 계측에만 남긴다([CORNER_DESIGN.md](CORNER_DESIGN.md) 5.8절) | O |
 | `rejected` | 안전 검사 탈락 | O |
 | `cancelled` | 취소됨 (v1과 같음) | O |
 
