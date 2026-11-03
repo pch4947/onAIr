@@ -91,7 +91,7 @@ onair-engine --tts cartesia --max-segments 15 --demo-request "요즘 잠이 안 
 - 수치와 표현 목록: `config/chat_rules.yaml` (설정 파일 `pipeline.chat_rules`로 경로 변경). 대부분 검증 전 임시값입니다.
 - 선별 기준: 일반 방은 화제 관련성 우선, 실험용 방은 `experiment.selector`·`window_sec`.
 - 지표: 계측 SQLite의 `input_log`·`selection_log`·`reflection_log`와 `telemetry.reflection_summary()`.
-- 백엔드가 계약 v1인 동안 만료(`expired`)와 반영 확정(`reflected`)은 엔진 계측에만 남습니다.
+- 만료(`expired`)는 백엔드에 통보합니다. 반영 확정(`reflected`)은 계약 v2 전까지 엔진 계측에만 남습니다.
 
 ### Google Cloud TTS
 
