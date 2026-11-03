@@ -10,7 +10,7 @@ import uuid
 from redis.asyncio import Redis
 
 from app.config import Settings
-from app.messaging.contracts import Segment, validate_audio
+from app.messaging.contracts import RequestState, Segment, decode, validate_audio
 from app.messaging.consumer import EngineConsumer, GROUP
 
 
@@ -18,6 +18,16 @@ def payload(station="st_test"):
     return dict(id="seg_one", station_id=station, audio_ref=f"{station}/one.wav",
                 duration_ms=1000, corner_type="opening", kind="speech", priority=50,
                 reorderable=True, request_ref=None, music_ref=None, created_at=1.0)
+
+
+class RequestStateContractTests(unittest.TestCase):
+    def test_expired_is_accepted_and_unknown_state_is_not(self):
+        def envelope(state):
+            return dict(type="request.state", contract_version="1", event_id="evt_one", station_id="st_test",
+                        at="1.0", payload=json.dumps(dict(request_id="req_one", state=state)))
+        self.assertEqual(decode(envelope("expired"), "st_test"), RequestState(request_id="req_one", state="expired"))
+        with self.assertRaises(ValueError):
+            decode(envelope("pooled"), "st_test")
 
 
 class AudioPathTests(unittest.TestCase):

@@ -150,7 +150,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertGreater(publisher.journal.pending(), 0)
                 self.assertFalse(publisher.queue_available)
                 latest = publisher.entries[-1][0]
-                self.assertEqual(publisher.playback_metadata(latest)['status'], 'fallback')
+                self.assertEqual(publisher.playback_metadata(latest)['status'], 'silence')
             finally:
                 await publisher.stop()
 

@@ -42,7 +42,7 @@ for i=1,#requests,2 do
  local id = requests[i]
  local previous = redis.call('HGET', ARGV[4] .. ':request-states', id)
  local state = previous and cjson.decode(previous).state or 'requested'
- if state ~= 'played' and state ~= 'failed' and state ~= 'rejected' then
+ if state ~= 'played' and state ~= 'failed' and state ~= 'rejected' and state ~= 'expired' then
   redis.call('HSET', ARGV[4] .. ':request-states', id,
    cjson.encode({request_id=id, state='failed'}))
   redis.call('RPUSH', ARGV[4] .. ':request-history:' .. id,

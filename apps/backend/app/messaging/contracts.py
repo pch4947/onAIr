@@ -28,7 +28,7 @@ class Segment(BaseModel):
 class RequestState(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
     request_id: Text
-    state: Literal["screened", "queued", "generating", "generated", "rejected"]
+    state: Literal["screened", "queued", "generating", "generated", "rejected", "expired"]
 
 
 class StationStarted(BaseModel):

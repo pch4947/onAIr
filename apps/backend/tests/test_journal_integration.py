@@ -54,6 +54,46 @@ class JournalIntegrationTests(unittest.IsolatedAsyncioTestCase):
                     await client.delete(*keys)
             await client.aclose()
 
+    async def test_expired_request_is_terminal_and_not_pending(self):
+        station = 'st_expired_' + uuid.uuid4().hex
+        prefix = f'backend:{station}'
+        client = Redis.from_url('redis://127.0.0.1:6379/0', decode_responses=True)
+        try:
+            store = RequestStore(client, station)
+            request_id = (await store.create('test chat', 'listener', 'story'))['id']
+
+            async def engine_state(state, version):
+                return await client.eval(STATE, 3, prefix + ':request-versions', prefix + ':request-states',
+                    prefix + ':request-history:' + request_id, request_id, f'{version}-0',
+                    json.dumps(dict(request_id=request_id, state=state)), '1.0', f'evt_{version}')
+            self.assertEqual(await engine_state('screened', 1), 1)
+            self.assertEqual(await engine_state('queued', 2), 1)
+            self.assertEqual((await store.metrics())['pendingRequestCount'], 1)
+            self.assertEqual(await engine_state('expired', 3), 1)
+            self.assertEqual((await store.get(request_id))['status'], 'expired')
+            self.assertEqual((await store.metrics())['pendingRequestCount'], 0)
+            # Terminal: later engine and broadcast events cannot revive it.
+            self.assertEqual(await engine_state('generated', 4), 0)
+            with tempfile.TemporaryDirectory() as directory:
+                journal = Journal(Path(directory) / 'broadcast.sqlite', station)
+                try:
+                    journal.transition(dict(id='seg_late', kind='speech', corner_type='topic_talk',
+                                            request_ref=request_id), 'PLAYED')
+                    await journal.flush(client)
+                finally:
+                    journal.close()
+            self.assertEqual((await store.get(request_id))['status'], 'expired')
+            history = [json.loads(row) for row in await client.lrange(
+                prefix + ':request-history:' + request_id, 0, -1)]
+            self.assertEqual([(row['state'], row['accepted']) for row in history if row.get('source') == 'engine'],
+                             [('screened', True), ('queued', True), ('expired', True), ('generated', False)])
+        finally:
+            for pattern in (prefix + ':*', f'engine:{station}:*'):
+                keys = [key async for key in client.scan_iter(match=pattern)]
+                if keys:
+                    await client.delete(*keys)
+            await client.aclose()
+
     async def test_lifecycle_retry_dedup_and_late_engine_event(self):
         station = 'st_journal_' + uuid.uuid4().hex
         prefix = f'backend:{station}'

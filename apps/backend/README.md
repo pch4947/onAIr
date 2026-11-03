@@ -168,7 +168,7 @@ Invoke-RestMethod ("http://127.0.0.1:3000/api/requests/" + $result.request.id + 
 같은 키·같은 입력은 기존 요청을 반환하고 재발행하지 않습니다. 같은 키·다른 입력은 409, 잘못된 입력은 422, Redis 장애는 503입니다.
 응답 유실·시간 초과 시에도 같은 키로 재시도합니다. 헤더를 생략하면 매번 새 요청입니다.
 목록과 개별 상태는 동일한 엔진 최신 상태를 반영하며 백엔드 재시작 후에도 유지됩니다.
-방송 상태의 요청 통계는 rejected/failed/played를 제외하며, Redis 장애 시 null 및 requestStatsAvailable=false가 됩니다.
+방송 상태의 요청 통계는 rejected/expired/failed/played를 제외하며, Redis 장애 시 null 및 requestStatsAvailable=false가 됩니다.
 상태 이력 및 MIXING/PUBLISHED/PLAYED 전이는 구현했습니다. 조회 목록·재시도 키의 자동 만료, 페이지네이션, 인증·본인 확인은 후속 작업입니다.
 현재 엔진의 QUEUED 이벤트 발행 누락은 엔진 담당자와 조율해야 합니다. 프론트엔드는 요청 통계의 null과 새 초기 상태를 처리하도록 연동이 필요합니다.
 
