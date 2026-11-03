@@ -40,6 +40,26 @@ class RequestState(StrEnum):
     GENERATING = "generating"
     GENERATED = "generated"
     REJECTED = "rejected"
+    # 계측 전용 — 계약 v1 백엔드는 이 값을 받지 않으므로 통보하지 않는다 (계약 10.4절 합의 전까지)
+    EXPIRED = "expired"
+    REFLECTED = "reflected"
+
+
+class ChatType(StrEnum):
+    """채팅 유형 (CORNER_DESIGN 5.1.3절)."""
+
+    REACTION = "reaction"  # 지금 나오는 곡·사연·화제에 대한 반응 — 늦으면 의미가 없다
+    STANDALONE = "standalone"  # 의견·근황·인사 — 언제 읽어도 뜻이 같다
+
+
+@dataclass(frozen=True)
+class Anchor:
+    """반응의 대상 — 곡, 사연·문자, 코너 화제. seq는 생성 순서다."""
+
+    id: str
+    kind: str  # track | story | message | topic
+    keywords: frozenset[str]
+    seq: int
 
 
 @dataclass
@@ -77,6 +97,7 @@ class StationConfig:
     topic: str | None = None  # 오늘의 주제. None이면 엔진이 정한다
     first_song: dict | None = None  # 계약 3.4절 track — 백엔드가 방송 시작과 함께 튼다
     snapshot: dict | None = None  # 받은 station.created 페이로드 원문 — 계측에 persona 사본으로 남긴다
+    experiment: dict | None = None  # 실험용 방의 조건 (ExperimentSpec) — selector, window_sec
 
 
 @dataclass
@@ -87,6 +108,10 @@ class ListenerRequest:
     requester_ref: str
     received_at: float
     state: RequestState = RequestState.SCREENED
+    chat_type: ChatType | None = None
+    rule: str | None = None  # 유형을 정한 규칙 — 분류 정확도 측정용
+    anchor_id: str | None = None  # 도착 순간 방송에 나가고 있던 것
+    anchor_seq: int | None = None
 
 
 @dataclass
@@ -128,6 +153,8 @@ class GenerationJob:
     priority: int = 50
     reorderable: bool = True
     plain: bool = False  # 주관 표현 금지 코너 — persona의 유머·입버릇을 끈다 (CORNER_DESIGN 6.4절)
+    anchor: Anchor | None = None  # 이 세그먼트가 다루는 것 — 제출 페이로드에는 싣지 않는다
+    script_chars: int = 0  # 대본 글자 수 — 인용 점유율 원시 값. 파이프라인이 채운다
 
 
 @dataclass
@@ -171,3 +198,5 @@ class Decision:
     corner_type: str | None = None
     step: str | None = None
     quotes: list[str] = field(default_factory=list)  # 이 멘트에 넣은 입력의 request_id
+    situation: str | None = None  # 채팅 상황 quiet | normal | flood (선별했을 때만)
+    criterion: str | None = None  # 선별 기준 (선별했을 때만)

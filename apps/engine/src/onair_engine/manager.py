@@ -57,6 +57,7 @@ def config_from_created(station_id: str, created: StationCreated, raw: dict) -> 
         topic=created.topic,
         first_song=created.first_song.model_dump() if created.first_song else None,
         snapshot=raw,
+        experiment=created.experiment.model_dump() if created.experiment else None,
     )
 
 
@@ -264,10 +265,16 @@ class EngineManager:
             engine.on_track_queued(payload)
         elif event_type == "track.started":
             engine.on_track_started(payload)
+        elif event_type == "state.transition":
+            # v1에는 재생 시작 통보가 없어 PLAYED에서 역산한다. MIXING·PUBLISHED는 쓰지 않는다
+            if payload.get("state") == "PLAYED":
+                engine.on_segment_played(payload.get("segment_id"), payload.get("at"))
+        elif event_type == "segment.started":  # 계약 v2 (10.6절)
+            engine.on_segment_started(payload.get("segment_id"), payload.get("started_at"))
         elif event_type == "station.closed":
             engine.stop()  # 방송 태스크가 끝나면 _run_station이 방을 정리한다
         elif event_type:
-            # TODO(M4): state.transition(PUBLISHED → 방송 맥락)·segment.started(REFLECTED) — 계약 v2
+            # TODO(M4): state.transition(PUBLISHED → 방송 맥락)
             logger.info("EVENT_IGNORED %s", event_type)
 
     async def _inject_demo(self, engine: StationEngine, bodies: list[str]) -> None:
