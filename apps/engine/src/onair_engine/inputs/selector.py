@@ -16,6 +16,11 @@ from .classify import keywords
 _READABLE = re.compile(r"[0-9A-Za-z가-힣]")
 _MIN_READABLE_CHARS = 2  # 'ㅋㅋㅋ'만 있는 채팅은 말로 인용할 내용이 없다
 
+
+def readable_enough(body: str) -> bool:
+    return len(_READABLE.findall(body)) >= _MIN_READABLE_CHARS
+
+
 RECENCY = "recency"
 RELEVANCE = "relevance"
 DIVERSITY = "diversity"
@@ -88,7 +93,7 @@ class QuoteSelector:
             return False
         if len(req.body) > self.max_quote_chars:
             return False
-        if len(_READABLE.findall(req.body)) < _MIN_READABLE_CHARS:
+        if not readable_enough(req.body):
             return False
         return self._violates(req.body) is None
 

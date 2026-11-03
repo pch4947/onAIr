@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from ..catalog import Catalog
 from ..format.clock import ClockEntry
 from ..format.spec import CornerSpec, Intensity, StepSpec
+from ..inputs.inbox import MessageInbox
+from ..inputs.stories import StoryPool
 from ..sources.rss import RssCollector, source_name
 
 
@@ -70,17 +72,17 @@ class TrackSource:
 class MaterialSources:
     """단계가 꺼내 쓰는 항목의 출처 (spec.ItemSource).
 
-    board_story·message는 M4(입력 라우팅), vote는 M5에서 채운다 — 그 전까지는 비어 있어서
-    그 항목이 필요한 코너는 진입 조건(requires)에서 걸러진다.
+    vote는 M5에서 채운다. 항목이 모자라면 그 항목이 필요한 코너는 진입 조건(requires)에서 걸러진다.
     """
 
-    def __init__(self, *, tracks: TrackSource, rss: RssCollector):
+    def __init__(self, *, tracks: TrackSource, rss: RssCollector,
+                 inbox: MessageInbox | None = None, stories: StoryPool | None = None):
         self.tracks = tracks
         self._rss = rss
         self._aired_news: set[str] = set()
         self.covered_news: list[str] = []  # 이번 순환에서 전한 기사 제목 — recap 소재
-        self.board_stories: list[dict] = []
-        self.messages: list[dict] = []
+        self.inbox = inbox or MessageInbox()
+        self.stories = stories or StoryPool()
         self.votes: list[dict] = []
 
     def count(self, source: str) -> int:
@@ -90,7 +92,11 @@ class MaterialSources:
             return len(self._fresh_news(50))
         if source == "covered_news":  # 정리(recap) 코너의 진입 조건 — 이번 순환에 전한 기사가 있어야 한다
             return len(self.covered_news)
-        return len(self._list(source))
+        if source == "message":
+            return self.inbox.count()
+        if source == "board_story":
+            return self.stories.count()
+        return len(self.votes)
 
     def take(self, source: str, n: int) -> list[dict]:
         if source == "track":
@@ -103,8 +109,11 @@ class MaterialSources:
                 self._aired_news.add(it["title"])
                 self.covered_news.append(it["title"])
             return items
-        pool = self._list(source)
-        taken, pool[:] = pool[:n], pool[n:]
+        if source == "message":
+            return self.inbox.take(n)
+        if source == "board_story":
+            return self.stories.take(n)
+        taken, self.votes[:] = self.votes[:n], self.votes[n:]
         return taken
 
     def _fresh_news(self, n: int) -> list[dict]:
@@ -112,10 +121,6 @@ class MaterialSources:
         items = [it for it in self._rss.latest(50) if it.title not in self._aired_news]
         return [{"title": it.title, "summary": it.summary, "source": source_name(it.source_url)}
                 for it in items[:n]]
-
-    def _list(self, source: str) -> list[dict]:
-        return {"board_story": self.board_stories, "message": self.messages,
-                "vote": self.votes}[source]
 
     def satisfies(self, corner: CornerSpec) -> bool:
         return all(self.count(src) >= n for src, n in corner.requires.items())

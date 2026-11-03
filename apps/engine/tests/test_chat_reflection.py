@@ -92,10 +92,10 @@ def test_expired_input_is_logged_and_sent_to_backend(tmp_path):
 
 
 def test_broadcast_end_expires_leftovers(tmp_path):
-    engine, transport = _engine(tmp_path, format="news")
+    engine, transport = _engine(tmp_path)
 
     async def scenario():
-        req = await engine.submit_request("story", "이 뉴스 어떻게 생각하세요", "u1")
+        req = await engine.submit_request("story", "저는 오늘 쉬는 날이에요", "u1")
         stop = asyncio.Event()
         stop.set()  # 바로 종료
         await engine.scheduler.run(stop)

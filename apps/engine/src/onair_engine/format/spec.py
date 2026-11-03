@@ -29,6 +29,7 @@ ItemSource = Literal["track", "next_track", "news", "covered_news", "board_story
 
 # 채팅을 인용할 수 있는 모드
 QUOTABLE = (Mode.QUOTE, Mode.STEER)
+_NOT_REFLECTED = (Mode.CLOSED, Mode.DEFER, Mode.NONE)
 
 
 class StepSpec(BaseModel):
@@ -133,3 +134,20 @@ class FormatSpec(BaseModel):
 
     def corner(self, name: str) -> CornerSpec:
         return self.corners[name]
+
+    def accepts(self, kind: InputKind) -> bool:
+        """이 형식이 방송에 반영하는 입력 종류인가 — 아니면 NOT_ON_AIR다 (CORNER_DESIGN 4.4절)."""
+        return any(self.corners[name].mode(kind) not in _NOT_REFLECTED for name in self._reachable())
+
+    def _reachable(self) -> set[str]:
+        # 공통 파일의 코너가 합쳐져 있으므로, 이 형식이 실제로 쓰는 코너만 본다
+        names = {self.opening, self.closing}
+        for item in self.cycle:
+            if item == "$main":
+                names.update(self.host_corners)
+            elif item.startswith("$section:"):
+                names.add(item.split(":", 1)[1])
+            else:
+                names.add(item)
+        names.update(c for n in list(names) if (c := self.corners[n].fallback))
+        return names

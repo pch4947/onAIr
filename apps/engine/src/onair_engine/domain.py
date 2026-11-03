@@ -41,8 +41,20 @@ class RequestState(StrEnum):
     GENERATED = "generated"
     REJECTED = "rejected"
     EXPIRED = "expired"
-    # 계측 전용 — 계약 v1 백엔드는 이 값을 받지 않으므로 통보하지 않는다 (계약 10.4절 합의 전까지)
+    # 계약 v1 백엔드가 받지 않는 값 — wire_state로 바꿔 보내거나 계측에만 남긴다 (계약 10.4절 합의 전까지)
+    INBOXED = "inboxed"
+    NOT_ON_AIR = "not_on_air"
+    CANCELLED = "cancelled"
     REFLECTED = "reflected"
+
+
+_WIRE_STATES = {RequestState.INBOXED: RequestState.QUEUED, RequestState.NOT_ON_AIR: RequestState.EXPIRED,
+                RequestState.CANCELLED: None, RequestState.REFLECTED: None}
+
+
+def wire_state(state: RequestState) -> RequestState | None:
+    """백엔드에 보낼 값. None이면 보내지 않는다 — 모르는 값은 백엔드가 이벤트째 격리한다."""
+    return _WIRE_STATES.get(state, state)
 
 
 class ChatType(StrEnum):
@@ -103,11 +115,13 @@ class StationConfig:
 @dataclass
 class ListenerRequest:
     request_id: str
-    kind: str  # v1 계약: "story" | "mood" | "song"
+    kind: str  # chat | message | song_request | board_story — v1의 story·mood는 chat으로 받는다
     body: str
     requester_ref: str
     received_at: float
     state: RequestState = RequestState.SCREENED
+    nickname: str | None = None  # 방송에서 부를 이름. L0를 통과한 값만 들어온다
+    tags: list[str] = field(default_factory=list)  # 게시판 사연의 주제 태그
     chat_type: ChatType | None = None
     rule: str | None = None  # 유형을 정한 규칙 — 분류 정확도 측정용
     anchor_id: str | None = None  # 도착 순간 방송에 나가고 있던 것
@@ -124,6 +138,8 @@ class Material:
     topic: str | None = None  # 지금 화제 (Thread.topic)
     label: str | None = None  # 뉴스 분야처럼 코너를 다른 소재로 돌릴 때의 이름
     extra: dict = field(default_factory=dict)  # 단계별 부가 정보 (코너 예고 목록, 참여 안내 등)
+    feature_ref: str | None = None  # 이 단계의 주 소재인 입력 — 성공하면 request_ref로 나간다
+    must_read: str | None = None  # 대본에 반드시 들어가야 할 글 (문자 낭독)
 
     @property
     def track_ref(self) -> str | None:
@@ -156,6 +172,7 @@ class GenerationJob:
     anchor: Anchor | None = None  # 이 세그먼트가 다루는 것 — 제출 페이로드에는 싣지 않는다
     script_chars: int = 0  # 대본 글자 수 — 인용 점유율 원시 값. 파이프라인이 채운다
     provider_failed: bool = False  # LLM·TTS 장애로 대체됐다 — 인용한 입력의 잘못이 아니다
+    feature: ListenerRequest | None = None  # 주 소재인 입력 — 문자·사연·신청곡
 
 
 @dataclass

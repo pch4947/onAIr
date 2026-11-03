@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS station_log (
 );
 CREATE TABLE IF NOT EXISTS input_log (
     request_id TEXT, station_id TEXT, received_at REAL, chat_type TEXT, rule TEXT,
-    anchor_id TEXT, anchor_kind TEXT
+    anchor_id TEXT, anchor_kind TEXT, input_kind TEXT, route TEXT
 );
 CREATE TABLE IF NOT EXISTS selection_log (
     station_id TEXT, at REAL, situation TEXT, criterion TEXT, arrivals INTEGER,
@@ -40,6 +40,9 @@ CREATE TABLE IF NOT EXISTS reflection_log (
     request_id TEXT, station_id TEXT, segment_id TEXT, chat_type TEXT, received_at REAL,
     started_at REAL, quote_age REAL, quote_age_net REAL, topic_match INTEGER,
     script_chars INTEGER, quote_chars INTEGER
+);
+CREATE TABLE IF NOT EXISTS aired_log (
+    station_id TEXT, segment_id TEXT, at REAL, script TEXT
 );
 """
 
@@ -112,6 +115,7 @@ def reflection_summary(sqlite_path: str | Path, station_id: str, q_max_sec: floa
     return {
         "reaction_reflection_rate": ratio(reflected.get("reaction", 0), arrived.get("reaction", 0)),
         "standalone_reflection_rate": ratio(reflected.get("standalone", 0), arrived.get("standalone", 0)),
+        "message_reflection_rate": ratio(reflected.get("message", 0), arrived.get("message", 0)),
         "timely_rate": ratio(sum(1 for net, _ in rows if net <= q_max_sec), len(rows)),
         "topic_match_rate": ratio(sum(1 for _, match in rows if match), len(rows)),
     }
@@ -123,6 +127,12 @@ class Telemetry:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(str(path))
         self._db.executescript(_SCHEMA)
+        # 기존 DB에는 CREATE IF NOT EXISTS가 새 컬럼을 만들지 않는다
+        columns = {row[1] for row in self._db.execute("PRAGMA table_info(input_log)")}
+        for column in ("input_kind", "route"):
+            if column not in columns:
+                self._db.execute(f"ALTER TABLE input_log ADD COLUMN {column} TEXT")
+        self._db.commit()
         self.station_id = station_id
 
     def log_stage(self, *, job_id: str, corner_type: str, request_ref: str | None,
@@ -168,11 +178,13 @@ class Telemetry:
         )
         self._db.commit()
 
-    def log_input(self, req, anchor_kind: str | None) -> None:
+    def log_input(self, req, anchor_kind: str | None, route: str = "pool") -> None:
+        # chat_type은 채팅만 있다 — 유형별 반영률이 종류별로도 나오게 종류를 대신 넣는다
         self._db.execute(
-            "INSERT INTO input_log VALUES (?,?,?,?,?,?,?)",
-            (req.request_id, self.station_id, req.received_at, str(req.chat_type), req.rule,
-             req.anchor_id, anchor_kind),
+            "INSERT INTO input_log (request_id, station_id, received_at, chat_type, rule, anchor_id, "
+            "anchor_kind, input_kind, route) VALUES (?,?,?,?,?,?,?,?,?)",
+            (req.request_id, self.station_id, req.received_at, str(req.chat_type or req.kind), req.rule,
+             req.anchor_id, anchor_kind, req.kind, route),
         )
         self._db.commit()
 
@@ -189,10 +201,15 @@ class Telemetry:
                        topic_match: bool | None, script_chars: int) -> None:
         self._db.execute(
             "INSERT INTO reflection_log VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (req.request_id, self.station_id, segment_id, str(req.chat_type), req.received_at,
+            (req.request_id, self.station_id, segment_id, str(req.chat_type or req.kind), req.received_at,
              started_at, started_at - req.received_at, quote_age_net,
              None if topic_match is None else int(topic_match), script_chars, len(req.body)),
         )
+        self._db.commit()
+
+    def log_aired(self, segment_id: str, at: float, script: str) -> None:
+        self._db.execute("INSERT INTO aired_log VALUES (?,?,?,?)",
+                         (self.station_id, segment_id, at, script))
         self._db.commit()
 
     def close(self) -> None:

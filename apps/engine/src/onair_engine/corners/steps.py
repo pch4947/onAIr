@@ -76,7 +76,11 @@ def _music_intro(m: Material) -> str:
     text = "다음 곡을 소개하는 멘트를 2문장 이내로 작성하라."
     if nickname := m.track.get("requester_nickname"):
         text += " 청취자의 신청곡임을 닉네임과 함께 소개한다."
-        return text + "\n" + data_block(TRACK, track_line(m.track) + "\n신청자: " + nickname)
+        info = track_line(m.track) + "\n신청자: " + nickname
+        if comment := m.track.get("requester_comment"):
+            text += " 신청자가 남긴 한마디도 언급한다."
+            info += "\n한마디: " + comment
+        return text + "\n" + data_block(TRACK, info)
     return text + "\n" + data_block(TRACK, track_line(m.track))
 
 
@@ -89,7 +93,9 @@ def _story(m: Material) -> str:
 
 def _text_read(m: Material) -> str:
     msg = m.items[0]
-    return ("청취자가 보낸 짧은 문자를 닉네임과 함께 읽고 한두 문장으로 리액션하라.\n"
+    # 낭독이다 — 풀어 말하면 인용 검사(pipeline.quoted)에 걸려 되돌아간다 (CORNER_DESIGN 5.3절)
+    return ("청취자가 보낸 짧은 문자를 닉네임과 함께 소개한다. 문자 내용은 고치거나 요약하지 말고 "
+            "그대로 읽은 뒤, 한두 문장으로 리액션하라.\n"
             + data_block(STORY, f"닉네임: {msg.get('nickname', '익명')}\n{msg['body']}"))
 
 
