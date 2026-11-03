@@ -1,4 +1,4 @@
-"""채팅 반영 통합 — 앵커 기록, 만료(백엔드 미통보), 재생 확정과 지표 (CORNER_DESIGN 5.1.3, 9.5절)."""
+"""채팅 반영 통합 — 앵커 기록, 만료 통보, 재생 확정과 지표 (CORNER_DESIGN 5.1.3, 9.5절)."""
 import asyncio
 import sqlite3
 import time
@@ -74,25 +74,25 @@ def test_chat_during_song_is_anchored_to_it_and_reaches_the_next_talk(tmp_path):
     assert _rows(tmp_path, "SELECT situation, criterion FROM selection_log")[0] == ("normal", "relevance")
 
 
-def test_expired_input_is_logged_but_not_sent_to_backend(tmp_path):
+def test_expired_input_is_logged_and_sent_to_backend(tmp_path):
     engine, transport = _engine(tmp_path)
 
     async def scenario():
         req = await engine.submit_request("story", "이 노래 좋아요", "u1")
-        engine.scheduler._expire_inputs(time.time() + 61)
+        await engine.scheduler._expire_inputs(time.time() + 61)
         return req
 
     req = asyncio.run(scenario())
     engine.telemetry.close()
     assert req.state == RequestState.EXPIRED and engine.scheduler.pending_count == 0
     sent = [state for rid, state in transport.states if rid == req.request_id]
-    assert RequestState.EXPIRED not in sent and sent[-1] != RequestState.GENERATING
+    assert sent.count(RequestState.EXPIRED) == 1 and sent[-1] == RequestState.EXPIRED
     states = [s for (s,) in _rows(tmp_path, "SELECT state FROM request_log")]
     assert states[-1] == "expired"
 
 
 def test_broadcast_end_expires_leftovers(tmp_path):
-    engine, _ = _engine(tmp_path, format="news")
+    engine, transport = _engine(tmp_path, format="news")
 
     async def scenario():
         req = await engine.submit_request("story", "이 뉴스 어떻게 생각하세요", "u1")
@@ -104,6 +104,7 @@ def test_broadcast_end_expires_leftovers(tmp_path):
     req = asyncio.run(scenario())
     engine.telemetry.close()
     assert req.state == RequestState.EXPIRED
+    assert transport.states[-1] == (req.request_id, RequestState.EXPIRED)
 
 
 def _quoted_run(tmp_path, body="저는 새벽에 컵라면이요", **config):
