@@ -13,7 +13,7 @@
 |---|---|---|
 | 직전 멘트를 프롬프트에 넣기 (Working) | **부분 구현** | [pipeline/pipeline.py](../apps/engine/src/onair_engine/pipeline/pipeline.py) `GenerationPipeline._recent: deque[str]`(maxlen = `StationConfig.recent_segments`, 기본 8)와 `_with_context()`. 요약 없이 대본 원문을 그대로 넣는다 |
 | 송출 이력 (Episodic) | **미구현(설계)** | `AiredHistory` 류 없음. `_recent`는 **TTS 완료 시점**에 기록하며 메모리에만 있다 |
-| 기록 기준 = 실제 송출 | **미구현(설계 확정)** | 기준은 `state.transition`의 `PUBLISHED` (결정 2026-10-08). 엔진은 아직 이 이벤트를 "수신만 하고 무시" ([ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md) 3.2, M3) |
+| 기록 기준 = 실제 송출 | **부분 구현** | `PUBLISHED`를 받으면 대본을 `pending_air`에서 `aired_log`로 옮긴다(#167). 프롬프트 맥락은 아직 생성 기준(`_recent`)이다 — 버퍼만큼 앞서 만들므로, 송출 기준으로 바꾸면 방금 만든 대본을 모르고 반복하게 된다. 맥락 설계와 함께 바꾼다 |
 | 결정 로그 | **구현됨** | [telemetry.py](../apps/engine/src/onair_engine/telemetry.py) `Telemetry` — SQLite `decision_log`, `request_log`, `generation_log` |
 | 요청 기록 | **부분 구현** | `ListenerRequest(request_id, kind, body, requester_ref, received_at, state)` ([domain.py](../apps/engine/src/onair_engine/domain.py)) + `request_log`(상태 전이 시각). 반영 단계(①~④) 시각·선별 여부 없음 |
 | 화자별 관계 요약 (Affective) | **미구현(설계)** | — |

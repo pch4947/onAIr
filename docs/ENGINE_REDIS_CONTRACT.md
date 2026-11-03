@@ -104,13 +104,13 @@
 | type | payload | 엔진 동작 | 상태 |
 |---|---|---|---|
 | `request.arrived` | `{"request_id", "kind": "story"\|"mood"\|"song", "body", "requester_ref", "track"?}` — `track`은 `kind: "song"`일 때만 (3.4절) | L0 검사(`body`만) 후 요청 큐 적재. **request_id는 백엔드 발급값을 그대로 쓴다** — 이후 `request.state`가 같은 id로 나간다. envelope `at`이 `request_max_age_sec`(기본 600초 `[예시]`)보다 오래됐으면 답하지 않고 `rejected`로 종결한다 — 엔진이 입력 스트림을 처음부터 읽어 꺼져 있던 동안의 예전 요청이 재기동 때 몰려오기 때문 (#61) | 구현 (`song`은 미구현) |
-| `request.cancelled` | `{"request_id", "reason": "listener"\|"operator"}` | `queued`면 큐에서 빼고 `cancelled` 통보. `generating`이면 생성은 끝까지 하되 결과를 버리고 `cancelled` 통보. 이미 제출했으면(`generated`) 엔진은 아무것도 하지 않는다 — 제출된 세그먼트를 빼는 것은 백엔드 몫 | 미구현 |
+| `request.cancelled` | `{"request_id", "reason": "listener"\|"operator"}` | `queued`면 큐에서 빼고 `cancelled` 통보. `generating`이면 생성은 끝까지 하되 결과를 버리고 `cancelled` 통보. 이미 제출했으면(`generated`) 엔진은 아무것도 하지 않는다 — 제출된 세그먼트를 빼는 것은 백엔드 몫 | 엔진 구현(#167). 백엔드 상태 값에 `cancelled`가 없어 계측에만 남기고, 백엔드는 아직 이 이벤트를 보내지 않는다 |
 | `station.created` | 3.3절 | EngineManager가 StationEngine 기동, ack 캐시 사전 렌더링 → `station.started` 또는 `station.rejected`. 같은 `station_id`가 다시 오면(재전달) 무시한다 | 구현 |
 | `station.closed` | `{"reason": "normal"\|"operator_stop"}` | 진행 중 생성 취소, 계측 플러시 후 인스턴스 종료 | 구현 (`reason`은 아직 미사용) |
 | `track.queued` | 3.4절 — 다음에 틀 곡 정보 | 다음 곡으로 기억해 두고, 러닝오더가 음악 칸에 오면 소개 멘트 생성 (`music_ref`로 그 곡 지정) | 미구현 |
 | `track.started` | 3.4절 — 곡 재생 시작 | 곡이 끝나는 시각을 버퍼 계산에 반영 | 미구현 |
-| `board.story` | 3.5절 — 게시판 사연 후보 | L0 검사 후 사연 풀에 적재, 사연 코너가 고른다 | 미구현 |
-| `board.story.withdrawn` | 3.5절 — `{"story_id"}` 다른 방에서 읽힌 사연 | 사연 풀에서 뺀다 (이미 생성 중이면 결과를 버린다) | 미구현 |
+| `board.story` | 3.5절 — 게시판 사연 후보 | L0 검사 후 사연 풀에 적재, 사연 코너가 고른다 | 엔진 구현(#167), 백엔드 미구현(#169) |
+| `board.story.withdrawn` | 3.5절 — `{"story_id"}` 다른 방에서 읽힌 사연 | 사연 풀에서 뺀다 (이미 생성 중이면 결과를 버린다) | 엔진 구현(#167), 백엔드 미구현(#169) |
 | `backpressure` | `{"d_total_ms", "threshold_ms", "severity"}` | `d_total_ms`를 엔진 버퍼 계산의 기준으로 쓴다 — 보고 시각 이후 흐른 시간만큼 빼고, 그 뒤 엔진이 제출한 분량을 더한다. `target_buffer_sec` 이상이면 생성을 쉰다. 30초 넘게 보고가 없으면 엔진 자체 추정으로 돌아간다. `severity`가 `low`·`critical`이면 `ScheduleContext.backpressure`를 켠다 (#61) | 구현 (filler 우선·요청 보류 같은 정책 반영은 정책 A/B/C에서) |
 | `state.transition` | `{"segment_id", "state": "MIXING"\|"PUBLISHED"\|"PLAYED", "at"}` | 재배치 가능 집합에서 제거, 계측 기록. **`PUBLISHED`를 받은 멘트만 "송출됨"으로 기억에 넣는다** (결정 2026-10-08) | 수신만, 무시 (M3) |
 
@@ -205,8 +205,8 @@ wsl redis-cli XRANGE engine:st_8f2a:out - + COUNT 3   # station.started 또는 s
 현재 신청곡 등록 경로에서는 음원 큐와 `song_request` 표시 기록을 함께 저장하고,
 `track.queued`에 신청자 `nickname`과 `request_id`를 전달한다. 엔진은 닉네임을 L0 검사한 뒤
 곡 소개의 데이터 블록에 넣고, 음악 세그먼트의 방송 상태로 신청 기록을 갱신한다.
-이는 신청곡에 한정한 연결이다. 아래 v2의 범용 입력 라우터·FEATURE 상태 머신과
-신청 한마디 처리는 아직 구현되지 않았다.
+엔진은 `request.arrived`(`kind: song_request`)의 한마디를 `request_id`별로 보관했다가, 같은 id의
+`track.queued`가 오면 곡 소개에 넣는다(#167). 백엔드는 아직 이 `request.arrived`를 보내지 않는다(#140).
 | `track.started` | `{"track_ref", "started_at"}` | 곡 재생이 시작됐다. 엔진은 `started_at + duration_ms`를 곡 종료 예상 시각으로 쓴다 |
 
 **역할 나눔** — **어떤 곡**을 틀지는 백엔드가, **언제** 틀지는 엔진 러닝오더가 정한다.
@@ -570,6 +570,9 @@ wsl redis-cli XADD engine:st_local_dev:in '*' type request.arrived contract_vers
 | `selected` | 세그먼트에 들어감 (생성 중) | |
 | `reflected` | 그 입력이 들어간 세그먼트가 재생되기 시작함 — payload에 `segment_id`, `started_at`(10.6) | O |
 | `expired` | 창이 지나도록 선택되지 못함 / 방송 종료. v1에 먼저 추가해 양쪽에 구현됐다(#157) | O |
+
+**v1 동안 엔진이 보내는 값** (#167) — 백엔드가 모르는 값은 이벤트째 격리되므로 바꿔 보낸다: `inboxed` → `queued`, `not_on_air` → `expired`, `cancelled`·`reflected`는 보내지 않고 계측에만 남긴다. 게시판 사연은 요청이 아니므로 상태를 보내지 않는다(3.5절).
+
 | `rejected` | 안전 검사 탈락 | O |
 | `cancelled` | 취소됨 (v1과 같음) | O |
 
@@ -622,6 +625,7 @@ wsl redis-cli XADD engine:st_local_dev:in '*' type request.arrived contract_vers
 {"corner": "topic_talk", "title": "오늘의 이야기", "contract": {"chat": "quote", "message": "defer", "song_request": "defer"}, "segment_id": "seg_4b1f0c2a9e11"}
 ```
 
+- **구현 상태** — 엔진은 구현했지만 설정 `pipeline.emit_corner_changed`로 꺼 두었다. 지금 백엔드는 모르는 이벤트를 `:dead`로 격리한다(#170). 대체 filler와 같은 코너 연속에는 보내지 않는다.
 - **방송 시점에 맞춘다 (PR #101 백엔드 리뷰)** — 엔진은 코너를 실제 방송보다 앞서 편성하므로, 엔진이 코너에 들어간 시점에 화면을 바꾸면 청취자는 아직 앞 코너를 듣고 있다. 그래서 엔진은 `corner.changed`에 **그 코너의 첫 세그먼트 id**(`segment_id`, 보통 코너 콜)를 싣고, 그 세그먼트를 제출하기 **전에** 보낸다. 백엔드는 이 값을 들고 있다가 그 세그먼트의 **재생이 시작될 때**(10.6과 같은 시점) 프론트에 전달하고 현재 코너로 바꾼다 `[확정 전: 기준 세그먼트가 폐기·교체될 때 처리]`.
 - 백엔드는 WebSocket으로 프론트에 전달하고, 늦게 들어온 청취자에게도 마지막으로 **활성화된** 값을 보낸다(기획서 5.6절 늦은 합류).
 - 입력 라우팅은 엔진 기준 코너로 한다 — 화면 표시와 엔진 계약이 잠깐(버퍼 길이만큼) 어긋날 수 있다. 이 사이에 들어온 입력은 엔진이 다음 코너 계약으로 라우팅한다 `[확정 전: UI 안내 문구]`.

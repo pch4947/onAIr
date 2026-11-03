@@ -93,6 +93,17 @@ onair-engine --tts cartesia --max-segments 15 --demo-request "요즘 잠이 안 
 - 지표: 계측 SQLite의 `input_log`·`selection_log`·`reflection_log`와 `telemetry.reflection_summary()`.
 - 만료(`expired`)는 백엔드에 통보합니다. 반영 확정(`reflected`)은 계약 v2 전까지 엔진 계측에만 남습니다.
 
+### 입력 라우팅
+
+입력은 종류별 저장소로 갑니다 (`inputs/`). `story`·`mood`·`chat`은 채팅, `message`는 문자 inbox, `board.story`는 사연 풀, `song_request`는 곡을 기다리는 목록입니다. 형식이 받지 않는 입력은 바로 종결합니다 (뉴스의 채팅, 음악의 문자).
+
+- **문자**: `text_corner`가 도착 순으로 낭독합니다. 대본에 글이 빠지면 한 번 되돌리고, 또 빠지면 `rejected`입니다.
+- **게시판 사연**: `story_corner`가 주제 일치, 최근 순으로 고릅니다. 제출의 `request_ref`는 `story_id`입니다.
+- **신청곡 한마디**: 같은 `request_id`의 `track.queued`가 오면 곡 소개에 넣습니다.
+- **코너 알림**: `pipeline.emit_corner_changed: true`로 켭니다. 백엔드 #170 전에는 켜지 마세요. 이벤트가 격리됩니다.
+- 백엔드가 모르는 상태는 바꿔 보내거나 보내지 않습니다 (`domain.wire_state`).
+- 문자·사연·한마디는 백엔드가 보내기 시작해야 실제 방송에서 쓰입니다 (#168, #169, #140).
+
 ### Google Cloud TTS
 
 1. Google Cloud 콘솔에서 **Cloud Text-to-Speech API**를 사용 설정하고, API 키를 만들어 이 API로만 제한합니다.
