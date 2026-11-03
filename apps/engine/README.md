@@ -69,7 +69,7 @@ onair-engine --tts gemini --max-segments 15 --demo-request "요즘 잠이 안 �
 
 - 모델은 `gemini-3.8-flash-tts`, 출력은 WAV(24kHz, mono, 16-bit)입니다. 언어는 입력에서 자동 감지합니다.
 - 추가 의존성은 없습니다 (표준 라이브러리 REST 호출).
-- 스타일 지시(`voice_style`)·voice design·채팅 텍스트 정규화는 아직 없습니다. 생성 지연도 아직 실측하지 않았습니다.
+- 스타일 지시(`voice_style`)·voice design은 아직 없습니다. 채팅 표기(`ㅋㅋㅋ` 등)는 합성 직전에 엔진이 바꿉니다(`pipeline/normalize.py`). 생성 지연도 아직 실측하지 않았습니다.
 
 ### Cartesia TTS (비교 측정용)
 
@@ -83,6 +83,15 @@ onair-engine --tts cartesia --max-segments 15 --demo-request "요즘 잠이 안 
 - 모델은 날짜 고정 스냅샷 `sonic-3.6-2026-08-27`, 언어 `ko`, 출력 mp3(44.1kHz 128kbps)입니다. 실험 중 모델이 바뀌지 않도록 별칭(`sonic-3.6`)을 쓰지 않습니다.
 - 추가 의존성은 없습니다 (표준 라이브러리 REST 호출).
 - 채팅의 `ㅋㅋㅋ`는 "엑엑엑"으로, `ㅠㅠ`·이모지는 읽지 않습니다. TTS 전 텍스트 정규화는 별도 과제입니다.
+
+### 채팅 반영 정책
+
+채팅은 도착할 때 규칙으로 반응형·독립형을 나누고 그 순간 방송에 나가던 것(앵커)을 기록한 뒤 풀에 쌓습니다. 인용할 수 있는 단계를 만들 때 선별기가 고릅니다 ([CORNER_DESIGN.md](../../docs/CORNER_DESIGN.md) 5.1.3, 5.7, 5.8절).
+
+- 수치와 표현 목록: `config/chat_rules.yaml` (설정 파일 `pipeline.chat_rules`로 경로 변경). 대부분 검증 전 임시값입니다.
+- 선별 기준: 일반 방은 화제 관련성 우선, 실험용 방은 `experiment.selector`·`window_sec`.
+- 지표: 계측 SQLite의 `input_log`·`selection_log`·`reflection_log`와 `telemetry.reflection_summary()`.
+- 백엔드가 계약 v1인 동안 만료(`expired`)와 반영 확정(`reflected`)은 엔진 계측에만 남습니다.
 
 ### Google Cloud TTS
 

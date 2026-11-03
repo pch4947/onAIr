@@ -3,6 +3,7 @@
 
 **대상**: `apps/engine` — PROJECT_PLAN.md(rev.12) 9장 "역할 분담"의 대본 엔진 파트
 **상태**: 초안 v0.5 (2026-10-12) — 점진적으로 개정하며 관리
+**v0.7 변경**: 채팅 반영 정책 구현 — 유형 분류·송출 기준 앵커·`QuoteSelector`·상황별 정책·평가 지표(`inputs/`, 계약 v1 호환, [CORNER_DESIGN.md](CORNER_DESIGN.md) 5.8절), TTS 텍스트 정규화(`pipeline/normalize.py`). M4의 READ·FEATURE·라우터·계약 v2 이벤트는 남았다
 **v0.6 변경**: TTS를 Cartesia에서 **Gemini TTS로 전환**(2026-10-30, 선정 기준을 persona 반영 가능성으로) — 확인 3 갱신, 채팅 텍스트 정규화를 Cartesia 발음 사전에서 엔진 코드로 이동. 목소리·스타일 지시 설계는 [persona.md](persona.md) 9.3절
 **v0.5 변경**: 코너·입력 반영 재설계([CORNER_DESIGN.md](CORNER_DESIGN.md), 팀 합의 완료) 반영 — 고정 러닝오더 + 전역 정책(`SchedulingPolicy`)을 **형식 → 클락 → 코너** 구조와 **입력 라우팅·선별기**로 교체(3장, 4.1~4.3절), 요청별 ack 단축 경로를 접착 요소 사전 렌더(`GlueBank`)로 교체(4.5절), 계측을 입력 상태·선별 로그 중심으로 재구성(7장), 디렉토리·단계별 계획 갱신(8~9장), 확인 6·12 무효(10장). 코드는 아직 v0.4 구조다 — 이 문서는 **목표 구조**이고, 현재 코드와의 대응은 [CORNER_DESIGN.md](CORNER_DESIGN.md) 13절
 **v0.4 변경**: 2026-10-08 팀 결정 반영 — 음원을 카탈로그에서 YouTube 재생(백엔드, F-34)으로 전환(확인 5 무효, 확인 7 결정), 코너를 오프닝·본 코너·엔딩 3단계로 세분화, 방송 길이 MVP 30~60분, 게시판 사연 코너 추가, 코너별 정책 대응표 평가안, ①단계 낭독으로 ack 방식 변경(확인 6), LLM `gpt-6-luna`·TTS Cartesia 결정(확인 3), BGM 더킹은 별도 BGM 방식으로 결정(확인 14)
@@ -387,7 +388,7 @@ apps/engine/
 | **M1 생성 v1** | LLM/TTS 실어댑터, 임시 코너 3종(opening·music_intro·filler), 고정 러닝오더, L1/L2, 계측 기본 | 실생성 대본으로 30분 무개입 방송. 생성 지연 분포 첫 실측 리포트 |
 | **M2 버퍼·안정성** | 선생성 버퍼 관리, 백프레셔 반응, briefing 코너+RSS, 실패 처리·filler 대체 | 3시간 무중단 (백엔드 통합 기준). D_total 임계 실측치 산출 |
 | **M3 코너 구조 전환** | `format/`(CornerSpec·loader·ClockBuilder), `CornerRun`·`Thread`, 형식 3종 yaml, `GlueBank`, 곡 이벤트(`track.queued`/`started`)와 버퍼 계산의 곡 시간 반영, 계약 v2 협의 | 입력 없이 형식 3종 각각 30분 방송이 클락대로 진행. 다중 스테이션 동시 방송 유지 |
-| **M4 입력 반영** | `InputRouter`·풀·inbox·보류, QUOTE/READ/FEATURE, 입력 상태 통보(v2 `request.state`), 인용 검사, `corner.changed`, 게시판 사연(`board.story`), REFLECTED 확정 | 사연토크 방송에서 채팅 인용·문자 낭독·게시판 사연·신청곡이 계약대로 반영되고 요청자 UI 상태가 전부 맞음. L_ui·L_reflect 첫 실측 |
+| **M4 입력 반영** | `InputRouter`·풀·inbox·보류, QUOTE/READ/FEATURE, **채팅 유형 분류·송출 기준 앵커·상황별 정책**([CORNER_DESIGN.md](CORNER_DESIGN.md) 5.1.3, 5.7절), 입력 상태 통보(v2 `request.state`), 인용 검사, `corner.changed`, 게시판 사연(`board.story`), REFLECTED 확정 | 사연토크 방송에서 채팅 인용·문자 낭독·게시판 사연·신청곡이 계약대로 반영되고 요청자 UI 상태가 전부 맞음. L_ui·L_reflect 첫 실측 |
 | **M5 상호작용 확장** | STEER, SOLICIT(질문형·투표 — `vote.open`/`vote.result`), `dj_vs_listeners`, 집계 언급·예고, 뉴스 L2 주관 표현 규칙 | 형식 3종의 코너 풀 전부 동작. 뉴스 형식에서 채팅이 NOT_ON_AIR로 처리됨 |
 | **M6 실험** | 선별 기준 구현체 2~3종, 화제 관련성 계산 비교(키워드/임베딩), 실험 프리셋, `selection_log`·`corner_log`·`aggregate_log`, 지연 결합(백엔드 지원 시), 부하 생성기(F-18) 연동 훅 | 실험 조건 교체가 설정 1줄로 가능. RQ-B 자동 스윕에 필요한 입출력 완비 |
 
