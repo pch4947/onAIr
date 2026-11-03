@@ -90,7 +90,7 @@ class RequestStore:
                       key=lambda entry: (entry['createdAt'], entry['id']))
 
     async def metrics(self):
-        pending = [entry for entry in await self.list() if entry['status'] not in ('rejected', 'played', 'failed')]
+        pending = [entry for entry in await self.list() if entry['status'] not in ('rejected', 'expired', 'played', 'failed')]
         age = max(0, int((datetime.now(timezone.utc) - datetime.fromisoformat(pending[0]['createdAt'])).total_seconds())) if pending else 0
         return dict(pendingRequestCount=len(pending), oldestRequestAgeSeconds=age,
                     requestStatsAvailable=True)

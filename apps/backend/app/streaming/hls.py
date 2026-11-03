@@ -401,7 +401,7 @@ class HlsPublisher:
             if segment.request_ref:
                 async with asyncio.timeout(3):
                     raw_state = await self.redis.hget(self.prefix + ':request-states', segment.request_ref)
-                if raw_state and json.loads(raw_state)['state'] in ('rejected', 'failed'):
+                if raw_state and json.loads(raw_state)['state'] in ('rejected', 'expired', 'failed'):
                     self.journal.transition(segment.model_dump(), 'FAILED')
                     if recovered:
                         self.recovery.popleft()

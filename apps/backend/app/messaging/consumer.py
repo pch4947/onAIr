@@ -65,9 +65,9 @@ local previous = redis.call('HGET', KEYS[2], ARGV[1])
 local oldstate = previous and cjson.decode(previous).state or 'requested'
 local newstate = cjson.decode(ARGV[3]).state
 local allowed = {
- requested={screened=1,queued=1,generating=1,generated=1,rejected=1},
- screened={queued=1,generating=1,generated=1,rejected=1},
- queued={generating=1,generated=1,rejected=1},
+ requested={screened=1,queued=1,generating=1,generated=1,rejected=1,expired=1},
+ screened={queued=1,generating=1,generated=1,rejected=1,expired=1},
+ queued={generating=1,generated=1,rejected=1,expired=1},
  generating={queued=1,generated=1,rejected=1},
  generated={rejected=1}
 }

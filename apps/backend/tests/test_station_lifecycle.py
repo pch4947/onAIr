@@ -73,7 +73,10 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         await self.redis.hset(prefix + ':segments', 'old-segment', '{}')
         await self.redis.hset(prefix + ':replay-sessions', 'old-replay', json.dumps({'id': 'old-replay'}))
         request = await RequestStore(self.redis, self.sid).create('hello', 'user', 'story')
-        vod = self.publisher.directory / 'vod'
+        expired = await RequestStore(self.redis, self.sid).create('late', 'user', 'story')
+        await self.redis.hset(prefix + ':request-states', expired['id'],
+                              json.dumps(dict(request_id=expired['id'], state='expired')))
+        vod =self.publisher.directory / 'vod'
         vod.mkdir()
         (vod / 'recording.ts').write_bytes(b'audio')
         (self.publisher.directory / 'broadcast.sqlite').write_bytes(b'journal')
@@ -84,6 +87,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.redis.exists(f'archive:{self.record["generation"]}:{prefix}:queue'))
         self.assertEqual((vod / 'recording.ts').read_bytes(), b'audio')
         self.assertEqual((await RequestStore(self.redis, self.sid).get(request['id']))['status'], 'failed')
+        self.assertEqual((await RequestStore(self.redis, self.sid).get(expired['id']))['status'], 'expired')
         self.assertTrue(await self.redis.hexists(prefix + ':segments', 'old-segment'))
         self.assertEqual(json.loads(await self.redis.hget(prefix + ':replay-sessions', 'old-replay'))['ownerId'], 'owner')
         self.assertFalse(await self.redis.exists(f'engine:{self.sid}:in'))
