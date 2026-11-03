@@ -53,9 +53,11 @@ class QuoteSelector:
         situation = self.situation(arrivals)
         scored = []
         for req in items:
-            if not self._eligible(req, situation, last_requester):
+            if not self._eligible(req, situation):
                 continue
             scored.append((self._score(req, topic_words), req))
+        # 연속 금지는 다른 사람이 있을 때만 — 혼자 채팅하는 방에서 영영 인용되지 않으면 안 된다
+        scored = [pair for pair in scored if pair[1].requester_ref != last_requester] or scored
         scored.sort(key=lambda pair: pair[0], reverse=True)
 
         picked: list[ListenerRequest] = []
@@ -81,10 +83,10 @@ class QuoteSelector:
         if count > 0:
             self._quoted_counts[req.requester_ref] = count - 1
 
-    def _eligible(self, req: ListenerRequest, situation: str, last_requester: str | None) -> bool:
+    def _eligible(self, req: ListenerRequest, situation: str) -> bool:
         if situation == "flood" and req.chat_type != ChatType.REACTION:
             return False
-        if req.requester_ref == last_requester or len(req.body) > self.max_quote_chars:
+        if len(req.body) > self.max_quote_chars:
             return False
         if len(_READABLE.findall(req.body)) < _MIN_READABLE_CHARS:
             return False
