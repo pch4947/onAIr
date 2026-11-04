@@ -52,7 +52,7 @@ export function LoginPage() {
           <h2 className="text-[28px] font-bold text-text">로그인</h2>
 
           {signupEmail && (
-            <p className="rounded-md bg-[#ebf2ff] px-3.5 py-2.5 text-xs font-medium text-primary">
+            <p className="rounded-md bg-primary-soft px-3.5 py-2.5 text-xs font-medium text-primary">
               회원가입이 완료되었어요. 로그인해주세요.
             </p>
           )}

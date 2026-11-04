@@ -99,7 +99,7 @@ export function NotificationCollection() {
             onClick={() => handleClick(item)}
             className={
               item.isUnread
-                ? 'flex cursor-pointer items-center justify-between gap-4 rounded-md border border-[#bad1fa] bg-[#ebf2ff] px-4 py-3.5'
+                ? 'flex cursor-pointer items-center justify-between gap-4 rounded-md border border-primary-soft-border bg-primary-soft px-4 py-3.5'
                 : 'flex cursor-pointer items-center justify-between gap-4 rounded-md border border-field-border bg-field-bg px-4 py-3.5'
             }
           >
