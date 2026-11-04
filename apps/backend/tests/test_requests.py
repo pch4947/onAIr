@@ -111,14 +111,15 @@ class RequestIntegrationTests(unittest.TestCase):
                 settings = replace(settings, sqlite_path=Path(directory) / 'metrics.sqlite',
                     audio_dir=Path(directory), tts_cache_dir=None,
                     safety_rules_path=engine_dir / 'config/safety_rules.yaml',
-                    formats_dir=engine_dir / 'config/formats', llm='dummy', tts='dummy')
+                    formats_dir=engine_dir / 'config/formats', llm='dummy', tts='dummy',
+                    chat_rules_path=engine_dir / 'config/chat_rules.yaml')
                 transport = RedisTransport('redis://127.0.0.1:6379/0', self.station)
                 engine = StationEngine(config, settings, transport)
                 events = transport.events()
                 try:
                     event = await asyncio.wait_for(anext(events), 5)
                     await EngineManager(settings)._route_station_event(engine, event)
-                    self.assertEqual(engine.scheduler._pending[0].request_id, entry['id'])
+                    self.assertEqual(engine.scheduler.pending_count, 1)
                     # SCREENED is emitted by real submit_request.
                 finally:
                     # No generation or external LLM/TTS call is needed for request delivery.

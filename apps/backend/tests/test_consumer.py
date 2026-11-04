@@ -116,7 +116,8 @@ class ConsumerIntegrationTests(unittest.IsolatedAsyncioTestCase):
                            audio_dir=self.settings.audio_dir, tts_cache_dir=None,
                            sqlite_path=self.settings.audio_dir / "metrics.sqlite",
                            safety_rules_path=engine_dir / "config/safety_rules.yaml",
-                           formats_dir=engine_dir / 'config/formats')
+                           formats_dir=engine_dir / 'config/formats',
+                           chat_rules_path=engine_dir / 'config/chat_rules.yaml')
         await asyncio.wait_for(EngineManager(settings).run_local(config, max_segments=1), 30)
         batches = await self.redis.xreadgroup(GROUP, self.consumer.name, {self.consumer.stream: ">"})
         self.assertTrue(batches)
