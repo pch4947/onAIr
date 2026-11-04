@@ -41,7 +41,7 @@ onair-engine --config config/station.example.yaml --max-segments 6 --demo-reques
 - 생성된 대본은 `SCRIPT seg_xxx [코너] 대본...` 라인으로 함께 출력됩니다.
 - 방송 형식은 설정 파일 `station.format` 또는 `--format music|talk|news`로 고릅니다. 코너와 순환 틀은 [config/formats/](config/formats/)에 있습니다 — 코너를 고치거나 더할 때 코드는 건드리지 않습니다.
 - 데모 요청은 채팅 인용을 허용하는 첫 단계(사연토크면 오프닝의 코너 예고)에서 인용됩니다. 뉴스 형식은 청취자 입력을 방송에 반영하지 않습니다.
-- 사연 코너(게시판 사연)·문자 소개(사연 보내기)는 M4, DJ 대 청취자 게임(투표)은 M5부터 진행됩니다. 그 전에는 사연 코너가 주제 토크로 대체되고 나머지는 건너뜁니다. 뉴스 형식은 RSS 수집(M2 미구현)이 붙어야 기사 코너가 나갑니다.
+- 사연 코너(게시판 사연)·문자 소개(사연 보내기)는 M4, DJ 대 청취자 게임(투표)은 M5부터 진행됩니다. 그 전에는 사연 코너가 주제 토크로 대체되고 나머지는 건너뜁니다. 뉴스 형식은 [config/news_feeds.yaml](config/news_feeds.yaml)의 RSS 피드에서 호스트가 고른 분야만 수집합니다. 수집에 실패하면 기사 코너를 건너뜁니다. 피드를 넣기 전에 매체의 이용 조건을 확인하세요.
 
 ### 더미 대본을 실제 음성으로 듣기
 
@@ -263,7 +263,7 @@ src/onair_engine/
 ├── pipeline/         # 프롬프트→LLM(L1)→인용 검사→L2→TTS→패키징, 더미 어댑터 포함
 ├── glue.py           # 접착 요소(코너 콜·마무리) 사전 렌더 — 기존 ack 캐시 대체
 ├── catalog.py        # 로컬 개발·테스트용 더미 곡 목록 (곡 선정은 백엔드 — track.queued)
-├── sources/rss.py    # RSS 수집기 (M2 실구현)
+├── sources/rss.py    # RSS 수집기 — 분야별 주기 폴링, 메모리 캐시
 ├── transport.py      # 백엔드 어댑터 (stdout 더미 / redis는 계약 확정 후)
 └── telemetry.py      # SQLite 계측 (generation_log, request_log, decision_log, corner_log)
 ```

@@ -370,10 +370,10 @@ class Scheduler:
 
     def _admit(self, entry: ClockEntry) -> ClockEntry | None:
         """진입 조건(requires)을 못 채우면 대체 코너로, 대체도 없으면 이번 차례를 건너뛴다."""
-        if self.sources.satisfies(entry.corner):
+        if self.sources.satisfies(entry.corner, entry.label):
             return entry
         fallback = entry.corner.fallback
-        if fallback and self.sources.satisfies(self.fmt.corner(fallback)):
+        if fallback and self.sources.satisfies(self.fmt.corner(fallback), entry.label):
             self.telemetry.log_corner(entry.corner.corner_type, entry.label, "fallback",
                                       self._produced_ms)
             return ClockEntry(self.fmt.corner(fallback), entry.label)

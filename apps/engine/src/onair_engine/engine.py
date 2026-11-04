@@ -22,7 +22,7 @@ from .pipeline.pipeline import GenerationPipeline
 from .pipeline.safety import SafetyChecker
 from .pipeline.tts import make_tts
 from .scheduler.scheduler import Scheduler
-from .sources.rss import RssCollector
+from .sources.rss import Feed, RssCollector, load_news_feeds
 from .telemetry import Telemetry
 from .transport import Transport
 
@@ -39,6 +39,7 @@ class EngineSettings:
     sqlite_path: Path = field(default_factory=lambda: Path("var/engine_metrics.sqlite"))
     safety_rules_path: Path = field(default_factory=lambda: Path("config/safety_rules.yaml"))
     chat_rules_path: Path = field(default_factory=lambda: Path("config/chat_rules.yaml"))
+    news_feeds_path: Path = field(default_factory=lambda: Path("config/news_feeds.yaml"))
     formats_dir: Path = field(default_factory=lambda: Path("config/formats"))  # 형식·코너 정의
     llm: str = "dummy"
     llm_model: str | None = None  # None이면 어댑터 기본 모델 (openai는 필수)
@@ -84,6 +85,7 @@ class StationEngine:
             clock = Clock(fmt, main_corners=config.corners, sections=config.news_sections)
             intensity = fmt.intensity[config.intensity]
             chat_rules = load_chat_rules(settings.chat_rules_path)
+            news_feeds = load_news_feeds(settings.news_feeds_path) if fmt.format == "news" else None
         except (ValueError, TypeError, KeyError, OSError) as exc:
             raise StationRejected("invalid_payload", f"형식 설정: {exc}"[:300]) from exc
         try:
@@ -113,8 +115,18 @@ class StationEngine:
             recent_segments=config.recent_segments,
         )
         self.tracks = TrackSource(Catalog(), dummy=settings.dummy_tracks)
+        self.rss = RssCollector()
+        if news_feeds is not None:
+            # 호스트가 고른 분야만 폴링한다. section은 코너의 label(분야 이름)과 맞춘다
+            self.rss = RssCollector(
+                feeds=[Feed(entry.source, entry.url, fmt.section_names.get(code, code))
+                       for code in config.news_sections or fmt.default_sections
+                       for entry in news_feeds.feeds.get(code, [])],
+                poll_sec=news_feeds.poll_sec, max_age_sec=news_feeds.max_age_hours * 3600,
+                violates=safety.check_l0,
+            )
         self.sources = MaterialSources(
-            tracks=self.tracks, rss=RssCollector(),
+            tracks=self.tracks, rss=self.rss,
             inbox=MessageInbox(max_chars=chat_rules.message_max_chars, violates=safety.check_l2),
             stories=StoryPool(topic_words=keywords(self.topic), violates=safety.check_l2),
         )
@@ -141,6 +153,8 @@ class StationEngine:
         return self.config.topic or self.config.profile.concept
 
     async def run(self, max_segments: int | None = None) -> None:
+        # 수집은 사전 렌더링과 동시에 시작한다 — 방송 시작을 피드 시간만큼 더 늦추지 않는다
+        poller = asyncio.create_task(self.rss.run()) if self.rss.feeds else None
         try:
             # 접착 요소는 방송 시작 전에 이 스테이션의 보이스로 사전 렌더링한다 (설계 문서 4.5)
             try:
@@ -151,10 +165,15 @@ class StationEngine:
                     "detail": f"접착 요소 사전 렌더링 실패: {exc}"[:300],
                 })
                 raise StationRejected("tts_unavailable", str(exc)) from exc
+            if poller is not None:
+                await self.rss.ready.wait()  # 수집이 실패해도 방송은 시작한다 — 뉴스 코너만 건너뛴다
             await self.transport.notify_station("station.started", {"topic": self.topic})
             self.telemetry.log_station("station.started", {"topic": self.topic})
             await self.scheduler.run(self._stop, max_segments=max_segments)
         finally:
+            if poller is not None:
+                poller.cancel()
+                await asyncio.gather(poller, return_exceptions=True)
             self.telemetry.close()
 
     def stop(self) -> None:
