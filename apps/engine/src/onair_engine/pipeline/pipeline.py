@@ -30,7 +30,7 @@ from ..prompt_data import RECENT, data_block
 from ..telemetry import Telemetry
 from .llm import REJECT, DummyLlmClient, LlmClient
 from .safety import SafetyChecker
-from .tts import TtsClient
+from .tts import TtsClient, TtsQuotaError
 
 _ATTEMPTS = 2  # 최초 1회 + 재시도 1회
 # 인용 검사 — 채팅 글자 bigram 중 이만큼이 대본에 있으면 인용한 것으로 본다 [예시].
@@ -71,6 +71,11 @@ class GenerationPipeline:
         self._fallback_llm = DummyLlmClient(delay_sec=0)
         # 방송 맥락 = 최근 N개 대본 (확인 10). 실 LLM이 매번 같은 인사로 시작하지 않게 한다
         self._recent: deque[str] = deque(maxlen=recent_segments)
+
+    @property
+    def tts_blocked_until(self) -> float:
+        """TTS 한도 초과로 호출하지 않는 시각까지. 그동안 생성해도 합성할 수 없다."""
+        return getattr(self.tts, "blocked_until", 0.0)
 
     async def run(self, job: GenerationJob) -> SegmentSubmission | None:
         """성공 시 제출 페이로드, REJECT 시 None.
@@ -152,6 +157,7 @@ class GenerationPipeline:
 
         곡 소개였다면 곡(music_ref)은 그대로 싣는다 — 백엔드는 이 멘트 뒤에 곡을 튼다.
         """
+        job.provider_failed = True
         filler = GenerationJob(job_id=job.job_id, corner_type="filler", step="filler",
                                material=Material(track=job.material.track),
                                priority=job.priority)
@@ -172,7 +178,7 @@ class GenerationPipeline:
                 return await call()
             except Exception as exc:
                 self._log(job, stage, started, time.time(), "error")
-                if attempt == _ATTEMPTS - 1:
+                if attempt == _ATTEMPTS - 1 or isinstance(exc, TtsQuotaError):  # 한도는 재시도해도 같다
                     raise
                 logger.warning("RETRY %s %s %s: %r", stage, job.job_id, job.corner_type, exc)
         raise AssertionError("unreachable")

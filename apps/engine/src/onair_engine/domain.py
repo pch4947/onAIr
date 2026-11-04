@@ -155,6 +155,7 @@ class GenerationJob:
     plain: bool = False  # 주관 표현 금지 코너 — persona의 유머·입버릇을 끈다 (CORNER_DESIGN 6.4절)
     anchor: Anchor | None = None  # 이 세그먼트가 다루는 것 — 제출 페이로드에는 싣지 않는다
     script_chars: int = 0  # 대본 글자 수 — 인용 점유율 원시 값. 파이프라인이 채운다
+    provider_failed: bool = False  # LLM·TTS 장애로 대체됐다 — 인용한 입력의 잘못이 아니다
 
 
 @dataclass
@@ -194,7 +195,7 @@ class ScheduleContext:
 class Decision:
     """편성 관리자의 출력. 무엇을 만들었는지와 어떤 청취자 입력을 넣었는지 기록한다."""
 
-    action: str  # "generate" | "glue" | "wait" | "idle"(엔딩까지 끝남)
+    action: str  # "generate" | "glue" | "wait" | "tts_blocked"(한도 초과) | "idle"(엔딩까지 끝남)
     corner_type: str | None = None
     step: str | None = None
     quotes: list[str] = field(default_factory=list)  # 이 멘트에 넣은 입력의 request_id

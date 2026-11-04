@@ -146,7 +146,7 @@ onair-engine --llm claude --tts google --transport redis --demo-request "요즘 
 - 대본은 그대로 TTS에 들어가므로 시스템 프롬프트가 마크다운·이모지·지문·화자 표기를 금지하고, 새어 나온 것은 `clean_script`가 지웁니다. 출력 한도에서 잘리면 마지막 완결 문장까지만 씁니다.
 - 부적합 판단(L1)은 `REJECT`로 통일합니다. 제공자 안전 필터 차단(Gemini `blockReason`, Claude `refusal`)도 같게 다룹니다.
 - 최근 N개 대본(`context.recent_segments`)을 시스템 프롬프트에 붙여 같은 인사·표현 반복을 막습니다.
-- **실패 처리**: LLM/TTS 호출은 1회 재시도하고, 재실패하면 더미의 고정 filler 대본으로 대체해 방송을 잇습니다(곡 소개였다면 곡 `music_ref`는 그대로 싣습니다). 인용한 요청이 대체되거나 대본에 인용이 빠지면 요청을 `queued`로 한 번 되돌리고, 또 실패하면 `rejected`로 통보합니다. 계측 `generation_log`에 `error`/`fallback`/`quote` 단계가 남습니다.
+- **실패 처리**: LLM/TTS 호출은 1회 재시도하고, 재실패하면 더미의 고정 filler 대본으로 대체해 방송을 잇습니다(곡 소개였다면 곡 `music_ref`는 그대로 싣습니다). 제공자 장애로 인용이 대체된 요청은 `queued`로 되돌리고 창이 지나면 `expired`로 끝납니다. 대본에 인용이 빠지면 한 번 되돌리고, 또 빠지면 `rejected`로 통보합니다. Gemini TTS가 429를 주면 재시도하지 않고, 안내된 시간까지 TTS와 LLM을 호출하지 않습니다(`decision_log`의 `tts_blocked`). 계측 `generation_log`에 `error`/`fallback`/`quote` 단계가 남습니다.
 - **제출 순서**: 생성은 병렬(`max_concurrent_generations`)이지만 제출은 편성 순서대로 합니다 — 코너 콜이 앞 코너의 마지막 멘트보다 먼저 나가지 않습니다.
 
 ### DJ persona

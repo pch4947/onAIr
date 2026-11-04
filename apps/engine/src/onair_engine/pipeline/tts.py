@@ -9,7 +9,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import os
+import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,6 +23,8 @@ from typing import Protocol
 import mutagen
 
 from .. import __version__
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_EDGE_VOICE = "ko-KR-SunHiNeural"
 DEFAULT_GOOGLE_VOICE = "ko-KR-Chirp3-HD-Aoede"
@@ -265,6 +270,32 @@ def _gemini_key(api_key: str | None) -> str:
     return api_key
 
 
+class TtsQuotaError(RuntimeError):
+    """제공자 한도 초과(429) — retry_after초 동안은 다시 호출해도 소용없다."""
+
+    def __init__(self, message: str, retry_after: float):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+_RETRY_IN = re.compile(r"retry in\s+((?:[\d.]+\s*[hms](?![a-z])\s*)+)", re.IGNORECASE)
+_RETRY_PART = re.compile(r"([\d.]+)\s*([hms])", re.IGNORECASE)
+_UNIT_SEC = {"h": 3600, "m": 60, "s": 1}
+
+
+def _quota_wait_sec(retry_after: str | None, detail: str) -> float:
+    """429 뒤 기다릴 시간. Retry-After 헤더 → 본문의 'retry in 23s' → 한도 단위별 기본값 순서로 본다."""
+    try:
+        if retry_after:
+            return max(1.0, float(retry_after))
+    except ValueError:  # 날짜 형식 헤더 — 본문으로 판단한다
+        pass
+    if match := _RETRY_IN.search(detail):
+        total = sum(float(n) * _UNIT_SEC[unit.lower()] for n, unit in _RETRY_PART.findall(match[1]))
+        return max(1.0, total)
+    return 3600.0 if "per day" in detail else 60.0
+
+
 def _gemini_request(url: str, api_key: str, timeout: float, body: dict | None = None) -> dict:
     """body가 있으면 POST(JSON), 없으면 GET. 응답 JSON을 돌려준다."""
     data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
@@ -279,6 +310,9 @@ def _gemini_request(url: str, api_key: str, timeout: float, body: dict | None = 
     except urllib.error.HTTPError as exc:
         # 400(보이스 ID 오류)·403(키)·429(한도)의 원인은 응답 본문에 있다
         detail = exc.read().decode("utf-8", "replace")[:300]
+        if exc.code == 429:
+            raise TtsQuotaError(f"gemini TTS 429: {detail}",
+                                _quota_wait_sec(exc.headers.get("Retry-After"), detail)) from exc
         raise RuntimeError(f"gemini TTS {exc.code}: {detail}") from exc
 
 
@@ -309,16 +343,25 @@ class GeminiTtsClient:
         self._endpoint = f"{base_url.rstrip('/')}/interactions"
         self._timeout = timeout
         self.cache_namespace = f"gemini/{model}/{voice}"
+        self.blocked_until = 0.0  # 한도 초과로 호출하지 않는 시각까지 — 스케줄러도 이 값을 본다
 
     async def synthesize(self, text: str, out_path: Path) -> int:
+        wait = self.blocked_until - time.time()
+        if wait > 0:
+            raise TtsQuotaError(f"gemini TTS 한도 초과로 {wait:.0f}초 동안 호출하지 않습니다", wait)
         body = {
             "model": self.model,
             "input": [{"type": "user_input", "content": [{"type": "text", "text": text}]}],
             "response_format": {"type": "audio"},
             "generation_config": {"speech_config": [{"voice": self.voice}]},
         }
-        payload = await asyncio.to_thread(_gemini_request, self._endpoint, self._api_key,
-                                          self._timeout, body)
+        try:
+            payload = await asyncio.to_thread(_gemini_request, self._endpoint, self._api_key,
+                                              self._timeout, body)
+        except TtsQuotaError as exc:
+            self.blocked_until = time.time() + exc.retry_after
+            logger.warning("TTS_QUOTA_BLOCKED %s %.0fs", self.model, exc.retry_after)
+            raise
         audio = _gemini_audio(payload)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_bytes(audio)

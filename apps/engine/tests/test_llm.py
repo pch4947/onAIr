@@ -1,7 +1,9 @@
 """LLM 어댑터와 실패 처리 — 로컬 HTTP 서버로 REST 형식을 확인한다 (실제 API 호출 없음)."""
 import asyncio
 import json
+import sqlite3
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -30,7 +32,7 @@ from onair_engine.pipeline.llm import (
 )
 from onair_engine.pipeline.pipeline import GenerationPipeline
 from onair_engine.pipeline.safety import SafetyChecker
-from onair_engine.pipeline.tts import make_tts
+from onair_engine.pipeline.tts import TtsQuotaError, make_tts
 from onair_engine.telemetry import Telemetry
 
 RULES = Path(__file__).resolve().parent.parent / "config" / "safety_rules.yaml"
@@ -212,7 +214,7 @@ def test_pipeline_feeds_recent_scripts_back_as_context(tmp_path):
     assert "실제 대본" not in llm.prompts[2].user
 
 
-def test_failed_request_is_requeued_once_then_rejected(tmp_path):
+def _engine_with_capture(tmp_path, llm):
     config = StationConfig(station_id="st_test", profile=PROFILE, broadcast_minutes=30)
     settings = EngineSettings(audio_dir=tmp_path / "audio",
                               sqlite_path=tmp_path / "metrics.sqlite", safety_rules_path=RULES,
@@ -233,23 +235,86 @@ def test_failed_request_is_requeued_once_then_rejected(tmp_path):
 
     transport = Capture()
     engine = StationEngine(config, settings, transport)
-    engine.scheduler.pipeline.llm = FlakyLlm(fail_times=99)  # 제공자 전면 장애
+    engine.scheduler.pipeline.llm = llm
     # 인용 간 최소 간격을 없애 되돌린 요청이 바로 다음 인용 차례에 다시 들어가게 한다
     engine.scheduler.intensity = engine.scheduler.intensity.model_copy(update={"quote_gap_sec": 0})
+    return engine, transport
 
+
+def _quote_run(engine) -> ListenerRequest:
     async def scenario() -> ListenerRequest:
         req = await engine.submit_request("story", "요즘 잠이 안 와요", "tester")
         await engine.run(max_segments=8)
         return req
 
-    req = asyncio.run(scenario())
+    return asyncio.run(scenario())
+
+
+def test_provider_failure_requeues_without_rejecting_the_request(tmp_path):
+    engine, transport = _engine_with_capture(tmp_path, FlakyLlm(fail_times=99))  # 제공자 전면 장애
+    req = _quote_run(engine)
     states = [s for rid, s in transport.states if rid == req.request_id]
-    assert states[-1] == RequestState.REJECTED
-    assert states.count(RequestState.QUEUED) == 1  # 되돌림은 한 번
-    assert RequestState.GENERATED not in states
+    assert RequestState.REJECTED not in states and RequestState.GENERATED not in states
+    assert states.count(RequestState.QUEUED) >= 2  # 입력 탓이 아니므로 몇 번이든 되돌린다
     # 요청별 접수 확인(ack)은 없다 (CORNER_DESIGN D5). 사전 렌더 접착 요소 외에는 전부 대체 filler다
     assert all(s.kind == SegmentKind.FILLER for s in transport.segments
                if "/glue/" not in s.audio_ref), "장애 중에도 filler로 방송은 이어진다"
+
+
+def test_missing_quote_is_requeued_once_then_rejected(tmp_path):
+    engine, transport = _engine_with_capture(tmp_path, FlakyLlm(fail_times=0))  # 대본에 채팅이 없다
+    req = _quote_run(engine)
+    states = [s for rid, s in transport.states if rid == req.request_id]
+    assert states[-1] == RequestState.REJECTED
+    assert states.count(RequestState.QUEUED) == 1  # 되돌림은 한 번
+
+
+def test_scheduler_does_not_generate_while_tts_is_blocked(tmp_path):
+    llm = FlakyLlm(fail_times=0)
+    engine, transport = _engine_with_capture(tmp_path, llm)
+    scheduler = engine.scheduler
+    scheduler.pipeline.tts._inner.blocked_until = time.time() + 0.3
+
+    async def scenario():
+        req = await engine.submit_request("story", "요즘 잠이 안 와요", "tester")
+        task = asyncio.create_task(scheduler.run(asyncio.Event(), max_segments=3))
+        await asyncio.sleep(0.1)
+        during = (len(llm.prompts), len(transport.segments), scheduler.pending_count)
+        await task
+        return req, during
+
+    req, during = asyncio.run(scenario())
+    assert during == (0, 0, 1)
+    assert llm.prompts, "한도가 풀리면 다시 생성한다"
+    assert (req.request_id, RequestState.REJECTED) not in transport.states
+    engine.telemetry.close()
+    db = sqlite3.connect(tmp_path / "metrics.sqlite")
+    actions = [json.loads(d)["action"] for (d,) in db.execute("SELECT decision_json FROM decision_log")]
+    db.close()
+    assert actions[0] == "tts_blocked"
+
+
+class QuotaTts:
+    file_ext = ".wav"
+    cache_namespace = "quota"
+
+    def __init__(self):
+        self.calls = 0
+
+    async def synthesize(self, text, out_path):
+        self.calls += 1
+        raise TtsQuotaError("gemini TTS 429: per day", 3600.0)
+
+
+def test_pipeline_does_not_retry_tts_quota_errors(tmp_path):
+    tts = QuotaTts()
+    pipeline = _pipeline(tmp_path, FlakyLlm(fail_times=0))
+    pipeline.tts = tts
+    job = _opening_job()
+    with pytest.raises(RuntimeError, match="filler"):
+        asyncio.run(pipeline.run(job))
+    assert tts.calls == 2  # 원래 멘트 1번, filler 1번 — 각각 재시도하지 않는다
+    assert job.provider_failed
 
 
 def _openai_reply(content, finish_reason="stop", refusal=None):

@@ -36,6 +36,10 @@ class CachedTts:
         self.hits = 0
         self.misses = 0
 
+    @property
+    def blocked_until(self) -> float:
+        return getattr(self._inner, "blocked_until", 0.0)
+
     async def synthesize(self, text: str, out_path: Path) -> int:
         text = normalize_for_tts(text)  # 캐시 키도 정규화된 텍스트 기준이다
         out_path = Path(out_path)

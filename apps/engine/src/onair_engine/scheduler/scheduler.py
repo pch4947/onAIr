@@ -45,7 +45,8 @@ from ..telemetry import Telemetry
 from ..transport import Transport
 
 _IDLE_SLEEP_SEC = 0.5
-_MAX_REQUEST_FAILURES = 2  # 생성 실패한 요청은 한 번 다시 큐에 넣고, 또 실패하면 거절한다
+_MAX_REQUEST_FAILURES = 2  # 인용이 빠진 요청은 한 번 다시 큐에 넣고, 또 빠지면 거절한다
+_TTS_BLOCKED_SLEEP_SEC = 5.0
 # 백엔드는 backpressure를 약 10초마다 보낸다. 세 번 연속 못 받으면 백엔드가 멈춘 것으로 보고 자체 추정으로 돌아간다
 _BACKEND_REPORT_TTL_SEC = 30.0
 # 클락이 코너를 연달아 이만큼 건너뛰면(전부 진입 조건 미달) 지금은 낼 것이 없다고 보고 기다린다.
@@ -230,6 +231,11 @@ class Scheduler:
                 break
             await self._expire_inputs(time.time())
             ctx = self._snapshot()
+            blocked_sec = self.pipeline.tts_blocked_until - ctx.now
+            if blocked_sec > 0:  # 합성할 수 없으니 LLM도 부르지 않는다. 입력은 창이 지나면 만료된다
+                self.telemetry.log_decision(ctx, Decision(action="tts_blocked"))
+                await asyncio.sleep(min(blocked_sec, _TTS_BLOCKED_SLEEP_SEC))
+                continue
             if (ctx.inflight_generations >= self.max_concurrent
                     or ctx.generated_buffer_sec >= self.target_buffer_sec):
                 self.telemetry.log_decision(ctx, Decision(action="wait"))
@@ -423,7 +429,7 @@ class Scheduler:
                         self._quoted[sub.id] = (req, job)
                         await self._transition(req, RequestState.GENERATED)
                     else:  # 인용이 빠졌거나 제공자 장애로 filler 대체됨 — 반영되지 않았다
-                        await self._requeue_or_reject(req)
+                        await self._requeue_or_reject(req, job)
         except Exception:
             # 생성 태스크는 아무도 await하지 않으므로 여기서 기록하지 않으면 실패가 사라진다.
             # 파이프라인이 재시도·filler 대체까지 했는데도 실패한 경우다 (TTS 전면 장애 등)
@@ -431,18 +437,19 @@ class Scheduler:
             sub = None
             for req in job.material.quotes:
                 if req.state == RequestState.GENERATING:
-                    await self._requeue_or_reject(req)
+                    await self._requeue_or_reject(req, job)
         finally:
             self._inflight -= 1
             # 실패해도 순번은 비워야 뒤 순번이 나간다. 곡 길이는 백엔드가 실제로 틀 곡(music_ref)만 센다
             track_ms = int((job.material.track or {}).get("duration_ms") or 0)
             await self._complete(seq, sub, track_ms if sub and sub.music_ref else 0, job.anchor)
 
-    async def _requeue_or_reject(self, req: ListenerRequest) -> None:
+    async def _requeue_or_reject(self, req: ListenerRequest, job: GenerationJob) -> None:
         self.selector.forget(req)
         if self._last_requester == req.requester_ref:  # 인용이 나가지 않았으니 연속 금지에 걸지 않는다
             self._last_requester = None
-        failures = self._failures.get(req.request_id, 0) + 1
+        # 제공자 장애는 입력 탓이 아니다 — 세지 않고 되돌려, 창이 지나면 만료되게 둔다
+        failures = self._failures.get(req.request_id, 0) + (0 if job.provider_failed else 1)
         self._failures[req.request_id] = failures
         if failures >= _MAX_REQUEST_FAILURES:
             await self._transition(req, RequestState.REJECTED)
