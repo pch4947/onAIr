@@ -16,12 +16,12 @@ from typing import Annotated, Literal
 from urllib.parse import parse_qs, urlsplit
 
 from fastapi import APIRouter, Header, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from redis.exceptions import RedisError
 
 from .messaging.contracts import Segment, validate_audio
 from .stations import User
-from .streaming.tracks import REGISTER
+from .streaming.tracks import MUSIC_SEGMENT_PREFIX, REGISTER
 
 router = APIRouter(prefix='/api/stations')
 logger = logging.getLogger(__name__)
@@ -180,12 +180,24 @@ class TrackInput(BaseModel):
     url: str = Field(max_length=2048)
     source: Literal['playlist', 'request', 'vote'] = 'playlist'
     request_id: str | None = Field(default=None, min_length=1, max_length=128)
+    comment: str | None = Field(default=None, max_length=60)
 
     @field_validator('url')
     @classmethod
     def validate_url(cls, value):
         youtube_id(value)
         return value
+
+    @field_validator('comment')
+    @classmethod
+    def clean_comment(cls, value):
+        return (value or '').strip() or None
+
+    @model_validator(mode='after')
+    def comment_needs_song_request(self):
+        if self.comment and (self.source != 'request' or self.request_id is not None):
+            raise ValueError('comment is only valid for a song request')
+        return self
 
 
 # Validate key types before any write: Lua errors do not roll back earlier writes.
@@ -208,6 +220,11 @@ redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
 if ARGV[10] and ARGV[10] ~= '' then
  redis.call('HSET', KEYS[10], ARGV[1], ARGV[10])
  redis.call('RPUSH', KEYS[11], cjson.encode({state='requested', at=tonumber(ARGV[7]), source='api', accepted=true}))
+end
+-- The engine attaches the comment when track.queued arrives, so it must be sent first.
+if ARGV[11] and ARGV[11] ~= '' then
+ redis.call('XADD', KEYS[7], '*', 'type', 'request.arrived', 'contract_version', '1',
+  'event_id', 'evt_comment_' .. ARGV[1], 'station_id', ARGV[6], 'at', ARGV[7], 'payload', ARGV[11])
 end
 """ + REGISTER + "return ARGV[3]"
 
@@ -309,14 +326,14 @@ class MusicService:
             manifest.write_text(json.dumps(metadata), encoding='utf-8')
         return audio, metadata
 
-    async def enqueue(self, video_id, owner, retry_key, source='playlist', request_id=None, nickname=None):
+    async def enqueue(self, video_id, owner, retry_key, source='playlist', request_id=None, nickname=None, comment=None):
         station_raw = await self.redis.get(self.prefix + ':station')
         station = json.loads(station_raw) if station_raw else {}
         generation = station.get('generation', '')
         created_at = station.get('created_at')
         # A reused client key in a new broadcast must not inherit an old PLAYED state.
         scope = f'{generation}:' if generation else ''
-        segment_id = 'music_' + hashlib.sha256(f'{scope}{owner}:{retry_key}'.encode()).hexdigest()
+        segment_id = MUSIC_SEGMENT_PREFIX + hashlib.sha256(f'{scope}{owner}:{retry_key}'.encode()).hexdigest()
         async def existing():
             raw = await self.redis.hget(self.prefix + ':music-submissions', segment_id)
             if raw:
@@ -357,6 +374,13 @@ class MusicService:
                     createdAt=datetime.now(timezone.utc).isoformat(timespec='milliseconds'))
             if request_id:
                 event['request_id'] = request_id
+            arrived = None
+            if song_request_id and comment:
+                # Not stored on the public request entry: the engine has not screened it yet.
+                arrived = dict(request_id=song_request_id, kind='song_request', body=comment,
+                               requester_ref=owner, track=event_track)
+                if nickname:
+                    arrived['nickname'] = nickname
             async with asyncio.timeout(3):
                 raw = await self.redis.eval(ENQUEUE, 11, self.prefix + ':music-submissions',
                     self.prefix + ':segments', self.prefix + ':queue', self.prefix + ':station',
@@ -366,7 +390,8 @@ class MusicService:
                     segment_id, json.dumps(segment.model_dump(), sort_keys=True, ensure_ascii=False),
                     json.dumps(result), owner, json.dumps(event), self.settings.station_id, str(time.time()),
                     generation, str(created_at) if created_at is not None else '',
-                    json.dumps(entry, ensure_ascii=False) if entry else '')
+                    json.dumps(entry, ensure_ascii=False) if entry else '',
+                    json.dumps(arrived, ensure_ascii=False) if arrived else '')
             if raw == 'unavailable':
                 raise HTTPException(409, 'Station is no longer started')
             return json.loads(raw)
@@ -395,7 +420,7 @@ async def enqueue_track(station_id: str, body: TrackInput, request: Request, use
         if body.source == 'playlist' and body.request_id is None:
             return await request.app.state.music.enqueue(youtube_id(body.url), user['id'], idempotency_key)
         return await request.app.state.music.enqueue(youtube_id(body.url), user['id'], idempotency_key,
-                                                     body.source, body.request_id, user.get('name'))
+                                                     body.source, body.request_id, user.get('name'), body.comment)
     except RedisError:
         raise HTTPException(503, 'Redis unavailable; retry with the same Idempotency-Key') from None
     except TimeoutError:

@@ -79,6 +79,16 @@ class ConsumerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await self.consumer.handle(entry_id, fields)
         return entry_id, fields
 
+    async def test_engine_state_does_not_settle_song_request(self):
+        for state in ('screened', 'rejected', 'expired'):
+            await self.deliver({"request_id": "music_one", "state": state}, "request.state")
+        self.assertIsNone(await self.redis.hget(self.consumer.prefix + ":request-states", "music_one"))
+        history = [json.loads(row) for row in await self.redis.lrange(
+            self.consumer.prefix + ":request-history:music_one", 0, -1)]
+        self.assertEqual([(row['state'], row['accepted']) for row in history],
+                         [('screened', False), ('rejected', False), ('expired', False)])
+        self.assertEqual((await self.redis.xpending(self.consumer.stream, GROUP))["pending"], 0)
+
     async def test_glue_shared_file_and_duplicate_delivery(self):
         root = self.settings.audio_dir / self.station
         root.mkdir()

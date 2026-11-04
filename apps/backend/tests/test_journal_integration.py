@@ -54,6 +54,32 @@ class JournalIntegrationTests(unittest.IsolatedAsyncioTestCase):
                     await client.delete(*keys)
             await client.aclose()
 
+    async def test_song_request_is_settled_by_its_audio_not_its_introduction(self):
+        station = 'st_song_' + uuid.uuid4().hex
+        prefix = f'backend:{station}'
+        client = Redis.from_url('redis://127.0.0.1:6379/0', decode_responses=True)
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                journal = Journal(Path(directory) / 'broadcast.sqlite', station)
+                try:
+                    intro = dict(id='seg_intro', kind='speech', corner_type='music_intro', request_ref='music_one')
+                    for state in ('MIXING', 'PUBLISHED', 'PLAYED'):
+                        journal.transition(intro, state)
+                    journal.transition({**intro, 'id': 'seg_bad'}, 'FAILED')
+                    await journal.flush(client)
+                    self.assertIsNone(await client.hget(prefix + ':request-states', 'music_one'))
+                    journal.transition(dict(id='music_one', kind='music', corner_type='music', request_ref='music_one'), 'PLAYED')
+                    await journal.flush(client)
+                    self.assertEqual(json.loads(await client.hget(prefix + ':request-states', 'music_one'))['state'], 'played')
+                finally:
+                    journal.close()
+        finally:
+            for pattern in (prefix + ':*', f'engine:{station}:*'):
+                keys = [key async for key in client.scan_iter(match=pattern)]
+                if keys:
+                    await client.delete(*keys)
+            await client.aclose()
+
     async def test_expired_request_is_terminal_and_not_pending(self):
         station = 'st_expired_' + uuid.uuid4().hex
         prefix = f'backend:{station}'

@@ -113,6 +113,23 @@ class TrackRedisTests(unittest.IsolatedAsyncioTestCase):
     async def events(self):
         return [fields for _, fields in await self.redis.xrange(f'engine:{self.station}:in')]
 
+    async def test_comment_reaches_engine_before_its_track_once(self):
+        row = {**segment('music'), 'id': 'music_one', 'station_id': self.station, 'music_ref': 'yt:one', 'request_ref': 'music_one'}
+        meta = dict(track=dict(track_ref='yt:one', title='one', artist='test', duration_ms=8000),
+                    source='request', request_id='music_one')
+        arrived = dict(request_id='music_one', kind='song_request', body='안녕', requester_ref='owner', track=meta['track'])
+        keys = [self.prefix + ':' + suffix for suffix in
+                ('music-submissions', 'segments', 'queue', 'station', 'tracks', 'track-plan')]
+        keys += [f'engine:{self.station}:in', self.prefix + ':playlist', self.prefix + ':playlist-order',
+                 self.prefix + ':requests', self.prefix + ':request-history:music_one']
+        for _ in range(2):
+            await self.redis.eval(ENQUEUE, 11, *keys, 'music_one', json.dumps(row), json.dumps({'segment_id': 'music_one'}),
+                                  'owner', json.dumps(meta), self.station, str(time.time()), '', '',
+                                  json.dumps(dict(id='music_one', kind='song_request')), json.dumps(arrived, ensure_ascii=False))
+        events = await self.events()
+        self.assertEqual([e['type'] for e in events], ['request.arrived', 'track.queued'])
+        self.assertEqual(json.loads(events[0]['payload']), arrived)
+
     async def test_replacement_freeze_and_idempotent_enqueue(self):
         await self.enqueue('one')
         await self.enqueue('one')

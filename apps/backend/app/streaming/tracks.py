@@ -1,5 +1,8 @@
 """Atomic track announcements and durable server-clock start delivery."""
 
+# A song request shares its ID with its music segment; only that audio settles its state.
+MUSIC_SEGMENT_PREFIX = 'music_'
+
 REGISTER = """
 local meta = cjson.decode(ARGV[5])
 redis.call('HSET', KEYS[5], ARGV[1], ARGV[5])

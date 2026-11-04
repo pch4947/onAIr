@@ -11,6 +11,7 @@ from redis.exceptions import RedisError, ResponseError
 
 from .contracts import Segment, StationStarted, StationRejected, decode, validate_audio
 from ..stations import StationStore
+from ..streaming.tracks import MUSIC_SEGMENT_PREFIX
 
 log = logging.getLogger(__name__)
 GROUP = "backend"
@@ -156,6 +157,11 @@ class EngineConsumer:
         elif isinstance(event, (StationStarted, StationRejected)):
             await StationStore(self.redis, self.settings.station_id).result(
                 fields['type'], event.model_dump(), float(fields['at']))
+        elif event.request_id.startswith(MUSIC_SEGMENT_PREFIX):
+            # The engine tracks the comment and introduction; the song's own audio decides its state.
+            await self.redis.rpush(self.prefix + ":request-history:" + event.request_id, json.dumps(dict(
+                state=event.state, at=fields['at'], event_id=fields['event_id'], source='engine',
+                accepted=False, reason='song_state_follows_playout')))
         else:
             # Source stream ID prevents older pending events overwriting newer states.
             await self.redis.eval(STATE, 3, self.prefix + ":request-versions",
