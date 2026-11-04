@@ -3,7 +3,7 @@ import json
 import sqlite3
 import time
 import uuid
-from .tracks import deliver_start
+from .tracks import MUSIC_SEGMENT_PREFIX, deliver_start
 
 
 DELIVER = """
@@ -89,7 +89,7 @@ class Journal:
             # Quotes can belong to any speech corner, not just request_reply.
             # Music requests are completed by their own audio, not by an unrelated introduction.
             ref = segment.get('request_ref')
-            request_id = ref if segment.get('kind') == 'speech' or (
+            request_id = ref if (segment.get('kind') == 'speech' and not (ref or '').startswith(MUSIC_SEGMENT_PREFIX)) or (
                 segment.get('kind') == 'music' and ref == segment.get('id')) else None
             self._enqueue('encoding.failed' if state == 'FAILED' else 'state.transition',
                           dict(segment_id=segment['id'], state=state, at=at), request_id or '', at)

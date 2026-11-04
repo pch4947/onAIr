@@ -19,7 +19,7 @@ from redis.asyncio import Redis
 from app.auth import get_current_user
 from app.config import Settings
 from app.main import create_app
-from app.music import MusicService, fetch_oembed_title, run_process, youtube_id
+from app.music import MusicService, TrackInput, fetch_oembed_title, run_process, youtube_id
 from app.streaming.hls import HlsPublisher
 from app.youtube_worker import validate_metadata
 
@@ -121,6 +121,16 @@ class OembedTitleTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ApiTests(unittest.IsolatedAsyncioTestCase):
+    def test_comment_is_limited_to_song_requests(self):
+        url = 'https://www.youtube.com/watch?v=' + VIDEO
+        self.assertEqual(TrackInput(url=url, source='request', comment=' 안녕 ').comment, '안녕')
+        self.assertIsNone(TrackInput(url=url, source='request', comment='   ').comment)
+        for body in [dict(comment='안녕'), dict(source='vote', comment='안녕'),
+                     dict(source='request', request_id='req', comment='안녕'),
+                     dict(source='request', comment='x' * 61)]:
+            with self.subTest(body=body), self.assertRaises(ValueError):
+                TrackInput(url=url, **body)
+
     async def test_requested_track_commits_request_with_audio_and_retry_is_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -147,11 +157,20 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(request['kind'], 'song_request')
             self.assertEqual(request['listenerName'], '청취자')
             self.assertEqual(event['nickname'], '청취자')
+            self.assertEqual(args[23], '')  # Without a comment the engine only receives track.queued.
+            redis.hget.return_value = None
+            result = await service.enqueue(VIDEO, 'listener', 'with-comment', 'request', None, '청취자', '시험 끝났어요')
+            args = redis.eval.await_args.args
+            self.assertNotIn('comment', json.loads(args[22]))
+            self.assertEqual(json.loads(args[23]), dict(request_id=result['segment_id'], kind='song_request',
+                body='시험 끝났어요', requester_ref='listener', nickname='청취자', track=json.loads(args[17])['track']))
+            redis.eval.reset_mock()
+            service.prepare.reset_mock()
             redis.hget.return_value = json.dumps(result)
-            retry = await service.enqueue(VIDEO, 'listener', 'key', 'request', None, '청취자')
+            retry = await service.enqueue(VIDEO, 'listener', 'with-comment', 'request', None, '청취자', '시험 끝났어요')
             self.assertEqual(retry, result)
-            service.prepare.assert_awaited_once()
-            redis.eval.assert_awaited_once()
+            service.prepare.assert_not_awaited()
+            redis.eval.assert_not_awaited()
 
     async def test_authenticated_listener_state_and_accepted_queue(self):
         app = create_app(Settings('127.0.0.1', 3000, hls_enabled=True))
