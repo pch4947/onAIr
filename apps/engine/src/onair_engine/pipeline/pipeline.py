@@ -33,6 +33,7 @@ from .safety import SafetyChecker
 from .tts import TtsClient, TtsQuotaError
 
 _ATTEMPTS = 2  # 최초 1회 + 재시도 1회
+_PENDING_AIR_MAX = 256
 # 인용 검사 — 채팅 글자 bigram 중 이만큼이 대본에 있으면 인용한 것으로 본다 [예시].
 # LLM은 "컵라면이요"를 "컵라면이라고"처럼 어미를 바꿔 인용하므로 문자열 그대로는 비교하지 않는다
 QUOTE_MATCH = 0.5
@@ -71,6 +72,12 @@ class GenerationPipeline:
         self._fallback_llm = DummyLlmClient(delay_sec=0)
         # 방송 맥락 = 최근 N개 대본 (확인 10). 실 LLM이 매번 같은 인사로 시작하지 않게 한다
         self._recent: deque[str] = deque(maxlen=recent_segments)
+        # 생성했지만 아직 송출 확인이 안 된 대본 (context-memory 3.1절 pending_air)
+        self._pending_air: dict[str, str] = {}
+
+    def take_aired(self, segment_id: str) -> str | None:
+        """PUBLISHED를 받은 세그먼트의 대본. 재전달이나 모르는 세그먼트면 None."""
+        return self._pending_air.pop(segment_id, None)
 
     @property
     def tts_blocked_until(self) -> float:
@@ -109,6 +116,12 @@ class GenerationPipeline:
             ok = quoted(first.body, script.text)
             self._log(job, "quote", t1, time.time(), "ok" if ok else "missing")
             quote_ref = first.request_id if ok else None
+        elif job.material.feature_ref:
+            # 낭독은 대본에 글이 들어갔는지 본다. 사연·신청곡은 DJ가 풀어 말하므로 비교하지 않는다
+            ok = job.material.must_read is None or quoted(job.material.must_read, script.text)
+            if job.material.must_read is not None:
+                self._log(job, "quote", t1, time.time(), "ok" if ok else "missing")
+            quote_ref = job.material.feature_ref if ok else None
 
         try:
             return await self._finish(job, script, t1, quote_ref)
@@ -137,6 +150,9 @@ class GenerationPipeline:
         t3 = time.time()
         self._log(job, "tts", t2, t3, "ok")
         self._recent.append(script.text)
+        self._pending_air[seg_id] = script.text
+        while len(self._pending_air) > _PENDING_AIR_MAX:  # 송출 통보가 없는 실행(로컬)에서 쌓이지 않게
+            self._pending_air.pop(next(iter(self._pending_air)))
 
         # [6] 패키징
         return SegmentSubmission(
@@ -197,7 +213,8 @@ class GenerationPipeline:
 
     def _log(self, job: GenerationJob, stage: str, started: float, finished: float,
              result: str) -> None:
-        request_ref = job.material.quotes[0].request_id if job.material.quotes else None
+        request_ref = (job.material.quotes[0].request_id if job.material.quotes
+                       else job.material.feature_ref)
         self.telemetry.log_stage(
             job_id=job.job_id, corner_type=job.corner_type, request_ref=request_ref,
             stage=stage, started_at=started, finished_at=finished, result=result,

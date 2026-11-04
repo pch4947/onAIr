@@ -12,7 +12,11 @@ from .corners.run import MaterialSources, TrackSource
 from .domain import ListenerRequest, RequestState, StationConfig, new_id
 from .format import Clock, load_format
 from .glue import GlueBank
+from .inputs.classify import keywords
+from .inputs.inbox import MessageInbox
+from .inputs.router import BOARD_STORY
 from .inputs.rules import load_chat_rules
+from .inputs.stories import StoryPool
 from .pipeline.llm import make_llm
 from .pipeline.pipeline import GenerationPipeline
 from .pipeline.safety import SafetyChecker
@@ -48,6 +52,8 @@ class EngineSettings:
     # 운영(--serve)에서는 끈다: 실제로 나오지 않는 곡을 소개하게 된다
     dummy_tracks: bool = True
     target_buffer_sec: float = 30.0
+    # 켜면 코너 진입을 백엔드에 알린다. 지금 백엔드는 모르는 이벤트를 격리하므로 #170 전까지 끈다
+    emit_corner_changed: bool = False
     # 이보다 오래된 request.arrived는 답하지 않는다. 입력 스트림을 처음부터 읽으므로
     # 엔진이 꺼져 있던 사이의 예전 요청이 재기동 때 몰려온다 [예시]
     request_max_age_sec: float = 600.0
@@ -107,7 +113,11 @@ class StationEngine:
             recent_segments=config.recent_segments,
         )
         self.tracks = TrackSource(Catalog(), dummy=settings.dummy_tracks)
-        self.sources = MaterialSources(tracks=self.tracks, rss=RssCollector())
+        self.sources = MaterialSources(
+            tracks=self.tracks, rss=RssCollector(),
+            inbox=MessageInbox(max_chars=chat_rules.message_max_chars, violates=safety.check_l2),
+            stories=StoryPool(topic_words=keywords(self.topic), violates=safety.check_l2),
+        )
         self.glue = GlueBank(tts=tts, audio_root=audio_root, station_id=config.station_id,
                              profile=config.profile, fmt=fmt, safety=safety)
         self.scheduler = Scheduler(
@@ -117,6 +127,7 @@ class StationEngine:
             chat_rules=chat_rules, violates=safety.check_l2,
             target_buffer_sec=settings.target_buffer_sec,
             max_concurrent=settings.max_concurrent_generations,
+            emit_corner_changed=settings.emit_corner_changed,
         )
         self._safety = safety
         self._stop = asyncio.Event()
@@ -167,7 +178,45 @@ class StationEngine:
             # Untrusted requester names must pass the same input filter as chat.
             if nickname and self._safety.check_l0(nickname) is None:
                 track["requester_nickname"] = nickname[:50]
+        if payload.get("source") == "request" and payload.get("request_id"):
+            self.scheduler.attach_song_request(track, payload["request_id"])
         self.tracks.queue(track)
+
+    def on_board_story(self, payload: dict) -> None:
+        """게시판 사연 후보 (계약 3.5절). L0를 통과한 것만 풀에 넣는다. 내부 ID는 프롬프트에 넣지 않는다."""
+        story_id, body = payload.get("story_id"), payload.get("body")
+        if not isinstance(story_id, str) or not isinstance(body, str) or not body.strip():
+            raise ValueError(f"board.story 형식 오류: {payload!r}"[:200])
+        if self._safety.check_l0(body) is not None:
+            self.telemetry.log_request_state(story_id, RequestState.REJECTED)
+            return
+        posted_at = payload.get("posted_at")
+        tags = payload.get("tags")
+        self.scheduler.add_story(ListenerRequest(
+            request_id=story_id, kind=BOARD_STORY, body=body,
+            requester_ref=str(payload.get("author_ref") or "anonymous"),
+            received_at=float(posted_at) if isinstance(posted_at, (int, float)) else time.time(),
+            nickname=self._safe_nickname(payload.get("nickname")),
+            tags=[str(t) for t in tags] if isinstance(tags, list) else [],
+        ))
+
+    def on_board_story_withdrawn(self, payload: dict) -> None:
+        if isinstance(story_id := payload.get("story_id"), str):
+            self.scheduler.withdraw_story(story_id)
+
+    async def on_request_cancelled(self, payload: dict) -> None:
+        if isinstance(request_id := payload.get("request_id"), str):
+            await self.scheduler.cancel_request(request_id)
+
+    def on_segment_published(self, segment_id: object, at: object) -> None:
+        if isinstance(segment_id, str) and isinstance(at, (int, float)):
+            self.scheduler.on_segment_published(segment_id, float(at))
+
+    def _safe_nickname(self, nickname: object) -> str | None:
+        """방송에서 부를 이름 — 외부 텍스트이므로 L0를 통과해야 한다. 아니면 익명으로 읽는다."""
+        if not isinstance(nickname, str) or not nickname.strip():
+            return None
+        return nickname.strip()[:50] if self._safety.check_l0(nickname) is None else None
 
     def on_track_started(self, payload: dict) -> None:
         """곡 재생 시작 — 송출 위치를 보정한다. 곡 길이는 소개 멘트를 낼 때 이미 버퍼에 더했다."""
@@ -192,7 +241,8 @@ class StationEngine:
         await self.transport.notify_request_state(request_id, RequestState.REJECTED)
 
     async def submit_request(self, kind: str, body: str, requester_ref: str,
-                             request_id: str | None = None) -> ListenerRequest:
+                             request_id: str | None = None,
+                             nickname: object = None) -> ListenerRequest:
         """청취자 요청 수신 — L0 입력단 검사 후 큐 적재 (설계 문서 4.6).
 
         백엔드 request.arrived 이벤트로 들어온 요청은 백엔드가 발급한 request_id를 그대로 쓴다.
@@ -201,6 +251,7 @@ class StationEngine:
         req = ListenerRequest(
             request_id=request_id or new_id("req"), kind=kind, body=body,
             requester_ref=requester_ref, received_at=time.time(),
+            nickname=self._safe_nickname(nickname),
         )
         if self._safety.check_l0(body) is not None:
             req.state = RequestState.REJECTED
@@ -210,5 +261,5 @@ class StationEngine:
         req.state = RequestState.SCREENED
         self.telemetry.log_request_state(req.request_id, req.state)
         await self.transport.notify_request_state(req.request_id, req.state)
-        self.scheduler.enqueue_request(req)
+        await self.scheduler.accept_request(req)
         return req

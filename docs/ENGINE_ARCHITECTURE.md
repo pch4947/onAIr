@@ -3,6 +3,7 @@
 
 **대상**: `apps/engine` — PROJECT_PLAN.md(rev.12) 9장 "역할 분담"의 대본 엔진 파트
 **상태**: 초안 v0.5 (2026-10-12) — 점진적으로 개정하며 관리
+**v0.8 변경**: 입력 라우팅 구현(#167) — 종류별 저장소, 문자 낭독(READ), 게시판 사연·신청곡 한마디(FEATURE), 취소, `corner.changed`(꺼 둠), 송출 이력(`aired_log`). DEFER·HELD는 저장소 유지로 대체했다([CORNER_DESIGN.md](CORNER_DESIGN.md) 5.8절). 문자·사연·코너 알림은 백엔드 작업(#168, #169, #170) 전까지 실제 방송에서 쓰이지 않는다
 **v0.7 변경**: 채팅 반영 정책 구현 — 유형 분류·송출 기준 앵커·`QuoteSelector`·상황별 정책·평가 지표(`inputs/`, 계약 v1 호환, [CORNER_DESIGN.md](CORNER_DESIGN.md) 5.8절), TTS 텍스트 정규화(`pipeline/normalize.py`). M4의 READ·FEATURE·라우터·계약 v2 이벤트는 남았다
 **v0.6 변경**: TTS를 Cartesia에서 **Gemini TTS로 전환**(2026-10-30, 선정 기준을 persona 반영 가능성으로) — 확인 3 갱신, 채팅 텍스트 정규화를 Cartesia 발음 사전에서 엔진 코드로 이동. 목소리·스타일 지시 설계는 [persona.md](persona.md) 9.3절
 **v0.5 변경**: 코너·입력 반영 재설계([CORNER_DESIGN.md](CORNER_DESIGN.md), 팀 합의 완료) 반영 — 고정 러닝오더 + 전역 정책(`SchedulingPolicy`)을 **형식 → 클락 → 코너** 구조와 **입력 라우팅·선별기**로 교체(3장, 4.1~4.3절), 요청별 ack 단축 경로를 접착 요소 사전 렌더(`GlueBank`)로 교체(4.5절), 계측을 입력 상태·선별 로그 중심으로 재구성(7장), 디렉토리·단계별 계획 갱신(8~9장), 확인 6·12 무효(10장). 코드는 아직 v0.4 구조다 — 이 문서는 **목표 구조**이고, 현재 코드와의 대응은 [CORNER_DESIGN.md](CORNER_DESIGN.md) 13절

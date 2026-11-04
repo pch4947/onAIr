@@ -15,6 +15,7 @@ class ChatRules(BaseModel):
     flood_threshold: int = Field(ge=1)
     max_quote_chars: int = Field(ge=1)
     short_reaction_chars: int = Field(ge=1)
+    message_max_chars: int = Field(default=200, ge=1)
     pointing: list[str] = Field(default_factory=list)
     reactions: list[str] = Field(default_factory=list)
 

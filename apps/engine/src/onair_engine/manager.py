@@ -254,11 +254,19 @@ class EngineManager:
                 logger.warning("REQUEST_STALE %s age=%.0fs", payload["request_id"], age)
                 await engine.reject_stale_request(payload["request_id"])
                 return
+            kind = payload.get("kind", "story")
             await engine.submit_request(
-                payload.get("kind", "story"), payload["body"],
+                # 신청곡의 한마디는 없어도 된다 (계약 3.4절)
+                kind, payload.get("body", "") if kind in ("song", "song_request") else payload["body"],
                 payload.get("requester_ref", "anonymous"),
-                request_id=payload.get("request_id"),
+                request_id=payload.get("request_id"), nickname=payload.get("nickname"),
             )
+        elif event_type == "request.cancelled":
+            await engine.on_request_cancelled(payload)
+        elif event_type == "board.story":
+            engine.on_board_story(payload)
+        elif event_type == "board.story.withdrawn":
+            engine.on_board_story_withdrawn(payload)
         elif event_type == "backpressure":
             engine.report_backpressure(payload, at=event.get("at"))
         elif event_type == "track.queued":
@@ -266,15 +274,16 @@ class EngineManager:
         elif event_type == "track.started":
             engine.on_track_started(payload)
         elif event_type == "state.transition":
-            # v1에는 재생 시작 통보가 없어 PLAYED에서 역산한다. MIXING·PUBLISHED는 쓰지 않는다
+            # segment.started를 못 받았을 때를 위해 PLAYED 역산을 남긴다. 먼저 온 쪽이 확정한다
             if payload.get("state") == "PLAYED":
                 engine.on_segment_played(payload.get("segment_id"), payload.get("at"))
+            elif payload.get("state") == "PUBLISHED":
+                engine.on_segment_published(payload.get("segment_id"), payload.get("at"))
         elif event_type == "segment.started":  # 계약 v2 (10.6절)
             engine.on_segment_started(payload.get("segment_id"), payload.get("started_at"))
         elif event_type == "station.closed":
             engine.stop()  # 방송 태스크가 끝나면 _run_station이 방을 정리한다
         elif event_type:
-            # TODO(M4): state.transition(PUBLISHED → 방송 맥락)
             logger.info("EVENT_IGNORED %s", event_type)
 
     async def _inject_demo(self, engine: StationEngine, bodies: list[str]) -> None:

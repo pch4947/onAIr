@@ -28,9 +28,11 @@ from ..domain import (
     Material,
     RequestState,
     ScheduleContext,
+    SegmentKind,
     SegmentSubmission,
     StationConfig,
     new_id,
+    wire_state,
 )
 from ..format.clock import Clock, ClockEntry
 from ..format.spec import QUOTABLE, FormatSpec, Intensity
@@ -38,6 +40,7 @@ from ..glue import WIRE_KIND, GlueBank
 from ..inputs.classify import classify, keywords
 from ..inputs.on_air import OnAirTimeline
 from ..inputs.pool import QuotePool
+from ..inputs.router import BOARD_STORY, CHAT, MESSAGE, SONG_REQUEST, normalize_kind
 from ..inputs.rules import ChatRules
 from ..inputs.selector import RELEVANCE, QuoteSelector
 from ..pipeline.pipeline import GenerationPipeline
@@ -65,7 +68,8 @@ class Scheduler:
                  sources: MaterialSources, intensity: Intensity, topic: str,
                  pipeline: GenerationPipeline, glue: GlueBank, transport: Transport,
                  telemetry: Telemetry, chat_rules: ChatRules, violates,
-                 target_buffer_sec: float = 30.0, max_concurrent: int = 2):
+                 target_buffer_sec: float = 30.0, max_concurrent: int = 2,
+                 emit_corner_changed: bool = False):
         self.config = config
         self.fmt = fmt
         self.clock = clock
@@ -97,6 +101,11 @@ class Scheduler:
         self._run_anchor: Anchor | None = None  # 지금 코너의 화제 앵커 — 항목 없는 단계가 처음 나올 때 만든다
         self._last_requester: str | None = None
         self._quoted: dict[str, tuple[ListenerRequest, GenerationJob]] = {}  # segment_id -> 인용한 입력
+        self._song_requests: dict[str, ListenerRequest] = {}  # 곡 차례를 기다리는 신청곡의 한마디
+        self._generating: dict[str, ListenerRequest] = {}  # 생성 중인 입력
+        self._discard: set[str] = set()  # 생성 중 취소·철회된 입력 — 결과를 버린다
+        self._emit_corner_changed = emit_corner_changed
+        self._announced_corner: str | None = None
         self._inflight = 0
         # 첫 곡은 백엔드가 방송 시작과 함께 튼다 — 엔딩 시점 계산에는 넣지만 버퍼에는 넣지 않는다.
         # 그래야 오프닝을 곡이 나가는 동안 미리 만들어 둔다(첫 멘트의 생성 지연을 곡이 가려 준다)
@@ -129,6 +138,58 @@ class Scheduler:
     @property
     def current_corner(self) -> str | None:
         return self._run.spec.corner_type if self._run else None
+
+    async def accept_request(self, req: ListenerRequest) -> None:
+        """입력을 종류별 저장소로 보낸다 (CORNER_DESIGN 4.4절)."""
+        req.kind = normalize_kind(req.kind)
+        if not self.fmt.accepts(req.kind):
+            self.telemetry.log_input(req, None, "not_on_air")
+            await self._transition(req, RequestState.NOT_ON_AIR)
+        elif req.kind == MESSAGE:
+            self.telemetry.log_input(req, None, "inbox")
+            self.sources.inbox.add(req)
+            await self._transition(req, RequestState.INBOXED)
+        elif req.kind == SONG_REQUEST:
+            self.telemetry.log_input(req, None, "song_request")
+            self._song_requests[req.request_id] = req
+            await self._transition(req, RequestState.INBOXED)
+        else:
+            self.enqueue_request(req)
+
+    def attach_song_request(self, track: dict, request_id: str) -> None:
+        """track.queued의 곡이 신청곡이면 한마디와 닉네임을 곡 소개 소재에 붙인다 (계약 3.4절)."""
+        req = self._song_requests.get(request_id)
+        if req is None:
+            return
+        track["request_id"] = request_id
+        if req.body:
+            track["requester_comment"] = req.body
+        if req.nickname:
+            track.setdefault("requester_nickname", req.nickname)
+
+    def add_story(self, story: ListenerRequest) -> None:
+        if self.sources.stories.add(story):
+            self.telemetry.log_input(story, None, "story_pool")
+
+    def withdraw_story(self, story_id: str) -> None:
+        """다른 방에서 읽힌 사연. 이미 생성 중이면 결과를 버린다 (계약 3.5절)."""
+        if not self.sources.stories.withdraw(story_id) and story_id in self._generating:
+            self._discard.add(story_id)
+
+    async def cancel_request(self, request_id: str) -> None:
+        """대기 중이면 빼고, 생성 중이면 끝까지 만들고 버린다. 제출 후는 백엔드 몫이다 (계약 3.2절)."""
+        req = (self.pool.pop(request_id) or self.sources.inbox.remove(request_id)
+               or self._song_requests.pop(request_id, None))
+        if req is not None:
+            await self._transition(req, RequestState.CANCELLED)
+        elif request_id in self._generating:
+            self._discard.add(request_id)
+
+    def on_segment_published(self, segment_id: str, at: float) -> None:
+        """PUBLISHED — 대본을 송출 이력으로 옮긴다 (context-memory 3.1절). 재전달은 무시한다."""
+        script = self.pipeline.take_aired(segment_id)
+        if script is not None:
+            self.telemetry.log_aired(segment_id, at, script)
 
     def enqueue_request(self, req: ListenerRequest) -> None:
         anchor = self.timeline.current(req.received_at)
@@ -265,7 +326,9 @@ class Scheduler:
         while self._inflight > 0:  # 진행 중 생성 마무리 대기
             await asyncio.sleep(0.1)
         if max_segments is None:  # 방송 종료 — 남은 입력은 반영되지 못했다 (관통 테스트는 중간에 끊을 뿐이다)
-            await self._mark_expired(self.pool.drain())
+            leftovers = [*self.pool.drain(), *self.sources.inbox.drain(), *self._song_requests.values()]
+            self._song_requests.clear()
+            await self._mark_expired(leftovers)
 
     # ── 클락 · 코너 ──────────────────────────────────────────────────
 
@@ -284,6 +347,7 @@ class Scheduler:
                         return _WAIT
                     continue
                 self._skip_logged.clear()
+                self.sources.inbox.begin_corner()
                 topic = entry.label or self.topic
                 self._run_anchor = None
                 self._run = CornerRun(entry, sources=self.sources, intensity=self.intensity,
@@ -323,9 +387,17 @@ class Scheduler:
         corner, step = planned.corner, planned.step
         material = Material(items=list(planned.items), label=planned.label,
                             topic=self._run.thread.topic if self._run else self.topic)
+        feature = None
         if step.items == "track":
             material.track = planned.items[0]
             material.items = []
+            feature = self._song_requests.pop(material.track.get("request_id"), None)
+        elif step.items in ("message", "board_story"):
+            feature = planned.items[0]["request"]
+            if step.items == "message":
+                material.must_read = feature.body
+        if feature is not None:
+            material.feature_ref = feature.request_id
         if step.kind == "opening_greeting" and self.config.first_song:
             material.extra["first_song"] = self.config.first_song
         elif step.kind == "corner_preview":
@@ -340,7 +412,7 @@ class Scheduler:
         material.quotes = self._take_quotes(corner.mode("chat"), step.kind, anchor, material)
         return GenerationJob(
             job_id=new_id("job"), corner_type=corner.corner_type, step=step.kind,
-            material=material, plain=corner.subjectivity == "none", anchor=anchor,
+            material=material, plain=corner.subjectivity == "none", anchor=anchor, feature=feature,
         )
 
     def _next_anchor_id(self, kind: str) -> str:
@@ -380,6 +452,8 @@ class Scheduler:
         """코너 계약과 참여 강도가 허용하면 선별기가 고른다 (CORNER_DESIGN 5.1, 5.7절)."""
         if not len(self.pool) or chat_mode not in QUOTABLE or not STEP_KINDS[step_kind].quotable:
             return []
+        if material.feature_ref:  # 계약 v1의 request_ref는 하나뿐이다 — input_refs 전까지 함께 싣지 못한다
+            return []
         limit = min(self.intensity.quote_limit, _V1_QUOTES_PER_SEGMENT)
         now = time.time()
         if limit <= 0 or now - self._last_quote_at < self.intensity.quote_gap_sec:
@@ -415,16 +489,23 @@ class Scheduler:
     async def _generate(self, job: GenerationJob, seq: int) -> None:
         self._inflight += 1
         sub: SegmentSubmission | None = None
+        inputs = [*job.material.quotes, *([job.feature] if job.feature else [])]
+        for req in inputs:
+            self._generating[req.request_id] = req
         try:
             async with self._sem:
-                for req in job.material.quotes:
+                for req in inputs:
                     await self._transition(req, RequestState.GENERATING)
                 sub = await self.pipeline.run(job)
+                if any(req.request_id in self._discard for req in inputs):
+                    sub = None  # 취소·철회됐다 — 만든 결과를 내보내지 않는다
+                    await self._settle_discarded(inputs, job)
+                    return
                 if sub is None:  # L1/L2 REJECT — 인용한 입력 때문일 수 있다
-                    for req in job.material.quotes:
+                    for req in inputs:
                         await self._transition(req, RequestState.REJECTED)  # F-15
                     return
-                for req in job.material.quotes:
+                for req in inputs:
                     if sub.request_ref == req.request_id:
                         self._quoted[sub.id] = (req, job)
                         await self._transition(req, RequestState.GENERATED)
@@ -435,24 +516,47 @@ class Scheduler:
             # 파이프라인이 재시도·filler 대체까지 했는데도 실패한 경우다 (TTS 전면 장애 등)
             logger.exception("GENERATION_FAILED %s %s/%s", job.job_id, job.corner_type, job.step)
             sub = None
-            for req in job.material.quotes:
+            for req in inputs:
                 if req.state == RequestState.GENERATING:
                     await self._requeue_or_reject(req, job)
         finally:
             self._inflight -= 1
+            for req in inputs:
+                self._generating.pop(req.request_id, None)
             # 실패해도 순번은 비워야 뒤 순번이 나간다. 곡 길이는 백엔드가 실제로 틀 곡(music_ref)만 센다
             track_ms = int((job.material.track or {}).get("duration_ms") or 0)
             await self._complete(seq, sub, track_ms if sub and sub.music_ref else 0, job.anchor)
 
+    async def _settle_discarded(self, inputs: list[ListenerRequest], job: GenerationJob) -> None:
+        for req in inputs:
+            if req.request_id in self._discard:
+                self._discard.discard(req.request_id)
+                await self._transition(req, RequestState.CANCELLED)
+            else:  # 함께 들어간 입력은 잘못이 없다
+                job.provider_failed = True
+                await self._requeue_or_reject(req, job)
+
     async def _requeue_or_reject(self, req: ListenerRequest, job: GenerationJob) -> None:
-        self.selector.forget(req)
-        if self._last_requester == req.requester_ref:  # 인용이 나가지 않았으니 연속 금지에 걸지 않는다
-            self._last_requester = None
+        if req.kind == SONG_REQUEST:  # 곡은 소개 실패와 상관없이 나간다 — 한마디만 다시 말할 차례가 없다
+            await self._transition(req, RequestState.EXPIRED)
+            return
+        if req.kind == BOARD_STORY:  # 장애가 지나면 다시 고를 수 있다. 상태를 알릴 곳이 없다
+            self.sources.stories.put_back(req)
+            await self._transition(req, RequestState.QUEUED)
+            return
+        if req.kind != MESSAGE:
+            self.selector.forget(req)
+            if self._last_requester == req.requester_ref:  # 인용이 나가지 않았으니 연속 금지에 걸지 않는다
+                self._last_requester = None
         # 제공자 장애는 입력 탓이 아니다 — 세지 않고 되돌려, 창이 지나면 만료되게 둔다
         failures = self._failures.get(req.request_id, 0) + (0 if job.provider_failed else 1)
         self._failures[req.request_id] = failures
         if failures >= _MAX_REQUEST_FAILURES:
             await self._transition(req, RequestState.REJECTED)
+            return
+        if req.kind == MESSAGE:
+            self.sources.inbox.put_back(req)
+            await self._transition(req, RequestState.INBOXED)
             return
         await self._transition(req, RequestState.QUEUED)
         self.pool.put_back(req)
@@ -460,7 +564,9 @@ class Scheduler:
     async def _transition(self, req: ListenerRequest, state: RequestState) -> None:
         req.state = state
         self.telemetry.log_request_state(req.request_id, state)
-        await self.transport.notify_request_state(req.request_id, state)
+        wire = wire_state(state)
+        if wire is not None and req.kind != BOARD_STORY:  # 게시판 사연은 요청이 아니다 (계약 3.5절)
+            await self.transport.notify_request_state(req.request_id, wire)
 
     def _reserve(self) -> int:
         seq = self._seq
@@ -478,6 +584,18 @@ class Scheduler:
                 if ready is not None:
                     await self._publish(ready, ms, seg_anchor)
 
+    async def _announce_corner(self, sub: SegmentSubmission) -> None:
+        """코너 첫 세그먼트 제출 전에 알린다. 백엔드가 그 세그먼트 재생 시작에 화면을 바꾼다 (계약 10.7절)."""
+        corner = self.fmt.corners.get(sub.corner_type)
+        if (not self._emit_corner_changed or corner is None or sub.kind == SegmentKind.FILLER
+                or sub.corner_type == self._announced_corner):
+            return
+        self._announced_corner = sub.corner_type
+        await self.transport.notify_station("corner.changed", {
+            "corner": sub.corner_type, "title": corner.title, "segment_id": sub.id,
+            "contract": {kind: str(corner.mode(kind)) for kind in (CHAT, MESSAGE, SONG_REQUEST)},
+        })
+
     async def _publish(self, sub: SegmentSubmission, track_ms: int = 0,
                        anchor: Anchor | None = None) -> None:
         if anchor is not None:  # 첫 곡 전이나 앵커 없는 접착 문구는 송출 위치를 옮기지 않는다
@@ -486,4 +604,5 @@ class Scheduler:
         # 곡 소개 멘트 뒤에는 백엔드가 그 곡을 바로 튼다 — 곡 길이만큼 방송이 채워진다
         self._produced_ms += sub.duration_ms + track_ms
         self._submitted += 1
+        await self._announce_corner(sub)
         await self.transport.publish_segment(sub)

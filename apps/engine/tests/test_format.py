@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from onair_engine.corners.run import CornerRun, MaterialSources, Thread, TrackSource
+from onair_engine.domain import ListenerRequest
 from onair_engine.format import FORMATS, Clock, ClockEntry, FormatSpec, load_format
 from onair_engine.sources.rss import FeedItem, RssCollector
 
@@ -106,6 +107,11 @@ def test_clock_goes_to_closing_when_time_runs_out():
 
 # ── 코너 진행 ─────────────────────────────────────────────────────────
 
+def _input(request_id: str, kind: str, body: str) -> ListenerRequest:
+    return ListenerRequest(request_id=request_id, kind=kind, body=body,
+                           requester_ref=request_id, received_at=0.0)
+
+
 def _sources(news: int = 0) -> MaterialSources:
     items = [FeedItem(f"기사 {i}", "요약", f"https://news{i}.example.com/1") for i in range(news)]
     return MaterialSources(tracks=TrackSource(), rss=RssCollector(items))
@@ -128,20 +134,22 @@ def test_corner_runs_steps_in_order_with_repeats():
 def test_corner_over_budget_skips_to_close_glue():
     fmt = _fmt("talk")
     sources = _sources()
-    sources.board_stories += [{"nickname": "a", "body": "사연 1"}, {"nickname": "b", "body": "사연 2"}]
+    sources.stories.add(_input("s1", "board_story", "사연 1"))
+    sources.stories.add(_input("s2", "board_story", "사연 2"))
     run = _run(fmt, "story_corner", sources)
     assert run.next_step(0).step.glue == "call"
     assert run.next_step(0).step.kind == "story"
     over = (fmt.corner("story_corner").budget_sec[1] + 1) * 1000
     assert run.next_step(over).step.glue == "close"  # 두 번째 사연은 건너뛰고 마무리 문구
     assert run.next_step(over) is None
-    assert len(sources.board_stories) == 1  # 꺼내지 않은 사연은 다음 차례에 남는다
+    assert len(sources.stories) == 1  # 꺼내지 않은 사연은 다음 차례에 남는다
 
 
 def test_repeat_follows_intensity_preset():
     fmt = _fmt("talk")
     sources = _sources()
-    sources.messages += [{"nickname": f"n{i}", "body": f"문자 {i}"} for i in range(10)]
+    for i in range(10):
+        sources.inbox.add(_input(f"m{i}", "message", f"문자 내용 {i}"))
     for level, count in (("low", 3), ("high", 5)):
         run = _run(fmt, "text_corner", sources, intensity=level)
         steps = []
@@ -165,9 +173,16 @@ def test_news_items_are_not_repeated_and_feed_recap():
 def test_requires_blocks_corner_without_material():
     fmt = _fmt("talk")
     sources = _sources()
-    assert not sources.satisfies(fmt.corner("story_corner"))  # 게시판 사연은 M4부터
+    assert not sources.satisfies(fmt.corner("story_corner"))
     assert not sources.satisfies(fmt.corner("text_corner"))
     assert sources.satisfies(fmt.corner("topic_talk"))
+
+
+def test_format_accepts_only_inputs_its_corners_reflect():
+    talk, music, news = _fmt("talk"), _fmt("music"), _fmt("news")
+    assert talk.accepts("chat") and talk.accepts("message") and talk.accepts("song_request")
+    assert music.accepts("chat") and music.accepts("song_request") and not music.accepts("message")
+    assert not any(news.accepts(kind) for kind in ("chat", "message", "song_request"))
 
 
 def test_track_source_prefers_backend_queued_track():

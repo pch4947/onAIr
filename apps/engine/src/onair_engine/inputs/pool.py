@@ -32,6 +32,13 @@ class QuotePool:
     def remove(self, req: ListenerRequest) -> None:
         self.items.remove(req)
 
+    def pop(self, request_id: str) -> ListenerRequest | None:
+        for req in self.items:
+            if req.request_id == request_id:
+                self.items.remove(req)
+                return req
+        return None
+
     def recent_arrivals(self, now: float) -> int:
         """최근 W 동안 도착한 입력 수 — 상황(뜸함·보통·폭주) 판단 기준 (5.7절)."""
         while self._arrivals and now - self._arrivals[0] > self.reaction_window_sec:
