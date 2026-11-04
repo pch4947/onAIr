@@ -157,13 +157,17 @@ async def viewer_count(request: Request):
         return None
 
 
-async def station_status(request: Request):
+async def station_summary(request: Request) -> tuple[str, str | None]:
     try:
         async with asyncio.timeout(3):
             raw = await request.app.state.redis.get(f'backend:{request.app.state.settings.station_id}:station')
-            return json.loads(raw)['status'] if raw else 'idle'
     except (RedisError, TimeoutError):
-        return 'unknown'
+        return 'unknown', None
+    if not raw:
+        return 'idle', None
+    record = json.loads(raw)
+    # 방 생성 때 형식을 고르지 않으면 config에 format이 빠지고 엔진은 talk로 방송한다.
+    return record['status'], record.get('config', {}).get('format', 'talk')
 
 
 @router.post("/stations/{station_id}/presence", status_code=204)
@@ -185,8 +189,10 @@ async def stream_state(request: Request, response: Response,
     result = request.app.state.broadcast.snapshot()
     result["stationId"] = request.app.state.settings.station_id
     # 둘 다 Redis 호출이라 순차 await하면 각자의 연결 타임아웃이 합산돼 버림; 동시에 실행.
-    viewers, metrics, status = await asyncio.gather(viewer_count(request), request_metrics(request), station_status(request))
+    viewers, metrics, (status, station_format) = await asyncio.gather(
+        viewer_count(request), request_metrics(request), station_summary(request))
     result['stationStatus'] = status
+    result['stationFormat'] = station_format
     result["viewerCount"] = viewers
     result.update(metrics)
     hls = request.app.state.hls

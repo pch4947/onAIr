@@ -38,7 +38,7 @@ export async function submitRequest(input: {
   prompt: string
   listenerId?: string
   listenerName?: string
-  kind?: 'story' | 'mood'
+  kind?: 'story' | 'mood' | 'message'
   trackTitle?: string
   trackArtist?: string
   trackThumbnailUrl?: string

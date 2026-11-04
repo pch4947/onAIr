@@ -80,6 +80,23 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
             app.state.redis.get.side_effect = ConnectionError('offline')
             self.assertEqual((await client.get('/api/stations/st_local_dev')).status_code, 503)
 
+    async def test_stream_state_reports_station_format(self):
+        app = create_app(Settings('127.0.0.1', 3000))
+        app.state.hls = SimpleNamespace()
+        app.state.presence = SimpleNamespace(count=AsyncMock(return_value=0))
+        app.state.requests = SimpleNamespace(metrics=AsyncMock(return_value={}))
+        app.state.redis = SimpleNamespace(get=AsyncMock())
+        cases = [(json.dumps({'status': 'started', 'config': {}}), 'started', 'talk'),
+                 (json.dumps({'status': 'started', 'config': {'format': 'music'}}), 'started', 'music'),
+                 (None, 'idle', None)]
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
+            for raw, status, station_format in cases:
+                with self.subTest(station_format=station_format):
+                    app.state.redis.get.return_value = raw
+                    result = (await client.get('/api/stream/state')).json()
+                    self.assertEqual(result['stationStatus'], status)
+                    self.assertEqual(result['stationFormat'], station_format)
+
     async def test_proxy_timeout_unavailable_and_validation(self):
         upstream = SimpleNamespace(request=AsyncMock())
         request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(engine_http=upstream)))

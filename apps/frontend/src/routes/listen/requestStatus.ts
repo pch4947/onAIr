@@ -1,12 +1,13 @@
 // 백엔드 요청 상태 머신(requested→...→played, rejected/failed)을 UI 배지로 매핑
 
-export type StatusVariant = 'generating' | 'queued' | 'played' | 'rejected'
+export type StatusVariant = 'generating' | 'queued' | 'played' | 'rejected' | 'expired'
 
 export const STATUS_VARIANT_CLASS: Record<StatusVariant, string> = {
   generating: 'bg-status-generating',
   queued: 'bg-status-queued',
   played: 'bg-status-played',
   rejected: 'bg-status-rejected',
+  expired: 'bg-status-muted',
 }
 
 export const STATUS_VARIANT: Record<string, StatusVariant> = {
@@ -20,6 +21,7 @@ export const STATUS_VARIANT: Record<string, StatusVariant> = {
   played: 'played',
   rejected: 'rejected',
   failed: 'rejected',
+  expired: 'expired',
 }
 
 export const KIND_LABEL: Record<'story' | 'mood' | 'song_request', string> = {
