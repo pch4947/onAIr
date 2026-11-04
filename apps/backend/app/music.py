@@ -181,6 +181,7 @@ class TrackInput(BaseModel):
     source: Literal['playlist', 'request', 'vote'] = 'playlist'
     request_id: str | None = Field(default=None, min_length=1, max_length=128)
     comment: str | None = Field(default=None, max_length=60)
+    anonymous: bool = False
 
     @field_validator('url')
     @classmethod
@@ -195,8 +196,8 @@ class TrackInput(BaseModel):
 
     @model_validator(mode='after')
     def comment_needs_song_request(self):
-        if self.comment and (self.source != 'request' or self.request_id is not None):
-            raise ValueError('comment is only valid for a song request')
+        if (self.comment or self.anonymous) and (self.source != 'request' or self.request_id is not None):
+            raise ValueError('comment and anonymous are only valid for a song request')
         return self
 
 
@@ -419,8 +420,9 @@ async def enqueue_track(station_id: str, body: TrackInput, request: Request, use
             raise HTTPException(409, 'Station must be started')
         if body.source == 'playlist' and body.request_id is None:
             return await request.app.state.music.enqueue(youtube_id(body.url), user['id'], idempotency_key)
+        nickname = None if body.anonymous else user.get('name')
         return await request.app.state.music.enqueue(youtube_id(body.url), user['id'], idempotency_key,
-                                                     body.source, body.request_id, user.get('name'), body.comment)
+                                                     body.source, body.request_id, nickname, body.comment)
     except RedisError:
         raise HTTPException(503, 'Redis unavailable; retry with the same Idempotency-Key') from None
     except TimeoutError:

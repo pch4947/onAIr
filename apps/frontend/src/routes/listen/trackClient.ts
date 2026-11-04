@@ -63,12 +63,12 @@ export function createTrackClient(base: string, getToken: () => string | null) {
       const result = await call(`${encodeURIComponent(stationId)}/tracks/access`)
       return result.can_request === true
     },
-    async enqueue(stationId: string, url: string, key: string): Promise<{
+    async enqueue(stationId: string, url: string, key: string, comment: string, anonymous: boolean): Promise<{
       track: { title: string; artist: string; duration_ms: number; track_ref: string }
     }> {
       return call(`${encodeURIComponent(stationId)}/tracks`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
-        body: JSON.stringify({ url, source: 'request' }),
+        body: JSON.stringify({ url, source: 'request', comment: comment || undefined, anonymous }),
       })
     },
   }
