@@ -70,6 +70,7 @@ def load_config(path: Path) -> tuple[StationConfig, EngineSettings]:
         safety_rules_path=Path(pipe.get("safety_rules", "config/safety_rules.yaml")),
         formats_dir=Path(pipe.get("formats_dir", "config/formats")),
         chat_rules_path=Path(pipe.get("chat_rules", "config/chat_rules.yaml")),
+        news_feeds_path=Path(pipe.get("news_feeds", "config/news_feeds.yaml")),
         llm=pipe.get("llm", "dummy"),
         llm_model=pipe.get("llm_model"),
         llm_base_url=pipe.get("llm_base_url"),

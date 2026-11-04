@@ -85,11 +85,11 @@ class MaterialSources:
         self.stories = stories or StoryPool()
         self.votes: list[dict] = []
 
-    def count(self, source: str) -> int:
+    def count(self, source: str, section: str | None = None) -> int:
         if source in ("track", "next_track"):
             return 1 if self.tracks.peek() else 0
         if source == "news":
-            return len(self._fresh_news(50))
+            return len(self._fresh_news(50, section))
         if source == "covered_news":  # 정리(recap) 코너의 진입 조건 — 이번 순환에 전한 기사가 있어야 한다
             return len(self.covered_news)
         if source == "message":
@@ -98,13 +98,13 @@ class MaterialSources:
             return self.stories.count()
         return len(self.votes)
 
-    def take(self, source: str, n: int) -> list[dict]:
+    def take(self, source: str, n: int, section: str | None = None) -> list[dict]:
         if source == "track":
             return [t] if (t := self.tracks.take()) else []
         if source == "next_track":
             return [t] if (t := self.tracks.peek()) else []
         if source == "news":
-            items = self._fresh_news(n)
+            items = self._fresh_news(n, section)
             for it in items:
                 self._aired_news.add(it["title"])
                 self.covered_news.append(it["title"])
@@ -116,14 +116,15 @@ class MaterialSources:
         taken, self.votes[:] = self.votes[:n], self.votes[n:]
         return taken
 
-    def _fresh_news(self, n: int) -> list[dict]:
+    def _fresh_news(self, n: int, section: str | None = None) -> list[dict]:
         # 같은 방송에서 같은 기사를 두 번 전하지 않는다
-        items = [it for it in self._rss.latest(50) if it.title not in self._aired_news]
-        return [{"title": it.title, "summary": it.summary, "source": source_name(it.source_url)}
+        items = [it for it in self._rss.latest(50, section) if it.title not in self._aired_news]
+        return [{"title": it.title, "summary": it.summary,
+                 "source": it.source or source_name(it.source_url)}
                 for it in items[:n]]
 
-    def satisfies(self, corner: CornerSpec) -> bool:
-        return all(self.count(src) >= n for src, n in corner.requires.items())
+    def satisfies(self, corner: CornerSpec, section: str | None = None) -> bool:
+        return all(self.count(src, section) >= n for src, n in corner.requires.items())
 
 
 @dataclass
@@ -163,7 +164,7 @@ class CornerRun:
                 continue
             items: list[dict] = []
             if step.items is not None:
-                items = self._sources.take(step.items, step.take)
+                items = self._sources.take(step.items, step.take, self.label)
                 if not items:
                     self._advance()
                     continue

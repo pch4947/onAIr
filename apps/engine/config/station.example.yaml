@@ -34,6 +34,7 @@ pipeline:
   request_max_age_sec: 600     # 이보다 오래된 request.arrived는 답하지 않고 rejected로 종결 [예시]
   safety_rules: config/safety_rules.yaml
   formats_dir: config/formats  # 형식·코너 정의 (docs/CORNER_DESIGN.md)
+  news_feeds: config/news_feeds.yaml  # 뉴스 형식 소재 피드와 폴링 주기
 
 transport:
   kind: stdout                # stdout | http | redis (계약: docs/ENGINE_REDIS_CONTRACT.md)

@@ -1,0 +1,20 @@
+# 뉴스 형식 소재 피드 — 호스트가 고른 분야만 폴링한다 (ENGINE_ARCHITECTURE 4.7절).
+# feeds의 키는 분야 코드다 (config/formats/news.yaml의 section_names).
+#
+# 피드를 넣기 전에 매체의 이용 조건을 확인한다. <copyright>에 "AI 학습 및 활용 금지"를 적은
+# 매체는 넣지 않는다. 아래 목록도 이용 허락을 받은 것은 아니다 — 시연 전 팀 확인 필요.
+
+poll_sec: 600        # [예시] 폴링 주기
+max_age_hours: 24    # [예시] 이보다 오래된 기사는 쓰지 않는다
+
+feeds:
+  general:
+    - {source: 경향신문, url: "https://www.khan.co.kr/rss/rssdata/total_news.xml"}
+  economy:
+    - {source: 경향신문, url: "https://www.khan.co.kr/rss/rssdata/economy_news.xml"}
+  it:
+    - {source: 지디넷코리아, url: "https://www.zdnet.co.kr/feed"}
+  sports:
+    - {source: 경향신문, url: "https://www.khan.co.kr/rss/rssdata/kh_sports.xml"}
+  culture:
+    - {source: 경향신문, url: "https://www.khan.co.kr/rss/rssdata/culture_news.xml"}
