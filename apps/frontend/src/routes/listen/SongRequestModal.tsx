@@ -8,6 +8,14 @@ import { createTrackClient, normalizeYoutubeLink, youtubeThumbnailFromRef } from
 import type { TrackCandidate } from './trackClient'
 
 const client = createTrackClient(import.meta.env.VITE_API_BASE_URL ?? '', getAccessToken)
+const COMMENT_MAX_LENGTH = 60
+
+interface EnqueueAttempt {
+  url: string
+  comment: string
+  anonymous: boolean
+  key: string
+}
 
 const fieldLabelClass = 'text-[13px] font-medium text-label'
 const textInputClass =
@@ -27,6 +35,8 @@ interface SongRequestModalProps {
 
 export function SongRequestModal({ onClose, stationId, onSubmitted }: SongRequestModalProps) {
   const [link, setLink] = useState('')
+  const [comment, setComment] = useState('')
+  const [anonymous, setAnonymous] = useState(false)
   const [validation, setValidation] = useState('')
   const [candidates, setCandidates] = useState<TrackCandidate[] | null>(null)
   const [selected, setSelected] = useState<TrackCandidate | null>(null)
@@ -34,14 +44,16 @@ export function SongRequestModal({ onClose, stationId, onSubmitted }: SongReques
   const searchVersion = useRef(0)
   const directLink = normalizeYoutubeLink(link)
   useEffect(() => () => { searchAbort.current?.abort() }, [])
-  const retry = useRef<{ url: string; key: string } | null>(null)
+  const retry = useRef<EnqueueAttempt | null>(null)
   const submitting = useRef(false)
   const station = useQuery({
     queryKey: ['track-access', stationId], queryFn: () => client.checkStation(stationId!),
     enabled: Boolean(stationId), retry: false, staleTime: 0,
   })
   const submitSongRequestMutation = useMutation({
-    mutationFn: ({ url, key }: { url: string; key: string }) => client.enqueue(stationId!, url, key), retry: false,
+    mutationFn: (attempt: EnqueueAttempt) =>
+      client.enqueue(stationId!, attempt.url, attempt.key, attempt.comment, attempt.anonymous),
+    retry: false,
   })
   const searchMutation = useMutation({
     mutationFn: ({ query, signal }: { query: string; signal: AbortSignal }) => client.search(stationId!, query, signal),
@@ -72,11 +84,18 @@ export function SongRequestModal({ onClose, stationId, onSubmitted }: SongReques
     if (submitting.current || submitSongRequestMutation.isSuccess || !station.data || !stationId) return
     if (!directLink && !selected) { await handleSearch(); return }
     const url = directLink ?? selected!.url
+    const trimmedComment = comment.trim()
     setValidation('')
-    if (!retry.current || retry.current.url !== url) retry.current = { url, key: randomId() }
+    // 같은 Idempotency-Key로 다시 보내면 서버는 처음 접수한 내용을 돌려주므로, 내용이 바뀌면 키도 새로 만든다.
+    const previous = retry.current
+    const attempt = previous && previous.url === url && previous.comment === trimmedComment
+      && previous.anonymous === anonymous
+      ? previous
+      : { url, comment: trimmedComment, anonymous, key: randomId() }
+    retry.current = attempt
     submitting.current = true
     try {
-      const result = await submitSongRequestMutation.mutateAsync(retry.current)
+      const result = await submitSongRequestMutation.mutateAsync(attempt)
       onSubmitted?.({
         title: result.track.title,
         artist: result.track.artist,
@@ -100,7 +119,7 @@ export function SongRequestModal({ onClose, stationId, onSubmitted }: SongReques
           </button>
         </header>
 
-        <p className="text-xs text-text-muted">로그인한 청취자 누구나 신청할 수 있어요. 링크 또는 가수·곡 제목으로 입력해주세요. 검색은 10분 이하 일반 영상만 보여줘요.</p>
+        <p className="text-xs text-text-muted">링크 또는 가수·곡 제목으로 입력해주세요. 10분 이하의 노래만 신청이 가능해요.</p>
 
         <label className="flex flex-col gap-1.5">
           <span className={fieldLabelClass}>유튜브 링크 또는 검색어</span>
@@ -145,10 +164,32 @@ export function SongRequestModal({ onClose, stationId, onSubmitted }: SongReques
           <p className="text-xs text-text-muted">선택 후 아래 버튼을 눌러 등록해주세요. 영상에 따라 다운로드가 제한될 수 있어요.</p>
         </fieldset>}
 
+        <label className="flex flex-col gap-1.5">
+          <span className={fieldLabelClass}>사연 (선택)</span>
+          <input
+            type="text"
+            maxLength={COMMENT_MAX_LENGTH}
+            disabled={submitSongRequestMutation.isPending || submitSongRequestMutation.isSuccess}
+            value={comment}
+            onChange={(event) => { setComment(event.target.value); submitSongRequestMutation.reset() }}
+            placeholder="예: 시험 끝난 기념으로 신청해요"
+            className={textInputClass}
+          />
+          <span className="self-end text-[11px] text-text-muted">{comment.length}/{COMMENT_MAX_LENGTH}</span>
+        </label>
+        <label className="-mt-3 flex items-center gap-2 text-[13px] text-text">
+          <input
+            type="checkbox"
+            checked={anonymous}
+            onChange={(event) => { setAnonymous(event.target.checked); submitSongRequestMutation.reset() }}
+            disabled={submitSongRequestMutation.isPending || submitSongRequestMutation.isSuccess}
+          />
+          익명으로 신청하기
+        </label>
+
         {!stationId && <p role="alert">방송 정보를 불러온 뒤 다시 열어주세요.</p>}
         {stationId && station.isPending && <p role="status">방송 권한을 확인하고 있어요...</p>}
         {station.error && <p role="alert" className="text-xs text-danger">{station.error.message}</p>}
-        {station.data === false && <p role="alert">방송을 시작한 뒤 등록해주세요.</p>}
         {validation && <p role="alert" className="text-xs text-danger">{validation}</p>}
         {submitSongRequestMutation.isPending && <p role="status" className="text-xs">음원을 다운로드하고 준비하고 있어요. 최대 4분 정도 걸릴 수 있어요.</p>}
         {submitSongRequestMutation.error && <p role="alert" className="text-xs text-danger">{submitSongRequestMutation.error.message}</p>}

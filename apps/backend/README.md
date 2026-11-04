@@ -156,6 +156,7 @@ tick은 정책 판단만 수행하며 요청을 소비하거나 오디오를 생
 서버가 신청곡 기록을 음원 큐와 함께 저장하며, 음원의 송출 상태가 해당 기록에 반영됩니다.
 신청곡을 표시하기 위해 별도의 `/api/requests` 요청을 보내지 않습니다.
 본문에 `comment`(60자, 신청곡 전용)를 넣으면 곡 소개에 쓰도록 `track.queued` 앞에 `request.arrived`(`kind: song_request`)를 보냅니다. 없으면 보내지 않습니다.
+`anonymous: true`(신청곡 전용)이면 신청자 닉네임을 기록과 엔진 이벤트에서 빼고, 엔진은 `익명`으로 소개합니다.
 신청곡 상태는 음악 세그먼트의 송출로만 정해집니다. 곡 소개 멘트의 전이와 엔진의 `request.state`는 상태를 바꾸지 않고, 엔진 통보는 이력에 `accepted: false`로 남습니다.
 기존 prompt/listenerId는 유지하고 kind는 story(기본), mood, chat, message입니다. message 본문은 200자까지이며, listenerName이 있으면 request.arrived의 nickname으로 엔진에 전달합니다. 초기 상태는 queued에서 requested로 변경했습니다.
 엔진이 먼저 응답하면 POST에도 최신 상태가 반환될 수 있으며, 202 자체는 엔진 처리 완료를 뜻하지 않습니다.

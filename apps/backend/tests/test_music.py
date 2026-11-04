@@ -125,9 +125,10 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         url = 'https://www.youtube.com/watch?v=' + VIDEO
         self.assertEqual(TrackInput(url=url, source='request', comment=' 안녕 ').comment, '안녕')
         self.assertIsNone(TrackInput(url=url, source='request', comment='   ').comment)
+        self.assertTrue(TrackInput(url=url, source='request', anonymous=True).anonymous)
         for body in [dict(comment='안녕'), dict(source='vote', comment='안녕'),
                      dict(source='request', request_id='req', comment='안녕'),
-                     dict(source='request', comment='x' * 61)]:
+                     dict(source='request', comment='x' * 61), dict(anonymous=True)]:
             with self.subTest(body=body), self.assertRaises(ValueError):
                 TrackInput(url=url, **body)
 
@@ -189,6 +190,17 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             app.state.music.enqueue.assert_not_awaited()
             self.assertEqual((await client.post(path, json=body, headers=headers)).status_code, 202)
             app.state.music.enqueue.assert_awaited_once_with(VIDEO, 'other', 'song-one')
+            async def named_listener():
+                return {'id': 'other', 'name': '청취자'}
+            app.dependency_overrides[get_current_user] = named_listener
+            request_body = {**body, 'source': 'request', 'comment': '시험 끝났어요'}
+            for extra, nickname in [({}, '청취자'), ({'anonymous': True}, None)]:
+                with self.subTest(anonymous=bool(extra)):
+                    app.state.music.enqueue.reset_mock()
+                    response = await client.post(path, json={**request_body, **extra}, headers=headers)
+                    self.assertEqual(response.status_code, 202)
+                    app.state.music.enqueue.assert_awaited_once_with(
+                        VIDEO, 'other', 'song-one', 'request', None, nickname, '시험 끝났어요')
             app.state.redis.get.return_value = json.dumps(dict(owner_id='owner', status='preparing'))
             self.assertEqual((await client.post(path, json=body, headers=headers)).status_code, 409)
 
