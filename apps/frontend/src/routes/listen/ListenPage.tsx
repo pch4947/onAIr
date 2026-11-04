@@ -13,12 +13,13 @@ import {
 import { useCurrentUser } from '@/shared/useCurrentUser'
 import { randomId } from '@/shared/randomId'
 import { ExperimentSurveyModal } from '@/routes/listen/ExperimentSurveyModal'
+import { MessageModal } from '@/routes/listen/MessageModal'
 import { SongRequestModal } from '@/routes/listen/SongRequestModal'
 import { SongQueueModal } from '@/routes/listen/SongQueueModal'
 import { StationStopButton } from '@/routes/listen/StationStopButton'
 import {
-  BackIcon, EmojiIcon, MusicNoteIcon, PauseIcon, PlayIcon, ReplaySaveIcon, SendIcon, SongRequestAddIcon, ViewIcon,
-  VolumeIcon,
+  BackIcon, EmojiIcon, MessageIcon, MusicNoteIcon, PauseIcon, PlayIcon, ReplaySaveIcon, SendIcon, SongRequestAddIcon,
+  ViewIcon, VolumeIcon,
 } from '@/routes/listen/icons'
 import { STATUS_VARIANT, STATUS_VARIANT_CLASS } from '@/routes/listen/requestStatus'
 import { STATION_INFO } from '@/routes/listen/mock'
@@ -61,6 +62,7 @@ export function ListenPage() {
   const navigate = useNavigate()
   const [isSurveyOpen, setIsSurveyOpen] = useState(false)
   const [isSongRequestOpen, setIsSongRequestOpen] = useState(false)
+  const [isMessageOpen, setIsMessageOpen] = useState(false)
   const [isEmojiPickerOpen, setIsEmojiPickerOpen] = useState(false)
   const [isQueueOpen, setIsQueueOpen] = useState(false)
   const [isVolumeOpen, setIsVolumeOpen] = useState(false)
@@ -77,6 +79,9 @@ export function ListenPage() {
   })
   const stationId = broadcastStateQuery.data?.stationId
   const stationStatus = broadcastStateQuery.data?.stationStatus
+  const stationFormat = broadcastStateQuery.data?.stationFormat
+  // 음악·뉴스 형식은 엔진이 사연(message)을 방송에 반영하지 않는다
+  const canSendMessage = stationFormat !== 'music' && stationFormat !== 'news'
   const ended = stationStatus === 'ended' || stationStatus === 'rejected'
   const ending = ['stopping', 'cleaning', 'draining'].includes(stationStatus ?? '')
 
@@ -336,6 +341,25 @@ export function ListenPage() {
                     <p className="text-text">{message.text}</p>
                   )}
                 </li>
+              ) : message.kind === 'message' ? (
+                <li
+                  key={message.id}
+                  className="flex flex-col gap-1 rounded-md border border-border bg-surface px-3 py-2"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex min-w-0 items-center gap-1 font-semibold text-text-muted">
+                      <MessageIcon className="size-3.5 shrink-0" />
+                      <span className="truncate" title={message.author}>{message.author}</span>
+                      <span className="shrink-0">님의 사연</span>
+                    </span>
+                    <span
+                      className={`shrink-0 rounded-xl px-2 py-0.5 text-[10px] font-semibold text-white ${STATUS_VARIANT_CLASS[STATUS_VARIANT[message.status] ?? 'queued']}`}
+                    >
+                      {message.status.toUpperCase()}
+                    </span>
+                  </div>
+                  <p className="wrap-break-word text-text">{message.text}</p>
+                </li>
               ) : (
                 <li key={message.id} className="flex items-baseline gap-1.5">
                   <span
@@ -401,6 +425,16 @@ export function ListenPage() {
               >
                 <SongRequestAddIcon className="size-5" />
               </button>
+              {canSendMessage && (
+                <button
+                  type="button"
+                  onClick={() => setIsMessageOpen(true)}
+                  aria-label="사연 보내기"
+                  className="shrink-0 text-text-muted"
+                >
+                  <MessageIcon className="size-5" />
+                </button>
+              )}
               <div className="h-5 w-px shrink-0 bg-border" />
               <button
                 type="submit"
@@ -442,6 +476,14 @@ export function ListenPage() {
           onClose={() => setIsSongRequestOpen(false)}
           stationId={stationId}
           onSubmitted={() => { void requestsQuery.refetch(); void musicQueueQuery.refetch() }}
+        />
+      )}
+      {isMessageOpen && (
+        <MessageModal
+          listenerId={currentUser?.id}
+          listenerName={currentUser?.name}
+          onClose={() => setIsMessageOpen(false)}
+          onSubmitted={() => { void requestsQuery.refetch() }}
         />
       )}
       {isQueueOpen && (

@@ -59,6 +59,8 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(self.call("/api/requests")[0], 503)
         self.assertEqual(self.call("/api/stream/state")[1]["stream"]["status"], "bootstrapping")
         result = self.call("/api/stream/state")[1]
+        self.assertEqual(result["stationStatus"], "unknown")
+        self.assertIsNone(result["stationFormat"])
         self.assertIsNone(result["pendingRequestCount"])
         self.assertFalse(result["requestStatsAvailable"])
         self.assertEqual(self.call("/api/scheduler/tick", {})[0], 503)

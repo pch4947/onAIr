@@ -12,6 +12,7 @@ export interface StreamInfo {
 
 export interface BroadcastStateResponse {
   stationStatus?: 'idle' | 'preparing' | 'started' | 'draining' | 'stopping' | 'cleaning' | 'ended' | 'rejected' | 'unknown'
+  stationFormat?: StationFormat | null
   stream: StreamInfo
   stationId: string
   viewerCount: number | null
@@ -24,7 +25,7 @@ export interface RequestRecord {
   listenerId: string
   listenerName?: string
   prompt: string
-  kind: 'story' | 'mood' | 'song_request'
+  kind: 'story' | 'mood' | 'song_request' | 'message'
   status: string
   createdAt: string
   trackTitle?: string | null
