@@ -104,7 +104,7 @@ class ListenerInput(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000, pattern=r"\S")
     listenerId: str | None = Field(default=None, min_length=1, max_length=256)
     listenerName: str | None = Field(default=None, min_length=1, max_length=50)
-    kind: Literal["story", "mood", "chat", "message"] = "story"
+    kind: Literal["story", "chat", "message"] = "story"
     trackTitle: str | None = Field(default=None, min_length=1, max_length=200)
     trackArtist: str | None = Field(default=None, min_length=1, max_length=200)
     trackThumbnailUrl: str | None = Field(default=None, min_length=1, max_length=500)
