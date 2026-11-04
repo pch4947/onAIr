@@ -72,7 +72,7 @@ class RequestIntegrationTests(unittest.TestCase):
             return response.status, json.load(response)
 
     def test_delivery_retry_restart_and_engine_state(self):
-        body = {'prompt': '차분한 분위기로 부탁해요', 'kind': 'mood'}
+        body = {'prompt': '차분한 분위기로 부탁해요', 'kind': 'chat'}
         with ThreadPoolExecutor(max_workers=4) as pool:
             replies = list(pool.map(lambda _: self.call('/api/requests', body, 'retry-one'), range(4)))
         self.assertTrue(all(status == 202 for status, _ in replies))
@@ -85,7 +85,7 @@ class RequestIntegrationTests(unittest.TestCase):
         fields = self.redis.xrange(f'engine:{self.station}:in')[0][1]
         self.assertEqual(fields['contract_version'], '1')
         self.assertEqual(fields['station_id'], self.station)
-        self.assertEqual(json.loads(fields['payload']), dict(request_id=entry['id'], kind='mood',
+        self.assertEqual(json.loads(fields['payload']), dict(request_id=entry['id'], kind='chat',
             body=body['prompt'], requester_ref='anonymous'))
         self.assertEqual(self.call('/api/requests', {'prompt': '다른 내용'}, 'retry-one')[0], 409)
         self.stop()

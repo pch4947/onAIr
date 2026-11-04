@@ -25,7 +25,7 @@ export interface RequestRecord {
   listenerId: string
   listenerName?: string
   prompt: string
-  kind: 'story' | 'mood' | 'song_request' | 'message'
+  kind: 'story' | 'song_request' | 'message'
   status: string
   createdAt: string
   trackTitle?: string | null

@@ -303,7 +303,7 @@ export function ListenPage() {
             className="flex flex-1 flex-col gap-2 overflow-y-auto rounded-md bg-field-bg p-3 text-[11px] text-text"
           >
             {chatMessages.map((message) =>
-              message.kind === 'mood' || message.kind === 'song_request' ? (
+              message.kind === 'song_request' ? (
                 <li
                   key={message.id}
                   className="flex flex-col gap-1 rounded-md border border-primary/30 bg-primary/10 px-3 py-2"

@@ -67,7 +67,7 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(self.call("/api/requests", {"prompt": "노래 부탁해요"})[0], 503)
 
     def test_invalid_inputs_and_absent_ingestion(self):
-        for body in [{}, {"prompt": ""}, {"prompt": 5}]:
+        for body in [{}, {"prompt": ""}, {"prompt": 5}, {"prompt": "노래 부탁해요", "kind": "mood"}]:
             self.assertEqual(self.call("/api/requests", body)[0], 422)
         for body in [{"bufferSeconds": -1}, {"bufferSeconds": "NaN"}, {"bufferTargetSeconds": 0}]:
             self.assertEqual(self.call("/api/scheduler/tick", body)[0], 422)
