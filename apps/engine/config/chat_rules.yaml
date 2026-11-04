@@ -11,6 +11,22 @@ max_quote_chars: 60           # [임시값] 말로 인용하기 어려운 길이
 short_reaction_chars: 20      # [임시값] 감탄·평가 표현으로 볼 최대 길이
 message_max_chars: 200        # [예시] 문자 낭독 길이 상한 (계약 10.3절)
 
+# 화제 전환(STEER) 판별 — CORNER_DESIGN 5.2절, U2. 표현 목록은 실제 채팅 로그로 다듬는다
+steer_min_chars: 6            # [임시값] "왜요?"처럼 화제가 될 내용이 없는 채팅을 거른다
+steer_questions: ["?", "？"]
+steer_requests:
+  - 해 주세요
+  - 해주세요
+  - 해 줘
+  - 해줘
+  - 들려주세요
+  - 들려줘
+  - 알려주세요
+  - 알려줘
+steer_address:                # 방의 DJ 이름은 코드에서 더한다
+  - DJ
+  - 디제이
+
 # 규칙 1 — 대상을 가리키는 표현
 pointing:
   - 이 노래

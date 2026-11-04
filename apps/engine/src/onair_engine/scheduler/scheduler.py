@@ -35,9 +35,9 @@ from ..domain import (
     wire_state,
 )
 from ..format.clock import Clock, ClockEntry
-from ..format.spec import QUOTABLE, FormatSpec, Intensity
+from ..format.spec import QUOTABLE, FormatSpec, Intensity, Mode
 from ..glue import WIRE_KIND, GlueBank
-from ..inputs.classify import classify, keywords
+from ..inputs.classify import classify, keywords, steer_rule
 from ..inputs.on_air import OnAirTimeline
 from ..inputs.pool import QuotePool
 from ..inputs.router import BOARD_STORY, CHAT, MESSAGE, SONG_REQUEST, normalize_kind
@@ -104,6 +104,7 @@ class Scheduler:
         self._song_requests: dict[str, ListenerRequest] = {}  # 곡 차례를 기다리는 신청곡의 한마디
         self._generating: dict[str, ListenerRequest] = {}  # 생성 중인 입력
         self._discard: set[str] = set()  # 생성 중 취소·철회된 입력 — 결과를 버린다
+        self._steer_pending = False  # 화제를 바꿀 인용을 생성 중 — 결과가 나와야 다음 단계의 화제가 정해진다
         self._emit_corner_changed = emit_corner_changed
         self._announced_corner: str | None = None
         self._inflight = 0
@@ -298,7 +299,8 @@ class Scheduler:
                 await asyncio.sleep(min(blocked_sec, _TTS_BLOCKED_SLEEP_SEC))
                 continue
             if (ctx.inflight_generations >= self.max_concurrent
-                    or ctx.generated_buffer_sec >= self.target_buffer_sec):
+                    or ctx.generated_buffer_sec >= self.target_buffer_sec
+                    or self._steer_pending):
                 self.telemetry.log_decision(ctx, Decision(action="wait"))
                 await asyncio.sleep(_IDLE_SLEEP_SEC)
                 continue
@@ -410,6 +412,8 @@ class Scheduler:
         anchor = self._anchor_for(planned)
         await self._expire_inputs(time.time())
         material.quotes = self._take_quotes(corner.mode("chat"), step.kind, anchor, material)
+        if corner.mode("chat") == Mode.STEER:
+            self._mark_steer(material)
         return GenerationJob(
             job_id=new_id("job"), corner_type=corner.corner_type, step=step.kind,
             material=material, plain=corner.subjectivity == "none", anchor=anchor, feature=feature,
@@ -472,6 +476,26 @@ class Scheduler:
             self.pool.remove(req)
         return selection.picked
 
+    def _mark_steer(self, material: Material) -> None:
+        """고른 채팅이 화제를 바꿀 조건을 채우면 표시한다. 화제는 인용이 대본에 들어간 뒤에 바꾼다."""
+        if not material.quotes or self._run is None:
+            return
+        rule = steer_rule(material.quotes[0].body, self.chat_rules, self.config.profile.dj_name)
+        if rule and self._run.can_steer(self.intensity.steer_limit, self._produced_ms):
+            material.extra["steer"] = rule
+            self._steer_pending = True
+
+    def _apply_steer(self, req: ListenerRequest, job: GenerationJob, segment_id: str) -> None:
+        """다음 단계부터 이 채팅이 화제다 (CORNER_DESIGN 5.2절). 앵커도 새 화제로 새로 만든다."""
+        run = self._run
+        old_topic = run.thread.topic
+        run.thread = Thread(topic=req.body, keywords=sorted(keywords(req.body)))
+        run.steers += 1
+        self._run_anchor = None
+        self.telemetry.log_steer(request_id=req.request_id, segment_id=segment_id,
+                                 corner_type=job.corner_type, rule=job.material.extra["steer"],
+                                 old_topic=old_topic, new_topic=req.body)
+
     # ── 생성 · 제출 ──────────────────────────────────────────────────
 
     async def _publish_glue(self, ctx: ScheduleContext, planned: PlannedStep) -> None:
@@ -509,6 +533,8 @@ class Scheduler:
                     if sub.request_ref == req.request_id:
                         self._quoted[sub.id] = (req, job)
                         await self._transition(req, RequestState.GENERATED)
+                        if job.material.extra.get("steer"):
+                            self._apply_steer(req, job, sub.id)
                     else:  # 인용이 빠졌거나 제공자 장애로 filler 대체됨 — 반영되지 않았다
                         await self._requeue_or_reject(req, job)
         except Exception:
@@ -521,6 +547,8 @@ class Scheduler:
                     await self._requeue_or_reject(req, job)
         finally:
             self._inflight -= 1
+            if job.material.extra.get("steer"):
+                self._steer_pending = False
             for req in inputs:
                 self._generating.pop(req.request_id, None)
             # 실패해도 순번은 비워야 뒤 순번이 나간다. 곡 길이는 백엔드가 실제로 틀 곡(music_ref)만 센다

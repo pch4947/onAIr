@@ -18,6 +18,10 @@ class ChatRules(BaseModel):
     message_max_chars: int = Field(default=200, ge=1)
     pointing: list[str] = Field(default_factory=list)
     reactions: list[str] = Field(default_factory=list)
+    steer_min_chars: int = Field(default=6, ge=1)
+    steer_questions: list[str] = Field(default_factory=list)
+    steer_requests: list[str] = Field(default_factory=list)
+    steer_address: list[str] = Field(default_factory=list)
 
 
 def load_chat_rules(path: str | Path) -> ChatRules:
