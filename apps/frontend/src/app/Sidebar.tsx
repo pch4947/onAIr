@@ -38,7 +38,7 @@ function NotificationToast({ notification, onClick, onExpire }: NotificationToas
       }}
       className={
         (visible ? 'translate-y-0 opacity-100' : '-translate-y-2 opacity-0') +
-        ' flex flex-col gap-1 rounded-md border border-[#bad1fa] bg-[#ebf2ff] px-4 py-3.5 text-left shadow-md transition-all duration-200 ease-out'
+        ' flex flex-col gap-1 rounded-md border border-primary-soft-border bg-primary-soft px-4 py-3.5 text-left shadow-md transition-all duration-200 ease-out'
       }
     >
       <p className="text-sm font-semibold text-[#1a1a1f]">{notification.title}</p>
