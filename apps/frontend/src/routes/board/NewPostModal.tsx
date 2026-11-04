@@ -63,6 +63,8 @@ export function NewPostModal({ onClose, onCreated }: NewPostModalProps) {
           </button>
         </header>
 
+        <p className="text-xs text-text-muted">올린 사연은 어떤 방송에서든 DJ가 읽어 줄 수 있어요.</p>
+
         <label className="flex flex-col gap-1.5">
           <span className={fieldLabelClass}>제목</span>
           <input
