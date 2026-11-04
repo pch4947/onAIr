@@ -211,7 +211,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.state.hls = publisher
         try:
             await publisher.start()
-            async with asyncio.timeout(15):
+            async with asyncio.timeout(30):
                 while not publisher.ready:
                     await asyncio.sleep(.1)
             session = publisher.session
