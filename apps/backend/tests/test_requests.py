@@ -146,8 +146,20 @@ class RequestIntegrationTests(unittest.TestCase):
         self.assertEqual(self.call('/api/stream/state')[1]['pendingRequestCount'], 0)
         self.assertEqual(self.call('/api/requests/' + entry['id'] + '/state')[1]['state'], 'rejected')
 
+    def test_message_and_chat_deliver_kind_and_nickname(self):
+        status, reply = self.call('/api/requests', {'prompt': 'x' * 200, 'kind': 'message', 'listenerName': '밤샘러'})
+        self.assertEqual(status, 202)
+        self.assertEqual(reply['request']['kind'], 'message')
+        status, chat = self.call('/api/requests', {'prompt': '안녕하세요', 'kind': 'chat'})
+        self.assertEqual(status, 202)
+        payloads = [json.loads(fields['payload']) for _, fields in self.redis.xrange(f'engine:{self.station}:in')]
+        self.assertEqual(payloads, [
+            dict(request_id=reply['request']['id'], kind='message', body='x' * 200, requester_ref='anonymous', nickname='밤샘러'),
+            dict(request_id=chat['request']['id'], kind='chat', body='안녕하세요', requester_ref='anonymous')])
+
     def test_validation_and_no_partial_write_on_wrong_key_type(self):
-        for body in [{'prompt': '  '}, {'prompt': 'x', 'kind': 'song'}, {'prompt': 'x' * 4001}]:
+        for body in [{'prompt': '  '}, {'prompt': 'x', 'kind': 'song'}, {'prompt': 'x' * 4001},
+                     {'prompt': 'x' * 201, 'kind': 'message'}]:
             self.assertEqual(self.call('/api/requests', body)[0], 422)
         self.assertEqual(self.call('/api/requests', {'prompt': 'x'}, 'bad key')[0], 422)
         self.redis.set(f'engine:{self.station}:in', 'wrong-type')

@@ -8,7 +8,7 @@ import time
 
 from fastapi import APIRouter, Body, Request, HTTPException, Query, Response, Header
 from redis.exceptions import RedisError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .scheduler import decide_next_segment
 from .requests import IdempotencyConflict
@@ -95,6 +95,7 @@ async def engine_request_state(request_id: str, request: Request):
     if raw is None:
         raise HTTPException(404, "Request state not received")
     return json.loads(raw)
+MESSAGE_MAX_LENGTH = 200
 Seconds = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 PositiveSeconds = Annotated[float, Field(ge=1, allow_inf_nan=False)]
 
@@ -103,10 +104,16 @@ class ListenerInput(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000, pattern=r"\S")
     listenerId: str | None = Field(default=None, min_length=1, max_length=256)
     listenerName: str | None = Field(default=None, min_length=1, max_length=50)
-    kind: Literal["story", "mood"] = "story"
+    kind: Literal["story", "mood", "chat", "message"] = "story"
     trackTitle: str | None = Field(default=None, min_length=1, max_length=200)
     trackArtist: str | None = Field(default=None, min_length=1, max_length=200)
     trackThumbnailUrl: str | None = Field(default=None, min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def limit_message_length(self):
+        if self.kind == "message" and len(self.prompt) > MESSAGE_MAX_LENGTH:
+            raise ValueError(f"message must be at most {MESSAGE_MAX_LENGTH} characters")
+        return self
 
 
 class TickInput(BaseModel):
