@@ -27,6 +27,28 @@ steer_address:                # 방의 DJ 이름은 코드에서 더한다
   - DJ
   - 디제이
 
+# 집계 언급 — CORNER_DESIGN 5.7, 9.2절. 건수 기준은 flood_threshold를 쓴다
+aggregate_share: 0.4          # [임시값] 채팅한 사람 중 같은 키워드를 말한 사람의 비율
+aggregate_min_people: 3       # [임시값] 같은 키워드를 말한 최소 인원 — 한 사람의 도배를 거른다
+aggregate_stopwords:          # 어디에나 나와 화제라고 할 수 없는 말. 감탄 표현은 reactions도 뺀다
+  - 노래
+  - 음악
+  - 방송
+  - 사람
+  - 우리
+  - 이거
+  - 그거
+  - 저도
+  - 얘기
+  - 때문에
+  - 다른
+aggregate_predicate_endings: [요, 다, 죠, 네, 까, 니, 나, 지, 어, 아]  # 이렇게 끝나는 토큰은 화제가 아니라 서술어로 본다
+
+# 문자 코너 예고 — CORNER_DESIGN 9.2절
+preview_min_messages: 5       # [예시] inbox에 이만큼 쌓이면 M
+preview_lookahead: 2          # [예시] 문자 코너가 다음 이만큼의 코너 안에 있으면 예고하지 않는다
+preview_min_remaining_sec: 300  # [임시값] 남은 방송이 이보다 짧으면 읽어 준다고 약속하지 않는다
+
 # 규칙 1 — 대상을 가리키는 표현
 pointing:
   - 이 노래

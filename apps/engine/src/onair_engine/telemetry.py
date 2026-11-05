@@ -45,6 +45,10 @@ CREATE TABLE IF NOT EXISTS steer_log (
     request_id TEXT, station_id TEXT, segment_id TEXT, at REAL, corner_type TEXT, rule TEXT,
     old_topic TEXT, new_topic TEXT
 );
+CREATE TABLE IF NOT EXISTS aggregate_log (
+    station_id TEXT, segment_id TEXT, at REAL, kind TEXT, corner_type TEXT, keyword TEXT,
+    count INTEGER, total INTEGER
+);
 CREATE TABLE IF NOT EXISTS aired_log (
     station_id TEXT, segment_id TEXT, at REAL, script TEXT
 );
@@ -218,6 +222,15 @@ class Telemetry:
             "INSERT INTO steer_log VALUES (?,?,?,?,?,?,?,?)",
             (request_id, self.station_id, segment_id, time.time(), corner_type, rule,
              old_topic, new_topic),
+        )
+        self._db.commit()
+
+    def log_aggregate(self, *, segment_id: str, kind: str, corner_type: str, keyword: str | None,
+                      count: int, total: int | None) -> None:
+        """집계 언급·예고 — 개인 반영으로 세지 않는다 (CORNER_DESIGN 9.2절, RQ-A 보조 조건)."""
+        self._db.execute(
+            "INSERT INTO aggregate_log VALUES (?,?,?,?,?,?,?,?)",
+            (self.station_id, segment_id, time.time(), kind, corner_type, keyword, count, total),
         )
         self._db.commit()
 

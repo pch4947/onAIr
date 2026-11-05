@@ -7,6 +7,7 @@ LLM을 쓰지 않는다. 같은 입력에는 같은 결과가 나와야 선별 �
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 
 from ..domain import Anchor, ChatType
 from .rules import ChatRules
@@ -30,6 +31,16 @@ def keywords(text: str | None) -> frozenset[str]:
         return frozenset()
     words = (_strip_josa(t.lower()) for t in _TOKEN.findall(text))
     return frozenset(w for w in words if len(w) >= 2 and w not in _STOPWORDS)
+
+
+def noun_like_keywords(text: str, predicate_endings: Iterable[str]) -> frozenset[str]:
+    """화제로 부를 수 있는 키워드 — 서술어로 끝나는 토큰("큰일이에요")을 뺀다. 형태소 분석의 근사다."""
+    endings = tuple(predicate_endings)
+    words = frozenset[str]()
+    for token in _TOKEN.findall(text):
+        if not token.endswith(endings):
+            words |= keywords(token)
+    return words
 
 
 def steer_rule(body: str, rules: ChatRules, dj_name: str) -> str | None:

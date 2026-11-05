@@ -37,6 +37,7 @@ from ..domain import (
 from ..format.clock import Clock, ClockEntry
 from ..format.spec import QUOTABLE, FormatSpec, Intensity, Mode
 from ..glue import WIRE_KIND, GlueBank
+from ..inputs.aggregate import chat_trend
 from ..inputs.classify import classify, keywords, steer_rule
 from ..inputs.on_air import OnAirTimeline
 from ..inputs.pool import QuotePool
@@ -59,6 +60,7 @@ _NO_MATERIAL_SLEEP_SEC = 3.0
 _WAIT = object()  # _next_planned: 낼 수 있는 단계가 지금은 없다
 # v1 계약은 세그먼트당 요청 하나(request_ref)만 싣는다 — 참여 강도가 2여도 1건 (계약 v2 input_refs 전까지)
 _V1_QUOTES_PER_SEGMENT = 1
+_TEXT_CORNER = "text_corner"  # 예고가 가리키는 코너
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +98,9 @@ class Scheduler:
             experiment.get("selector", RELEVANCE), flood_threshold=chat_rules.flood_threshold,
             max_quote_chars=chat_rules.max_quote_chars, violates=violates,
         )
+        self._violates = violates
+        self._aggregate_ack = experiment.get("aggregate_ack", True)  # 실험용 방의 보조 조건 (RQ-A)
+        self._previewed = False  # 문자 코너까지 예고는 한 번만 — 코너마다 되풀이하지 않는다
         self._anchor_no = 0
         self._last_anchor: Anchor | None = None  # 생성 쪽 최신 앵커 — 접착 문구는 이것을 잇는다
         self._run_anchor: Anchor | None = None  # 지금 코너의 화제 앵커 — 항목 없는 단계가 처음 나올 때 만든다
@@ -350,6 +355,8 @@ class Scheduler:
                     continue
                 self._skip_logged.clear()
                 self.sources.inbox.begin_corner()
+                if entry.corner.corner_type == _TEXT_CORNER:
+                    self._previewed = False
                 topic = entry.label or self.topic
                 self._run_anchor = None
                 self._run = CornerRun(entry, sources=self.sources, intensity=self.intensity,
@@ -414,6 +421,7 @@ class Scheduler:
         material.quotes = self._take_quotes(corner.mode("chat"), step.kind, anchor, material)
         if corner.mode("chat") == Mode.STEER:
             self._mark_steer(material)
+        self._mark_aggregate(corner.mode("chat"), step.kind, material)
         return GenerationJob(
             job_id=new_id("job"), corner_type=corner.corner_type, step=step.kind,
             material=material, plain=corner.subjectivity == "none", anchor=anchor, feature=feature,
@@ -485,6 +493,47 @@ class Scheduler:
             material.extra["steer"] = rule
             self._steer_pending = True
 
+    def _mark_aggregate(self, chat_mode, step_kind: str, material: Material) -> None:
+        """인용·주 소재가 없는 멘트에 집계 언급이나 예고를 하나 붙인다 (CORNER_DESIGN 9.2절).
+
+        인용과 같이 넣지 않는다 — 멘트가 길어지면 다른 청취자의 방송 시간을 쓴다.
+        """
+        if (not self._aggregate_ack or self._run is None or material.quotes or material.feature_ref
+                or chat_mode not in QUOTABLE or not STEP_KINDS[step_kind].quotable):
+            return
+        now = time.time()
+        if not self._run.aggregated:
+            trend = chat_trend(self.pool.items, now=now, window_sec=self.pool.reaction_window_sec,
+                               rules=self.chat_rules, violates=self._violates)
+            if trend is not None:
+                self._run.aggregated = True
+                material.extra["aggregate"] = trend
+                return
+        if self._should_preview(now):
+            self._previewed = True
+            material.extra["preview"] = {"title": self.fmt.corner(_TEXT_CORNER).title,
+                                         "messages": self.sources.inbox.count()}
+
+    def _should_preview(self, now: float) -> bool:
+        rules = self.chat_rules
+        return (not self._previewed and _TEXT_CORNER in self.fmt.corners
+                and self.sources.inbox.count() >= rules.preview_min_messages
+                # 곧 끝나는 방송에서는 읽어 준다고 약속할 수 없다
+                and self._remaining_sec(now) >= rules.preview_min_remaining_sec
+                and all(entry.corner.corner_type != _TEXT_CORNER
+                        for entry in self.clock.upcoming(rules.preview_lookahead)))
+
+    def _log_aggregate(self, job: GenerationJob, segment_id: str) -> None:
+        extra = job.material.extra
+        if trend := extra.get("aggregate"):
+            self.telemetry.log_aggregate(
+                segment_id=segment_id, kind="aggregate", corner_type=job.corner_type,
+                keyword=trend.keyword, count=trend.people, total=trend.total_people)
+        elif preview := extra.get("preview"):
+            self.telemetry.log_aggregate(
+                segment_id=segment_id, kind="preview", corner_type=job.corner_type,
+                keyword=None, count=preview["messages"], total=None)
+
     def _apply_steer(self, req: ListenerRequest, job: GenerationJob, segment_id: str) -> None:
         """다음 단계부터 이 채팅이 화제다 (CORNER_DESIGN 5.2절). 앵커도 새 화제로 새로 만든다."""
         run = self._run
@@ -529,6 +578,8 @@ class Scheduler:
                     for req in inputs:
                         await self._transition(req, RequestState.REJECTED)  # F-15
                     return
+                if not job.provider_failed:  # 고정 문구로 대체됐으면 언급이 나가지 않았다
+                    self._log_aggregate(job, sub.id)
                 for req in inputs:
                     if sub.request_ref == req.request_id:
                         self._quoted[sub.id] = (req, job)
