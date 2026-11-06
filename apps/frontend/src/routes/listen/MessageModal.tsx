@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { submitRequest } from '@/shared/api'
+import { isUnauthorizedError, LoginExpiredNotice } from '@/routes/listen/LoginExpiredNotice'
 
 const MESSAGE_MAX_LENGTH = 200
 
@@ -73,7 +74,10 @@ export function MessageModal({ listenerId, listenerName, onClose, onSubmitted }:
           익명으로 보내기
         </label>
 
-        {sendMutation.isError && <p role="alert" className="text-xs text-danger">사연을 보내지 못했어요, 다시 시도해주세요</p>}
+        {sendMutation.isError && (isUnauthorizedError(sendMutation.error)
+          ? <LoginExpiredNotice className="text-xs" />
+          : <p role="alert" className="text-xs text-danger">사연을 보내지 못했어요, 다시 시도해주세요</p>
+        )}
 
         <footer className="flex items-center justify-end gap-2">
           <button
