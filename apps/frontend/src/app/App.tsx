@@ -4,6 +4,7 @@ import { ListenPage } from '@/routes/listen/ListenPage'
 import { BoardPage } from '@/routes/board/BoardPage'
 import { MyPagePage } from '@/routes/mypage/MyPagePage'
 import { MyPageTabPage } from '@/routes/mypage/MyPageTabPage'
+import { TestPage } from '@/routes/test/TestPage'
 import { LoginPage } from '@/routes/auth/LoginPage'
 import { SignupPage } from '@/routes/auth/SignupPage'
 
@@ -17,6 +18,7 @@ export function App() {
         <Route path="/board" element={<BoardPage />} />
         <Route path="/mypage" element={<MyPagePage />} />
         <Route path="/mypage/:tab" element={<MyPageTabPage />} />
+        <Route path="/test" element={<TestPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<SignupPage />} />
         <Route path="*" element={<Navigate to="/login" replace />} />
