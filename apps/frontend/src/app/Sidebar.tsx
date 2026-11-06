@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { getNotifications, markNotificationRead } from '@/shared/api'
 import { getNotificationPath } from '@/shared/notificationLink'
 import { useCurrentUser } from '@/shared/useCurrentUser'
-import { BoardIcon, HomeIcon, UserIcon } from '@/app/icons'
+import { BoardIcon, FlaskIcon, HomeIcon, UserIcon } from '@/app/icons'
 import type { NotificationItem } from '@/shared/types'
 import type { ComponentType } from 'react'
 
@@ -47,7 +47,7 @@ function NotificationToast({ notification, onClick, onExpire }: NotificationToas
   )
 }
 
-type NavKey = 'main' | 'board' | 'mypage'
+type NavKey = 'main' | 'board' | 'mypage' | 'test'
 
 interface SidebarProps {
   active?: NavKey
@@ -58,8 +58,10 @@ type NavItem = { key: NavKey; label: string; icon: ComponentType<{ className?: s
 const NAV_ITEMS: NavItem[] = [
   { key: 'main', label: '홈 · 방송 선택', icon: HomeIcon, path: '/main' },
   { key: 'board', label: '게시판', icon: BoardIcon, path: '/board' },
+  { key: 'test', label: '테스트', icon: FlaskIcon, path: '/test' },
 ]
 
+// 모바일 하단 탭은 홈 로고가 가운데 오도록 3개로 두고, 테스트는 마이페이지 메뉴에 둔다
 const MOBILE_NAV_ITEMS: NavItem[] = [
   { key: 'board', label: '게시판', icon: BoardIcon, path: '/board' },
   { key: 'main', label: '홈', icon: HomeIcon, path: '/main' },

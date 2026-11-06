@@ -1,0 +1,94 @@
+// 테스트 페이지 프리셋
+import type { Persona, StationFormat, TalkCorner } from '@/shared/types'
+
+export interface CornerPreset {
+  id: string
+  label: string
+  format: StationFormat
+  corners?: TalkCorner[]
+}
+
+const TALK_CORNER_LABELS: Record<TalkCorner, string> = {
+  topic_talk: '주제 토크',
+  text_corner: '문자 소개',
+  story_corner: '게시판 사연',
+  dj_vs_listeners: 'DJ 대 청취자',
+}
+
+// 호스트가 고를 수 있는 토크 코너 수 (onair_schema StationCreated.corners)
+const MIN_TALK_CORNERS = 2
+const MAX_TALK_CORNERS = 3
+
+function combinations<T>(items: T[], size: number): T[][] {
+  if (size === 0) return [[]]
+  return items.flatMap((item, index) =>
+    combinations(items.slice(index + 1), size - 1).map((rest) => [item, ...rest]))
+}
+
+const TALK_CORNERS = Object.keys(TALK_CORNER_LABELS) as TalkCorner[]
+
+// 토크는 고를 수 있는 코너 조합 전부. 순환에 문자 소개·곡 소개가 늘 들어가고 고른 코너가 번갈아 나온다
+export const CORNER_PRESETS: CornerPreset[] = [
+  ...Array.from({ length: MAX_TALK_CORNERS - MIN_TALK_CORNERS + 1 }, (_, offset) => MIN_TALK_CORNERS + offset)
+    .flatMap((size) => combinations(TALK_CORNERS, size))
+    .map((corners) => ({
+      id: `talk-${corners.join('-')}`,
+      label: `토크 · ${corners.map((corner) => TALK_CORNER_LABELS[corner]).join(' + ')}`,
+      format: 'talk' as const,
+      corners,
+    })),
+  { id: 'music', label: '음악', format: 'music' },
+  { id: 'news', label: '뉴스', format: 'news' },
+]
+
+export interface PersonaPreset {
+  id: string
+  label: string
+  description: string
+  persona: Omit<Persona, 'voice'>
+}
+
+// 두 페르소나는 말투·에너지·농담을 모두 정반대로 잡아 차이가 바로 들리게 했다.
+// DJ 생성 폼 선택지(PersonaFormStep)와 초안 수정 제한(PersonaEditStep) 안의 값만 쓴다 — 실제 호스트가 만들 수 있는 DJ여야 한다
+export const PERSONA_PRESETS: PersonaPreset[] = [
+  {
+    id: 'goyo',
+    label: '고요',
+    description: '말수 적고 낮게 속삭이는 심야 DJ',
+    persona: {
+      style: { formality: 'polite', energy: 'low', humor: 'rare' },
+      musicTaste: [],
+      djName: '고요',
+      concept: '자정 이후 조용한 라디오',
+      tone: '아주 차분한 존댓말. 문장은 한두 마디로 짧고, 감탄사와 농담 없이 낮게 말한다',
+      signaturePhrases: ['천천히요'],
+      examples: [
+        '자정이 지났어요. 오늘도 수고 많으셨어요.',
+        '이 곡은 조용히 듣는 게 좋아요. 잠깐 쉬어 갈게요.',
+        '사연 하나 읽을게요. 천천히요.',
+        '말은 여기까지 할게요. 음악 들으세요.',
+      ],
+      forbidden: ['느낌표나 감탄사로 텐션 올리기', '농담이나 말장난', '길게 늘어놓는 설명', '정치·종교에 대한 의견'],
+    },
+  },
+  {
+    id: 'beongae',
+    label: '번개',
+    description: '쉴 새 없이 떠드는 하이텐션 반말 DJ',
+    persona: {
+      style: { formality: 'casual', energy: 'high', humor: 'often' },
+      musicTaste: [],
+      djName: '번개',
+      concept: '불금 하이텐션 수다 라디오',
+      tone: '친구 같은 반말. 텐션이 아주 높고 말이 빠르다. 과장과 농담, 감탄사를 많이 쓴다. 존댓말을 섞지 않는다',
+      signaturePhrases: ['가자 가자!', '이거 실화야?'],
+      examples: [
+        '와 다들 모였어? 오늘 분위기 최고다! 바로 달려 보자!',
+        '이거 실화야? 사연 보다가 웃느라 의자에서 떨어질 뻔했잖아!',
+        '이 노래 나오면 무조건 소리 질러야 돼. 준비됐지? 가자 가자!',
+        '채팅창 불났다! 손 느린 사람도 서운해하지 마, 다 읽어 줄게!',
+      ],
+      forbidden: ['존댓말로 말하기', '처지거나 가라앉은 분위기로 끌고 가기', '청취자를 비꼬거나 무시하기', '정치·종교에 대한 의견'],
+    },
+  },
+]

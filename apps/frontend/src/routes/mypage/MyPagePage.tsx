@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Sidebar } from '@/app/Sidebar'
-import { AlertIcon, HistoryIcon, BoardIcon } from '@/app/icons'
+import { AlertIcon, HistoryIcon, BoardIcon, FlaskIcon } from '@/app/icons'
 import { HeartIcon } from '@/routes/board/LikeButton'
 import { MyPageTabContent } from '@/routes/mypage/MyPageTabContent'
 import { ReplaySaveIcon } from '@/routes/listen/icons'
@@ -64,6 +64,12 @@ export function MyPagePage() {
                 </button>
               )
             })}
+            <button type="button" onClick={() => navigate('/test')} className="flex flex-col items-center gap-2">
+              <span className="flex size-16 items-center justify-center rounded-full bg-field-bg">
+                <FlaskIcon className="size-7 text-text" />
+              </span>
+              <span className="text-center text-xs font-medium text-text">테스트</span>
+            </button>
           </div>
 
           <button

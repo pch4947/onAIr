@@ -47,3 +47,21 @@ export function HistoryIcon({ className }: IconProps) {
     </svg>
   )
 }
+
+export function FlaskIcon({ className }: IconProps) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M9 3h6" />
+      <path d="M10 3v6l-5.4 9.6A1.6 1.6 0 0 0 6 21h12a1.6 1.6 0 0 0 1.4-2.4L14 9V3" />
+      <path d="M7.2 15h9.6" />
+    </svg>
+  )
+}
