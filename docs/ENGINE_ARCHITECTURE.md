@@ -3,6 +3,7 @@
 
 **대상**: `apps/engine` — PROJECT_PLAN.md(rev.12) 9장 "역할 분담"의 대본 엔진 파트
 **상태**: 초안 v0.5 (2026-10-12) — 점진적으로 개정하며 관리
+**v0.12 변경**: 엔진 패널 이벤트(#208) — `event_log`, `GET /v1/stations/{id}/events`. 기존 계측 기록 지점에서 화면용 요약을 함께 남긴다([ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md) 6.1절)
 **v0.11 변경**: 게시판 사연 주제 관련도 판정(#204) — `inputs/story_judge.py`, `story_judge_log`. `MaterialSources`가 엔진이 넘긴 빈 inbox·사연 풀을 기본값으로 바꾸던 문제 수정([CORNER_DESIGN.md](CORNER_DESIGN.md) 5.4절)
 **v0.10 변경**: 집계 언급·예고 구현(#186) — `inputs/aggregate.py`, `Clock.upcoming`, `aggregate_log`([CORNER_DESIGN.md](CORNER_DESIGN.md) 9.2절)
 **v0.9 변경**: 채팅 화제 전환 STEER 구현(#176) — 규칙 판별, 인용 확인 뒤 화제 변경, `steer_log`([CORNER_DESIGN.md](CORNER_DESIGN.md) 5.2절)
