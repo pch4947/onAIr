@@ -10,7 +10,7 @@ import uuid
 from redis.asyncio import Redis
 
 from app.config import Settings
-from app.messaging.contracts import RequestState, Segment, decode, validate_audio
+from app.messaging.contracts import CornerChanged, RequestState, Segment, decode, validate_audio
 from app.messaging.consumer import EngineConsumer, GROUP
 
 
@@ -18,6 +18,18 @@ def payload(station="st_test"):
     return dict(id="seg_one", station_id=station, audio_ref=f"{station}/one.wav",
                 duration_ms=1000, corner_type="opening", kind="speech", priority=50,
                 reorderable=True, request_ref=None, music_ref=None, created_at=1.0)
+
+
+class CornerChangedContractTests(unittest.TestCase):
+    def test_corner_changed_shape(self):
+        def envelope(data):
+            return dict(type="corner.changed", contract_version="1", event_id="evt_one", station_id="st_test",
+                        at="1.0", payload=json.dumps(data))
+        good = dict(corner="topic_talk", title="오늘의 이야기", contract=dict(chat="quote"), segment_id="seg_one")
+        self.assertEqual(decode(envelope(good), "st_test"), CornerChanged(**good))
+        for bad in [{k: v for k, v in good.items() if k != "segment_id"}, {**good, "contract": "quote"}]:
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                decode(envelope(bad), "st_test")
 
 
 class RequestStateContractTests(unittest.TestCase):
@@ -78,6 +90,15 @@ class ConsumerIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await self.redis.xreadgroup(GROUP, self.consumer.name, {self.consumer.stream: ">"})
         await self.consumer.handle(entry_id, fields)
         return entry_id, fields
+
+    async def test_corner_changed_waits_for_its_segment(self):
+        await self.deliver(dict(corner="topic_talk", title="오늘의 이야기", contract=dict(chat="quote"),
+                                segment_id="seg_one"), "corner.changed")
+        self.assertEqual(json.loads(await self.redis.hget(self.consumer.prefix + ":corner-pending", "seg_one")),
+                         dict(corner="topic_talk", title="오늘의 이야기", contract=dict(chat="quote")))
+        self.assertIsNone(await self.redis.get(self.consumer.prefix + ":current-corner"))
+        self.assertEqual(await self.redis.xlen(self.consumer.stream + ":dead"), 0)
+        self.assertEqual((await self.redis.xpending(self.consumer.stream, GROUP))["pending"], 0)
 
     async def test_engine_state_does_not_settle_song_request(self):
         for state in ('screened', 'rejected', 'expired'):

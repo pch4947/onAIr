@@ -42,6 +42,14 @@ class StationRejected(BaseModel):
     detail: str = Field(max_length=4096)
 
 
+class CornerChanged(BaseModel):
+    model_config = ConfigDict(strict=True, extra='forbid')
+    corner: Text
+    title: Text
+    contract: dict[Text, Text]
+    segment_id: Text
+
+
 def decode(fields: dict, station_id: str):
     required = {"type", "contract_version", "event_id", "station_id", "at", "payload"}
     if not required <= fields.keys() or not all(isinstance(v, str) for v in fields.values()):
@@ -65,6 +73,8 @@ def decode(fields: dict, station_id: str):
         return StationStarted.model_validate(payload)
     if fields['type'] == 'station.rejected':
         return StationRejected.model_validate(payload)
+    if fields['type'] == 'corner.changed':
+        return CornerChanged.model_validate(payload)
     raise ValueError("unsupported_event")
 
 
