@@ -17,6 +17,7 @@ from .inputs.inbox import MessageInbox
 from .inputs.router import BOARD_STORY
 from .inputs.rules import load_chat_rules
 from .inputs.stories import StoryPool
+from .inputs.story_judge import StoryJudge
 from .pipeline.llm import make_llm
 from .pipeline.pipeline import GenerationPipeline
 from .pipeline.safety import SafetyChecker
@@ -128,8 +129,9 @@ class StationEngine:
         self.sources = MaterialSources(
             tracks=self.tracks, rss=self.rss,
             inbox=MessageInbox(max_chars=chat_rules.message_max_chars, violates=safety.check_l2),
-            stories=StoryPool(topic_words=keywords(self.topic), violates=safety.check_l2),
+            stories=StoryPool(topic_words=keywords(self.topic), violates=safety.check_l2, judged=True),
         )
+        self.story_judge = StoryJudge(llm, self.topic, self.sources.stories, telemetry=self.telemetry)
         self.glue = GlueBank(tts=tts, audio_root=audio_root, station_id=config.station_id,
                              profile=config.profile, fmt=fmt, safety=safety)
         self.scheduler = Scheduler(
@@ -155,6 +157,7 @@ class StationEngine:
     async def run(self, max_segments: int | None = None) -> None:
         # 수집은 사전 렌더링과 동시에 시작한다 — 방송 시작을 피드 시간만큼 더 늦추지 않는다
         poller = asyncio.create_task(self.rss.run()) if self.rss.feeds else None
+        judge: asyncio.Task | None = None
         try:
             # 접착 요소는 방송 시작 전에 이 스테이션의 보이스로 사전 렌더링한다 (설계 문서 4.5)
             try:
@@ -167,13 +170,17 @@ class StationEngine:
                 raise StationRejected("tts_unavailable", str(exc)) from exc
             if poller is not None:
                 await self.rss.ready.wait()  # 수집이 실패해도 방송은 시작한다 — 뉴스 코너만 건너뛴다
+            # 시작 전에 받은 사연은 첫 사연 코너 전에 판정을 끝낸다. 백엔드는 보통 station.started 뒤에 보낸다
+            await self.story_judge.judge_pending()
+            judge = asyncio.create_task(self.story_judge.run())
             await self.transport.notify_station("station.started", {"topic": self.topic})
             self.telemetry.log_station("station.started", {"topic": self.topic})
             await self.scheduler.run(self._stop, max_segments=max_segments)
         finally:
-            if poller is not None:
-                poller.cancel()
-                await asyncio.gather(poller, return_exceptions=True)
+            tasks = [t for t in (poller, judge) if t is not None]
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             self.telemetry.close()
 
     def stop(self) -> None:

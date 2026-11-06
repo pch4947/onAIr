@@ -49,6 +49,9 @@ CREATE TABLE IF NOT EXISTS aggregate_log (
     station_id TEXT, segment_id TEXT, at REAL, kind TEXT, corner_type TEXT, keyword TEXT,
     count INTEGER, total INTEGER
 );
+CREATE TABLE IF NOT EXISTS story_judge_log (
+    story_id TEXT, station_id TEXT, at REAL, relevant INTEGER, method TEXT
+);
 CREATE TABLE IF NOT EXISTS aired_log (
     station_id TEXT, segment_id TEXT, at REAL, script TEXT
 );
@@ -232,6 +235,12 @@ class Telemetry:
             "INSERT INTO aggregate_log VALUES (?,?,?,?,?,?,?,?)",
             (self.station_id, segment_id, time.time(), kind, corner_type, keyword, count, total),
         )
+        self._db.commit()
+
+    def log_story_judgement(self, story_id: str, relevant: bool, method: str) -> None:
+        """게시판 사연 주제 관련도 — method는 llm 또는 keyword(LLM 실패 시 대체) (CORNER_DESIGN 5.4절)."""
+        self._db.execute("INSERT INTO story_judge_log VALUES (?,?,?,?,?)",
+                         (story_id, self.station_id, time.time(), int(relevant), method))
         self._db.commit()
 
     def log_aired(self, segment_id: str, at: float, script: str) -> None:
