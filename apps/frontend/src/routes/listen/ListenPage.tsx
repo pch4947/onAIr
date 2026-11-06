@@ -12,6 +12,7 @@ import {
 } from '@/shared/api'
 import { useCurrentUser } from '@/shared/useCurrentUser'
 import { randomId } from '@/shared/randomId'
+import { CornerGuide } from '@/routes/listen/CornerGuide'
 import { ExperimentSurveyModal } from '@/routes/listen/ExperimentSurveyModal'
 import { isUnauthorizedError, LoginExpiredNotice } from '@/routes/listen/LoginExpiredNotice'
 import { MessageModal } from '@/routes/listen/MessageModal'
@@ -297,6 +298,8 @@ export function ListenPage() {
               {viewerCount?.toLocaleString() ?? '-'}
             </span>
           </header>
+
+          <CornerGuide corner={broadcastStateQuery.data?.currentCorner} stationFormat={stationFormat} />
 
           <ul
             ref={chatListRef}
