@@ -140,7 +140,7 @@ class StationLifecycle:
         # Keep segment/request histories, personas, original audio and VOD. Archive live lists.
         keys = [prefix + ':' + name for name in (
             'queue', 'playlist', 'playlist-order', 'track-plan', 'tracks', 'intro-tracks',
-            'music-submissions')]
+            'music-submissions', 'corner-pending', 'current-corner')]
         # The stopped engine's pending station.closed must never stop the next instance.
         # Engine absence and drained output are checked before rotating consumer groups.
         keys += [f'engine:{self.sid}:in', f'engine:{self.sid}:out']

@@ -305,6 +305,7 @@ WebSocket은 미연동이므로 화면의 연결 상태는 HLS 재생 여부와 
 POST /api/requests → 엔진 request.arrived 발행은 다음 단계입니다.
 HLS에 마지막 조각을 발행한 뒤 큐에서 제거하며, 실제 청취 완료(PLAYED)를 의미하지 않습니다.
 모든 세그먼트는 첫 조각 발행 때 서버 방송 시각으로 엔진에 segment.started를 한 번 보냅니다(계약 10.6절). 그 시각이 되기 전에는 전달하지 않고, 복구로 다시 송출해도 처음 시각을 유지합니다.
+엔진의 corner.changed(계약 10.7절)는 기준 세그먼트의 segment.started가 전달될 때 활성화되어 `/api/stream/state`의 `currentCorner`(`corner`, `title`, `contract`)로 나갑니다. 기준 세그먼트가 송출되지 않으면 활성화되지 않고 이전 코너가 유지됩니다. 방송 중(`started`, `draining`)이 아니면 null입니다.
 중간 재시작 시 큐 선두 음원이 반복될 수 있습니다. 같은 방송에 백엔드를 중복 실행하면 안 됩니다.
 Redis 조회 장애 중에는 무음을 공급하지만, 큐 제거/오류 기록 중 장애가 나면 발행기가 중단되어
 복구 후 백엔드 재시작이 필요할 수 있습니다. /api/stream/state의 error를 확인합니다.

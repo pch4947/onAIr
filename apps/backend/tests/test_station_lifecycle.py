@@ -70,6 +70,8 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_automatic_cleanup_archives_queue_preserves_vod_and_allows_recreation(self):
         prefix = f'backend:{self.sid}'
         await self.redis.rpush(prefix + ':queue', 'old-segment')
+        await self.redis.hset(prefix + ':corner-pending', 'old-segment', '{}')
+        await self.redis.set(prefix + ':current-corner', '{}')
         await self.redis.hset(prefix + ':segments', 'old-segment', '{}')
         await self.redis.hset(prefix + ':replay-sessions', 'old-replay', json.dumps({'id': 'old-replay'}))
         request = await RequestStore(self.redis, self.sid).create('hello', 'user', 'story')
@@ -84,6 +86,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.status(), 'ended')
         self.publisher.stop.assert_awaited_once()
         self.assertEqual(await self.redis.llen(prefix + ':queue'), 0)
+        self.assertFalse(await self.redis.exists(prefix + ':corner-pending', prefix + ':current-corner'))
         self.assertTrue(await self.redis.exists(f'archive:{self.record["generation"]}:{prefix}:queue'))
         self.assertEqual((vod / 'recording.ts').read_bytes(), b'audio')
         self.assertEqual((await RequestStore(self.redis, self.sid).get(request['id']))['status'], 'failed')

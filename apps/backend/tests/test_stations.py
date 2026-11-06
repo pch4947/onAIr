@@ -97,6 +97,20 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(kwargs['listener_name'])
             await client.post('/api/requests', json=sent | {'listenerName': '다른사람'})
             self.assertEqual(app.state.requests.create.await_args.kwargs['listener_name'], '로그인이름')
+    async def test_stream_state_reports_current_corner_only_while_on_air(self):
+        app = create_app(Settings('127.0.0.1', 3000))
+        app.state.hls = SimpleNamespace()
+        app.state.presence = SimpleNamespace(count=AsyncMock(return_value=0))
+        app.state.requests = SimpleNamespace(metrics=AsyncMock(return_value={}))
+        corner = dict(corner='topic_talk', title='오늘의 이야기', contract=dict(chat='quote'))
+        status = {'status': 'started', 'config': {}}
+        async def get(key):
+            return json.dumps(corner if key.endswith(':current-corner') else status)
+        app.state.redis = SimpleNamespace(get=get)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
+            self.assertEqual((await client.get('/api/stream/state')).json()['currentCorner'], corner)
+            status = {'status': 'stopping', 'config': {}}
+            self.assertIsNone((await client.get('/api/stream/state')).json()['currentCorner'])
 
     async def test_stream_state_reports_station_format(self):
         app = create_app(Settings('127.0.0.1', 3000))

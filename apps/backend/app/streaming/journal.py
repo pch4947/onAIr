@@ -7,8 +7,8 @@ from .tracks import MUSIC_SEGMENT_PREFIX, deliver_start
 
 
 DELIVER = """
-local expected = {'hash','stream','hash','list','hash','list','hash','hash'}
-for i=1,8 do
+local expected = {'hash','stream','hash','list','hash','list','hash','hash','hash','string'}
+for i=1,10 do
  local kind = redis.call('TYPE', KEYS[i]).ok
  if kind ~= 'none' and kind ~= expected[i] then return redis.error_reply('Unexpected broadcast key type') end
 end
@@ -42,6 +42,13 @@ elseif event.type == 'encoding.failed' then
       redis.call('HSET', KEYS[5], ARGV[3], cjson.encode({request_id=ARGV[3], state='failed'}))
       redis.call('RPUSH', KEYS[6], cjson.encode({state='failed', at=event.at, source='broadcast', accepted=true}))
     end
+  end
+end
+if event.type == 'segment.started' then
+  local corner = redis.call('HGET', KEYS[9], event.payload.segment_id)
+  if corner then
+    redis.call('SET', KEYS[10], corner)
+    redis.call('HDEL', KEYS[9], event.payload.segment_id)
   end
 end
 if event.type ~= 'encoding.failed' then
@@ -145,10 +152,11 @@ class Journal:
                 await deliver_start(redis, self.station, event_id, body, self.repeat_playlist)
             else:
                 segment_id = event['payload'].get('segment_id', '')
-                await redis.eval(DELIVER, 8, prefix + ':broadcast-events', f'engine:{self.station}:in',
+                await redis.eval(DELIVER, 10, prefix + ':broadcast-events', f'engine:{self.station}:in',
                     prefix + ':segment-states', prefix + ':segment-history:' + segment_id,
                     prefix + ':request-states', prefix + ':request-history:' + request_id,
                       prefix + ':track-plan', prefix + ':intro-tracks',
+                    prefix + ':corner-pending', prefix + ':current-corner',
                     event_id, body, request_id)
             with self.db:
                 self.db.execute('DELETE FROM outbox WHERE seq=?', (seq,))

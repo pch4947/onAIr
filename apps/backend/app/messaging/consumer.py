@@ -9,7 +9,7 @@ import uuid
 
 from redis.exceptions import RedisError, ResponseError
 
-from .contracts import Segment, StationStarted, StationRejected, decode, validate_audio
+from .contracts import CornerChanged, Segment, StationStarted, StationRejected, decode, validate_audio
 from ..stations import StationStore
 from ..streaming.tracks import MUSIC_SEGMENT_PREFIX
 
@@ -157,6 +157,10 @@ class EngineConsumer:
         elif isinstance(event, (StationStarted, StationRejected)):
             await StationStore(self.redis, self.settings.station_id).result(
                 fields['type'], event.model_dump(), float(fields['at']))
+        elif isinstance(event, CornerChanged):
+            # The engine schedules ahead of the broadcast; this waits for the segment to start playing.
+            await self.redis.hset(self.prefix + ':corner-pending', event.segment_id,
+                                  json.dumps(event.model_dump(exclude={'segment_id'}), ensure_ascii=False))
         elif event.request_id.startswith(MUSIC_SEGMENT_PREFIX):
             # The engine tracks the comment and introduction; the song's own audio decides its state.
             await self.redis.rpush(self.prefix + ":request-history:" + event.request_id, json.dumps(dict(
