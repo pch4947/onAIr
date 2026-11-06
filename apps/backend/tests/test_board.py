@@ -551,6 +551,7 @@ class LikeApiTests(unittest.IsolatedAsyncioTestCase):
 class BoardApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_create_requires_auth_validates_input_and_returns_post(self):
         app = create_app(Settings("127.0.0.1", 3000))
+        app.state.story_feed = SimpleNamespace(offer=AsyncMock(), withdraw=AsyncMock())
         app.dependency_overrides[get_current_user] = lambda: {"id": "u1", "name": "라디오러버"}
         app.state.board = BoardStore(SimpleNamespace(hset=AsyncMock()))
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
@@ -731,6 +732,7 @@ class DeletePostApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_author_can_delete_own_post_and_its_comments_and_likes(self):
         app = create_app(Settings("127.0.0.1", 3000))
+        app.state.story_feed = SimpleNamespace(offer=AsyncMock(), withdraw=AsyncMock())
         app.dependency_overrides[get_current_user] = lambda: {"id": "author1", "name": "글쓴이"}
         board_redis = SimpleNamespace(hget=AsyncMock(return_value=json.dumps(self._post(), ensure_ascii=False)),
                                       hdel=AsyncMock())

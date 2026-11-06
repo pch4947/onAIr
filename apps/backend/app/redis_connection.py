@@ -15,6 +15,7 @@ from .requests import RequestStore
 from .users import UserStore
 from .stations import StationStore
 from .board import BoardStore, CommentStore, LikeStore
+from .board_stories import StoryFeed
 from .notifications import NotificationStore
 from .replays import ReplaySessionStore
 from .api import PresenceStore
@@ -33,6 +34,7 @@ async def redis_lifespan(app):
     app.state.users = UserStore(client)
     app.state.stations = StationStore(client, app.state.settings.station_id)
     app.state.board = BoardStore(client)
+    app.state.story_feed = StoryFeed(client, app.state.settings.station_id)
     app.state.board_comments = CommentStore(client)
     app.state.post_likes = LikeStore(client, "backend:board:post-likes", "backend:board:user-liked-posts")
     app.state.comment_likes = LikeStore(client, "backend:board:comment-likes")
