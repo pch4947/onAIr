@@ -10,9 +10,19 @@ export interface StreamInfo {
   error?: string | null
 }
 
+// 엔진 코너 계약 (docs/ENGINE_REDIS_CONTRACT.md 10.7절)
+export type CornerInputMode = 'quote' | 'steer' | 'read' | 'feature' | 'solicit' | 'closed' | 'defer' | 'none'
+
+export interface CurrentCorner {
+  corner: string
+  title: string
+  contract: Partial<Record<'chat' | 'message' | 'song_request' | 'board_story' | 'vote', CornerInputMode>>
+}
+
 export interface BroadcastStateResponse {
   stationStatus?: 'idle' | 'preparing' | 'started' | 'draining' | 'stopping' | 'cleaning' | 'ended' | 'rejected' | 'unknown'
   stationFormat?: StationFormat | null
+  currentCorner?: CurrentCorner | null
   stream: StreamInfo
   stationId: string
   viewerCount: number | null
