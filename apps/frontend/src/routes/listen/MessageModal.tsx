@@ -8,13 +8,12 @@ import { isUnauthorizedError, LoginExpiredNotice } from '@/routes/listen/LoginEx
 const MESSAGE_MAX_LENGTH = 200
 
 interface MessageModalProps {
-  listenerId?: string
   listenerName?: string
   onClose: () => void
   onSubmitted: () => void
 }
 
-export function MessageModal({ listenerId, listenerName, onClose, onSubmitted }: MessageModalProps) {
+export function MessageModal({ listenerName, onClose, onSubmitted }: MessageModalProps) {
   const [body, setBody] = useState('')
   const [anonymous, setAnonymous] = useState(false)
   const sendMutation = useMutation({ mutationFn: submitRequest })
@@ -25,7 +24,7 @@ export function MessageModal({ listenerId, listenerName, onClose, onSubmitted }:
     if (!trimmed || sendMutation.isPending) return
     try {
       await sendMutation.mutateAsync({
-        prompt: trimmed, listenerId, listenerName: anonymous ? undefined : listenerName, kind: 'message',
+        prompt: trimmed, listenerName: anonymous ? undefined : listenerName, kind: 'message',
       })
       onSubmitted()
       onClose()

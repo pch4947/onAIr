@@ -1,15 +1,23 @@
 """Redis-backed user accounts. Mirrors the storage pattern used by RequestStore."""
 from datetime import datetime, timezone
 import json
+import time
 from uuid import uuid4
 
 import bcrypt
 
 
 # Atomic so two concurrent signups can't both claim the same email or the same name.
+# 만료된 게스트의 닉네임은 비어 있는 것으로 보고 그 계정을 지운다.
 CREATE = """
 if redis.call('HEXISTS', KEYS[1], ARGV[1]) == 1 then return 'email' end
-if redis.call('HEXISTS', KEYS[2], ARGV[2]) == 1 then return 'name' end
+local holder = redis.call('HGET', KEYS[2], ARGV[2])
+local raw = holder and redis.call('HGET', KEYS[1], holder)
+if raw then
+  local user = cjson.decode(raw)
+  if user.kind ~= 'guest' or (user.expiresAt or 0) > tonumber(ARGV[4]) then return 'name' end
+  redis.call('HDEL', KEYS[1], holder)
+end
 redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
 redis.call('HSET', KEYS[2], ARGV[2], ARGV[1])
 return 'ok'
@@ -48,6 +56,8 @@ def verify_password(password: str, password_hash: str) -> bool:
 # 일반 가입·이메일 로그인과 겹칠 수 없다.
 GUEST_DOMAIN = "guest.onair.invalid"
 ADMIN_DOMAIN = "admin.onair.invalid"
+# 브라우저만 닫고 떠난 게스트도 이 시간이 지나면 닉네임을 돌려준다. 토큰 만료와 같다.
+GUEST_TTL_SECONDS = 24 * 3600
 
 
 class UserStore:
@@ -56,11 +66,11 @@ class UserStore:
         self.key = "backend:users"
         self.names_key = "backend:usernames"
 
-    async def _insert(self, email: str, name: str, password_hash: str | None, kind: str) -> dict:
+    async def _insert(self, email: str, name: str, password_hash: str | None, kind: str, **extra) -> dict:
         entry = dict(id=str(uuid4()), email=email, name=name, passwordHash=password_hash, kind=kind,
-                     createdAt=datetime.now(timezone.utc).isoformat(timespec="milliseconds"))
+                     createdAt=datetime.now(timezone.utc).isoformat(timespec="milliseconds"), **extra)
         result = await self.redis.eval(CREATE, 2, self.key, self.names_key,
-                                        email, name, json.dumps(entry, ensure_ascii=False))
+                                        email, name, json.dumps(entry, ensure_ascii=False), str(time.time()))
         if result == "email":
             raise EmailAlreadyExists()
         if result == "name":
@@ -71,7 +81,8 @@ class UserStore:
         return await self._insert(email.lower(), name.strip(), hash_password(password), "member")
 
     async def create_guest(self, name: str) -> dict:
-        return await self._insert(f"guest-{uuid4().hex}@{GUEST_DOMAIN}", name.strip(), None, "guest")
+        return await self._insert(f"guest-{uuid4().hex}@{GUEST_DOMAIN}", name.strip(), None, "guest",
+                                  expiresAt=time.time() + GUEST_TTL_SECONDS)
 
     async def get_or_create_admin(self, name: str) -> dict:
         email = f"{name.lower()}@{ADMIN_DOMAIN}"

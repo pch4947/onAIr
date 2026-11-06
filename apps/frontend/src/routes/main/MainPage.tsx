@@ -6,6 +6,7 @@ import { Sidebar } from '@/app/Sidebar'
 import { ViewIcon } from '@/routes/listen/icons'
 import { StationCreateModal } from '@/routes/station-create/StationCreateModal'
 import { STATIONS } from '@/routes/main/mock'
+import { useCurrentUser } from '@/shared/useCurrentUser'
 import type { Station } from '@/routes/main/mock'
 
 const DESKTOP_PAGE_SIZE = 10
@@ -67,6 +68,9 @@ function StationCard({ station, onEnter, placeholder = false }: StationCardProps
 
 export function MainPage() {
   const navigate = useNavigate()
+  // 게스트는 방송을 만들 수 없다 (서버도 막는다)
+  const { data: currentUser } = useCurrentUser()
+  const canCreate = Boolean(currentUser && !currentUser.isGuest)
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
   const [page, setPage] = useState(1)
   const pageSize = useIsDesktop() ? DESKTOP_PAGE_SIZE : MOBILE_PAGE_SIZE
@@ -85,24 +89,28 @@ export function MainPage() {
             <h1 className="text-center text-lg font-semibold text-text md:text-left md:text-[22px]">방송 선택</h1>
             <p className="hidden text-[13px] text-text-muted md:block">지금 들을 수 있는 방송을 선택하세요</p>
           </div>
-          <button
-            type="button"
-            onClick={() => setIsCreateModalOpen(true)}
-            className="hidden shrink-0 items-center gap-1.5 rounded-md bg-primary px-4.5 py-2.5 text-xs font-semibold text-white md:flex"
-          >
-            방송 시작하기
-          </button>
+          {canCreate && (
+            <button
+              type="button"
+              onClick={() => setIsCreateModalOpen(true)}
+              className="hidden shrink-0 items-center gap-1.5 rounded-md bg-primary px-4.5 py-2.5 text-xs font-semibold text-white md:flex"
+            >
+              방송 시작하기
+            </button>
+          )}
         </header>
 
-        <div className="mb-5 flex items-center justify-end md:hidden">
-          <button
-            type="button"
-            onClick={() => setIsCreateModalOpen(true)}
-            className="flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-4.5 py-2.5 text-xs font-semibold text-white"
-          >
-            방송 시작하기
-          </button>
-        </div>
+        {canCreate && (
+          <div className="mb-5 flex items-center justify-end md:hidden">
+            <button
+              type="button"
+              onClick={() => setIsCreateModalOpen(true)}
+              className="flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-4.5 py-2.5 text-xs font-semibold text-white"
+            >
+              방송 시작하기
+            </button>
+          </div>
+        )}
 
         <ul className="grid grid-cols-2 gap-3.5 md:grid-cols-[repeat(auto-fill,minmax(260px,1fr))] md:gap-5">
           {pagedStations.map((station) => (

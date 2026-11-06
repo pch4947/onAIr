@@ -1,4 +1,4 @@
-"""Authenticated creation of the configured single station and engine REST bridge."""
+"""Creation of the configured single station by non-guest users and engine REST bridge."""
 import asyncio
 import hashlib
 import json
@@ -14,10 +14,11 @@ from onair_schema.persona import text
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from redis.exceptions import RedisError
 
-from .auth import get_current_user
+from .auth import get_broadcast_host, get_current_user
 
 router = APIRouter(prefix='/api')
 User = Annotated[dict, Depends(get_current_user)]
+Host = Annotated[dict, Depends(get_broadcast_host)]
 
 CREATE = """
 local kinds = {'string', 'hash', 'stream'}
@@ -192,7 +193,7 @@ def public_station(record, request):
 
 
 @router.post('/stations', status_code=202)
-async def create_station(body: StationInput, request: Request, user: User,
+async def create_station(body: StationInput, request: Request, user: Host,
     idempotency_key: Annotated[str, Header(min_length=1, max_length=128, pattern=r'^[A-Za-z0-9._:-]+$')]):
     """Create the configured station once. 202 means queued, not live. Retry with the same key."""
     if body.persona.persona_id is not None:
@@ -283,10 +284,10 @@ async def voices(request: Request, user: User, native_only: bool = True):
 
 
 @router.post('/personas/drafts')
-async def drafts(body: DraftInput, request: Request, user: User):
+async def drafts(body: DraftInput, request: Request, user: Host):
     return await engine_call(request, 'POST', '/v1/personas/drafts', body.model_dump())
 
 
 @router.post('/personas/check')
-async def check(body: CheckInput, request: Request, user: User):
+async def check(body: CheckInput, request: Request, user: Host):
     return await engine_call(request, 'POST', '/v1/personas/check', body.model_dump())

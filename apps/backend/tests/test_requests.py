@@ -88,7 +88,8 @@ class RequestIntegrationTests(unittest.TestCase):
         self.assertTrue(all(entry == entries[0] for entry in entries))
         entry = entries[0]
         self.assertEqual(entry['status'], 'requested')
-        self.assertEqual(entry['listenerId'], self.user_id)
+        self.assertNotIn('listenerId', entry)
+        self.assertTrue(entry['mine'])
         self.assertEqual(self.redis.xlen(f'engine:{self.station}:in'), 1)
         fields = self.redis.xrange(f'engine:{self.station}:in')[0][1]
         self.assertEqual(fields['contract_version'], '1')
@@ -161,7 +162,8 @@ class RequestIntegrationTests(unittest.TestCase):
                                                     'listenerId': 'someone-else', 'listenerName': '다른사람'})
         self.assertEqual(status, 202)
         self.assertEqual(reply['request']['kind'], 'message')
-        self.assertEqual((reply['request']['listenerId'], reply['request']['listenerName']), (self.user_id, self.name))
+        self.assertEqual((reply['request']['mine'], reply['request']['listenerName']), (True, self.name))
+        self.assertEqual(json.loads(self.redis.hget(self.prefix + ':requests', reply['request']['id']))['listenerId'], self.user_id)
         status, chat = self.call('/api/requests', {'prompt': '안녕하세요', 'kind': 'chat'})
         self.assertEqual(status, 202)
         payloads = [json.loads(fields['payload']) for _, fields in self.redis.xrange(f'engine:{self.station}:in')]
@@ -173,8 +175,23 @@ class RequestIntegrationTests(unittest.TestCase):
         for token in (None, 'not-a-token'):
             self.token = token
             self.assertEqual(self.call('/api/requests', {'prompt': '안녕하세요', 'listenerName': self.name})[0], 401)
+            self.assertEqual(self.call('/api/requests')[0], 401)
         self.assertEqual(self.redis.xlen(f'engine:{self.station}:in'), 0)
-        self.assertEqual(self.call('/api/requests'), (200, {'requests': []}))
+
+    def test_the_list_says_whose_request_it_is_without_exposing_ids(self):
+        anonymous = self.call('/api/requests', {'prompt': '익명으로 보내요'})[1]['request']
+        self.assertIsNone(anonymous['listenerName'])
+        mine = self.token
+        email, name = self.station + '-b@example.com', 'name_' + uuid.uuid4().hex[:12]
+        self.addCleanup(self.redis.hdel, 'backend:usernames', name)
+        self.addCleanup(self.redis.hdel, 'backend:users', email)
+        self.token = self.call('/api/auth/signup', {'email': email, 'password': 'password-123', 'name': name})[1]['accessToken']
+        listed = self.call('/api/requests')[1]['requests']
+        self.assertEqual([item['mine'] for item in listed], [False])
+        self.assertNotIn('listenerId', listed[0])
+        self.assertNotIn(self.user_id, json.dumps(listed))
+        self.token = mine
+        self.assertEqual([item['mine'] for item in self.call('/api/requests')[1]['requests']], [True])
 
     def test_validation_and_no_partial_write_on_wrong_key_type(self):
         for body in [{'prompt': '  '}, {'prompt': 'x', 'kind': 'song'}, {'prompt': 'x' * 4001},

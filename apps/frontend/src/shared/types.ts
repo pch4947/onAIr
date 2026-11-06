@@ -32,7 +32,7 @@ export interface BroadcastStateResponse {
 
 export interface RequestRecord {
   id: string
-  listenerId: string
+  mine: boolean
   listenerName?: string
   prompt: string
   kind: 'story' | 'song_request' | 'message'

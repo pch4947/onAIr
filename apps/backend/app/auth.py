@@ -60,7 +60,8 @@ class PinGuard:
 
 def create_access_token(user: dict, secret: str) -> str:
     now = datetime.now(timezone.utc)
-    payload = {"sub": user["email"], "uid": user["id"], "iat": now, "exp": now + ACCESS_TOKEN_TTL}
+    expires = datetime.fromtimestamp(user["expiresAt"], timezone.utc) if "expiresAt" in user else now + ACCESS_TOKEN_TTL
+    payload = {"sub": user["email"], "uid": user["id"], "iat": now, "exp": expires}
     return jwt.encode(payload, secret, algorithm=JWT_ALGORITHM)
 
 
@@ -95,6 +96,13 @@ async def get_current_user(request: Request,
         raise HTTPException(503, "Redis unavailable") from None
     if user is None:
         raise HTTPException(401, "User not found")
+    return user
+
+
+async def get_broadcast_host(user: Annotated[dict, Depends(get_current_user)]) -> dict:
+    """게스트는 청취·입력·게시판까지만 쓴다. 일반 회원과 어드민은 방송을 만들 수 있다."""
+    if user.get("kind") == "guest":
+        raise HTTPException(403, "Guests cannot create broadcasts")
     return user
 
 

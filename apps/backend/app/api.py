@@ -222,13 +222,20 @@ async def stream_state(request: Request, response: Response,
     return result
 
 
+def public_request(entry: dict, user: dict) -> dict:
+    """Listeners learn only whether an entry is their own, so an anonymous one stays anonymous."""
+    return {key: value for key, value in entry.items() if key != "listenerId"} | {
+        "mine": entry["listenerId"] == user["id"]}
+
+
 @router.get("/requests")
-async def list_requests(request: Request):
+async def list_requests(request: Request, user: Annotated[dict, Depends(get_current_user)]):
     try:
         async with asyncio.timeout(3):
-            return {"requests": await request.app.state.requests.list()}
+            entries = await request.app.state.requests.list()
     except (RedisError, TimeoutError):
         raise HTTPException(503, "Redis unavailable") from None
+    return {"requests": [public_request(entry, user) for entry in entries]}
 
 
 @router.post("/requests", status_code=202)
@@ -250,7 +257,7 @@ async def create_request(body: ListenerInput, request: Request,
         raise HTTPException(409, "Idempotency-Key already used with different input") from None
     except (RedisError, TimeoutError):
         raise HTTPException(503, "Redis unavailable; retry with the same Idempotency-Key") from None
-    return {"request": entry}
+    return {"request": public_request(entry, user)}
 
 
 @router.post("/scheduler/tick")

@@ -104,8 +104,10 @@ export function ListenPage({ testPanel, navActive, chatSince }: ListenPageProps 
     return () => clearInterval(timer)
   }, [stationId, presenceClientId])
   const requestsQuery = useQuery({
-    queryKey: ['requests'],
+    // mine은 사용자마다 다르므로 계정이 바뀌면 이전 사용자의 목록을 다시 쓰지 않는다
+    queryKey: ['requests', currentUser?.id],
     queryFn: getRequests,
+    enabled: Boolean(currentUser),
     refetchInterval: REQUESTS_POLL_INTERVAL_MS,
   })
   const musicQueueQuery = useQuery({
@@ -133,7 +135,7 @@ export function ListenPage({ testPanel, navActive, chatSince }: ListenPageProps 
     chatSince === undefined || (chatSince !== null && Date.parse(item.createdAt) / 1000 >= chatSince))
   const chatMessages = allRequests.map((item) => ({
     id: item.id,
-    author: item.listenerId === currentUser?.id ? '나' : (item.listenerName || '익명'),
+    author: item.mine ? '나' : (item.listenerName || '익명'),
     text: item.prompt,
     kind: item.kind,
     status: item.status,
@@ -165,7 +167,7 @@ export function ListenPage({ testPanel, navActive, chatSince }: ListenPageProps 
     const trimmed = chatInput.trim()
     if (!trimmed) return
     submitRequestMutation.mutate({
-      prompt: trimmed, listenerId: currentUser?.id, listenerName: currentUser?.name, kind: 'story',
+      prompt: trimmed, listenerName: currentUser?.name, kind: 'story',
     })
     setChatInput('')
   }
@@ -522,7 +524,6 @@ export function ListenPage({ testPanel, navActive, chatSince }: ListenPageProps 
       )}
       {isMessageOpen && (
         <MessageModal
-          listenerId={currentUser?.id}
           listenerName={currentUser?.name}
           onClose={() => setIsMessageOpen(false)}
           onSubmitted={() => { void requestsQuery.refetch() }}
