@@ -62,6 +62,10 @@ async def redis_lifespan(app):
             status = json.loads(raw)['status'] if raw else None
         except RedisError:
             status = 'unknown'  # Keep health endpoints available; retry from lifecycle.
+        try:
+            await app.state.story_feed.stories_since()
+        except RedisError:
+            pass  # Recorded on the first story offer instead.
         if app.state.settings.hls_enabled and status not in ('ended', 'cleaning', 'unknown'):
             await publisher.start()
         lifecycle_task = asyncio.create_task(lifecycle.run(), name='station-lifecycle')

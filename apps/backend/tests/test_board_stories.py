@@ -15,7 +15,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 
 from app.auth import get_current_user
 from app.board import BoardStore
-from app.board_stories import POSTS_KEY, READ_KEY, STORY_PREFIX, StoryFeed, eligible, settle_read
+from app.board_stories import POSTS_KEY, READ_KEY, STORIES_SINCE_KEY, STORY_PREFIX, StoryFeed, eligible, settle_read
 from app.config import Settings
 from app.main import create_app
 from app.messaging.consumer import EngineConsumer, GROUP
@@ -30,12 +30,13 @@ def post(post_id, body='오늘 시험 끝났어요', age=timedelta(hours=1), aut
 
 
 class EligibilityTests(unittest.TestCase):
-    def test_long_or_old_posts_are_left_out(self):
+    def test_long_old_or_pre_notice_posts_are_left_out(self):
         now = datetime.now(timezone.utc).timestamp()
-        self.assertTrue(eligible(post('a', 'x' * 500), now))
-        self.assertFalse(eligible(post('a', 'x' * 501), now))
-        self.assertTrue(eligible(post('a', age=timedelta(days=6)), now))
-        self.assertFalse(eligible(post('a', age=timedelta(days=8)), now))
+        self.assertTrue(eligible(post('a', 'x' * 500), now, 0))
+        self.assertFalse(eligible(post('a', 'x' * 501), now, 0))
+        self.assertTrue(eligible(post('a', age=timedelta(days=6)), now, 0))
+        self.assertFalse(eligible(post('a', age=timedelta(days=8)), now, 0))
+        self.assertFalse(eligible(post('a', age=timedelta(hours=2)), now, now - 3600))
 
 
 class BoardRouteTests(unittest.IsolatedAsyncioTestCase):
@@ -62,6 +63,7 @@ class StoryFeedRedisTests(unittest.IsolatedAsyncioTestCase):
         # Posts and read marks are global keys, so this suite keeps to its own database.
         self.redis = Redis.from_url('redis://127.0.0.1:6379/13', decode_responses=True)
         await self.redis.delete(POSTS_KEY, READ_KEY)
+        await self.redis.set(STORIES_SINCE_KEY, '0')
         self.station = 'st_story_' + uuid4().hex
         self.prefix = 'backend:' + self.station
         self.feed = StoryFeed(self.redis, self.station)
@@ -70,7 +72,7 @@ class StoryFeedRedisTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         keys = [key async for key in self.redis.scan_iter(f'*{self.station}*')]
         keys += [key async for key in self.redis.scan_iter('backend:notifications:*')]
-        await self.redis.delete(POSTS_KEY, READ_KEY, *keys)
+        await self.redis.delete(POSTS_KEY, READ_KEY, STORIES_SINCE_KEY, *keys)
         await self.redis.aclose()
 
     async def set_station(self, status='started', **config):
@@ -94,6 +96,16 @@ class StoryFeedRedisTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[0][0], 'board.story')
         self.assertEqual({k: events[0][1][k] for k in ('body', 'author_ref', 'nickname', 'tags')},
                          dict(body='오늘 시험 끝났어요', author_ref='author-1', nickname='글쓴이', tags=[]))
+
+    async def test_posts_before_the_first_start_are_never_sent_and_the_start_is_kept(self):
+        await self.redis.delete(STORIES_SINCE_KEY)
+        await self.add(post('before', age=timedelta(minutes=5)))
+        await self.feed.offer_recent()
+        self.assertEqual(await self.events(), [])
+        first = await self.feed.stories_since()
+        self.assertEqual(await self.feed.stories_since(), first)
+        await self.feed.offer(post('after', age=timedelta(minutes=-1)))
+        self.assertEqual([p['story_id'] for _, p in await self.events()], [STORY_PREFIX + 'after'])
 
     async def test_candidates_are_capped(self):
         await self.add(*[post(f'p{i}', age=timedelta(minutes=i)) for i in range(33)])

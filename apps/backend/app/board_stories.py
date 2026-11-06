@@ -11,6 +11,9 @@ log = logging.getLogger(__name__)
 
 POSTS_KEY = 'backend:board:posts'
 READ_KEY = 'backend:board:read-stories'
+# Set once, the first time this feature runs. Older posts were written before the
+# board told authors a post can be read on air, so they never become candidates.
+STORIES_SINCE_KEY = 'backend:board:stories-since'
 # Segments carry a story in request_ref; the prefix tells it apart from a listener request.
 STORY_PREFIX = 'story_'
 MAX_CANDIDATES = 30
@@ -56,8 +59,9 @@ def posted_at(post):
     return datetime.fromisoformat(post['createdAt']).timestamp()
 
 
-def eligible(post, now):
-    return len(post['body']) <= MAX_BODY_LENGTH and now - posted_at(post) <= MAX_AGE_SECONDS
+def eligible(post, now, since):
+    written = posted_at(post)
+    return len(post['body']) <= MAX_BODY_LENGTH and now - written <= MAX_AGE_SECONDS and written >= since
 
 
 class StoryFeed:
@@ -65,6 +69,10 @@ class StoryFeed:
         self.redis = redis
         self.station_id = station_id
         self.prefix = f'backend:{station_id}'
+
+    async def stories_since(self):
+        await self.redis.setnx(STORIES_SINCE_KEY, str(time.time()))
+        return float(await self.redis.get(STORIES_SINCE_KEY))
 
     @property
     def _keys(self):
@@ -90,8 +98,8 @@ class StoryFeed:
         if not await self._accepts_stories():
             return
         posts = [json.loads(raw) for raw in (await self.redis.hgetall(POSTS_KEY)).values()]
-        now = time.time()
-        recent = sorted((post for post in posts if eligible(post, now)), key=posted_at, reverse=True)
+        now, since = time.time(), await self.stories_since()
+        recent = sorted((post for post in posts if eligible(post, now, since)), key=posted_at, reverse=True)
         sent = 0
         for post in recent:
             sent += await self._send(post)
@@ -100,7 +108,7 @@ class StoryFeed:
 
     async def offer(self, post):
         """Send a post written during the broadcast."""
-        if await self._accepts_stories() and eligible(post, time.time()):
+        if await self._accepts_stories() and eligible(post, time.time(), await self.stories_since()):
             await self._send(post)
 
     async def withdraw(self, post_id):
