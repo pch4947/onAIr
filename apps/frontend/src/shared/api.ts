@@ -52,6 +52,9 @@ export async function submitRequest(input: {
       trackThumbnailUrl: input.trackThumbnailUrl,
     }),
   })
+  if (res.status === 401) {
+    throw new Error('UNAUTHORIZED')
+  }
   if (!res.ok) {
     throw new Error(`POST /api/requests failed: ${res.status}`)
   }

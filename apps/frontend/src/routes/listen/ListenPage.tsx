@@ -13,6 +13,7 @@ import {
 import { useCurrentUser } from '@/shared/useCurrentUser'
 import { randomId } from '@/shared/randomId'
 import { ExperimentSurveyModal } from '@/routes/listen/ExperimentSurveyModal'
+import { isUnauthorizedError, LoginExpiredNotice } from '@/routes/listen/LoginExpiredNotice'
 import { MessageModal } from '@/routes/listen/MessageModal'
 import { SongRequestModal } from '@/routes/listen/SongRequestModal'
 import { SongQueueModal } from '@/routes/listen/SongQueueModal'
@@ -376,8 +377,9 @@ export function ListenPage() {
           {submitRequestMutation.isPending && (
             <p className="text-[11px] text-text-muted">전송 중...</p>
           )}
-          {submitRequestMutation.isError && (
-            <p className="text-[11px] text-danger">전송에 실패했어요, 다시 시도해주세요</p>
+          {submitRequestMutation.isError && (isUnauthorizedError(submitRequestMutation.error)
+            ? <LoginExpiredNotice className="text-[11px]" />
+            : <p className="text-[11px] text-danger">전송에 실패했어요, 다시 시도해주세요</p>
           )}
           <div className="relative">
             {isEmojiPickerOpen && (
