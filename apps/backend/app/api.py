@@ -6,10 +6,11 @@ import asyncio
 import json
 import time
 
-from fastapi import APIRouter, Body, Request, HTTPException, Query, Response, Header
+from fastapi import APIRouter, Body, Depends, Request, HTTPException, Query, Response, Header
 from redis.exceptions import RedisError
 from pydantic import BaseModel, Field, model_validator
 
+from .auth import get_current_user
 from .scheduler import decide_next_segment
 from .requests import IdempotencyConflict
 
@@ -102,7 +103,6 @@ PositiveSeconds = Annotated[float, Field(ge=1, allow_inf_nan=False)]
 
 class ListenerInput(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000, pattern=r"\S")
-    listenerId: str | None = Field(default=None, min_length=1, max_length=256)
     listenerName: str | None = Field(default=None, min_length=1, max_length=50)
     kind: Literal["story", "chat", "message"] = "story"
     trackTitle: str | None = Field(default=None, min_length=1, max_length=200)
@@ -223,14 +223,18 @@ async def list_requests(request: Request):
 
 @router.post("/requests", status_code=202)
 async def create_request(body: ListenerInput, request: Request,
+                         user: Annotated[dict, Depends(get_current_user)],
                          idempotency_key: Annotated[str | None, Header(min_length=1, max_length=128,
                              pattern=r"^[A-Za-z0-9._:-]+$")] = None):
-    """Persist a request and enqueue request.arrived together; 202 is not engine completion."""
+    """Persist a request and enqueue request.arrived together; 202 is not engine completion.
+
+    The listener comes from the token, never the body. Omitting listenerName stays anonymous on air.
+    """
     try:
         async with asyncio.timeout(3):
             entry = await request.app.state.requests.create(
-                body.prompt, body.listenerId or "anonymous", body.kind, idempotency_key,
-                listener_name=body.listenerName, track_title=body.trackTitle,
+                body.prompt, user["id"], body.kind, idempotency_key,
+                listener_name=user["name"] if body.listenerName else None, track_title=body.trackTitle,
                 track_artist=body.trackArtist, track_thumbnail_url=body.trackThumbnailUrl)
     except IdempotencyConflict:
         raise HTTPException(409, "Idempotency-Key already used with different input") from None
