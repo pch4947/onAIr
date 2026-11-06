@@ -3,6 +3,7 @@
 
 **대상**: `apps/engine` — PROJECT_PLAN.md(rev.12) 9장 "역할 분담"의 대본 엔진 파트
 **상태**: 초안 v0.5 (2026-10-12) — 점진적으로 개정하며 관리
+**v0.11 변경**: 게시판 사연 주제 관련도 판정(#204) — `inputs/story_judge.py`, `story_judge_log`. `MaterialSources`가 엔진이 넘긴 빈 inbox·사연 풀을 기본값으로 바꾸던 문제 수정([CORNER_DESIGN.md](CORNER_DESIGN.md) 5.4절)
 **v0.10 변경**: 집계 언급·예고 구현(#186) — `inputs/aggregate.py`, `Clock.upcoming`, `aggregate_log`([CORNER_DESIGN.md](CORNER_DESIGN.md) 9.2절)
 **v0.9 변경**: 채팅 화제 전환 STEER 구현(#176) — 규칙 판별, 인용 확인 뒤 화제 변경, `steer_log`([CORNER_DESIGN.md](CORNER_DESIGN.md) 5.2절)
 **v0.8 변경**: 입력 라우팅 구현(#167) — 종류별 저장소, 문자 낭독(READ), 게시판 사연·신청곡 한마디(FEATURE), 취소, `corner.changed`(꺼 둠), 송출 이력(`aired_log`). DEFER·HELD는 저장소 유지로 대체했다([CORNER_DESIGN.md](CORNER_DESIGN.md) 5.8절). 문자·사연·코너 알림은 백엔드 작업(#168, #169, #170) 전까지 실제 방송에서 쓰이지 않는다

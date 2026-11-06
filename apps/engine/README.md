@@ -98,7 +98,7 @@ onair-engine --tts cartesia --max-segments 15 --demo-request "요즘 잠이 안 
 입력은 종류별 저장소로 갑니다 (`inputs/`). `story`·`mood`·`chat`은 채팅, `message`는 문자 inbox, `board.story`는 사연 풀, `song_request`는 곡을 기다리는 목록입니다. 형식이 받지 않는 입력은 바로 종결합니다 (뉴스의 채팅, 음악의 문자).
 
 - **문자**: `text_corner`가 도착 순으로 낭독합니다. 대본에 글이 빠지면 한 번 되돌리고, 또 빠지면 `rejected`입니다.
-- **게시판 사연**: `story_corner`가 주제 일치, 최근 순으로 고릅니다. 제출의 `request_ref`는 `story_id`입니다.
+- **게시판 사연**: 받은 사연을 모아 LLM으로 주제 관련도를 판정하고, 관련 있는 사연만 `story_corner` 후보로 남깁니다. LLM이 실패하면 주제와 단어가 겹치는 사연만 남기고, 더미 LLM은 모두 남깁니다. 결과는 `story_judge_log`에 기록합니다. 후보 중에서는 주제 일치, 최근 순으로 고릅니다. 제출의 `request_ref`는 `story_id`입니다.
 - **신청곡 한마디**: 같은 `request_id`의 `track.queued`가 오면 곡 소개에 넣습니다.
 - **코너 알림**: `pipeline.emit_corner_changed: true`로 켭니다. 백엔드 #170 전에는 켜지 마세요. 이벤트가 격리됩니다.
 - 백엔드가 모르는 상태는 바꿔 보내거나 보내지 않습니다 (`domain.wire_state`).
