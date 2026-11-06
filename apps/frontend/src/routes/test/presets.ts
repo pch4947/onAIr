@@ -1,45 +1,12 @@
 // 테스트 페이지 프리셋
 import type { Persona, StationFormat, TalkCorner } from '@/shared/types'
 
-export interface CornerPreset {
-  id: string
-  label: string
-  format: StationFormat
-  corners?: TalkCorner[]
+// 테스트 화면에 들어오면 바로 여는 방송. 고를 수 있는 최대 3개 코너를 넣어 모든 토크 코너 버튼이 순환 안에 있게 한다
+export const TEST_STATION = {
+  format: 'talk' as StationFormat,
+  corners: ['topic_talk', 'story_corner', 'dj_vs_listeners'] as TalkCorner[],
+  broadcastMinutes: 30,
 }
-
-const TALK_CORNER_LABELS: Record<TalkCorner, string> = {
-  topic_talk: '주제 토크',
-  text_corner: '문자 소개',
-  story_corner: '게시판 사연',
-  dj_vs_listeners: 'DJ 대 청취자',
-}
-
-// 호스트가 고를 수 있는 토크 코너 수 (onair_schema StationCreated.corners)
-const MIN_TALK_CORNERS = 2
-const MAX_TALK_CORNERS = 3
-
-function combinations<T>(items: T[], size: number): T[][] {
-  if (size === 0) return [[]]
-  return items.flatMap((item, index) =>
-    combinations(items.slice(index + 1), size - 1).map((rest) => [item, ...rest]))
-}
-
-const TALK_CORNERS = Object.keys(TALK_CORNER_LABELS) as TalkCorner[]
-
-// 토크는 고를 수 있는 코너 조합 전부. 순환에 문자 소개·곡 소개가 늘 들어가고 고른 코너가 번갈아 나온다
-export const CORNER_PRESETS: CornerPreset[] = [
-  ...Array.from({ length: MAX_TALK_CORNERS - MIN_TALK_CORNERS + 1 }, (_, offset) => MIN_TALK_CORNERS + offset)
-    .flatMap((size) => combinations(TALK_CORNERS, size))
-    .map((corners) => ({
-      id: `talk-${corners.join('-')}`,
-      label: `토크 · ${corners.map((corner) => TALK_CORNER_LABELS[corner]).join(' + ')}`,
-      format: 'talk' as const,
-      corners,
-    })),
-  { id: 'music', label: '음악', format: 'music' },
-  { id: 'news', label: '뉴스', format: 'news' },
-]
 
 export interface PersonaPreset {
   id: string

@@ -1,9 +1,9 @@
 // 01_Listen_스트리밍 방송 화면
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Sidebar } from '@/app/Sidebar'
+import { Sidebar, type NavKey } from '@/app/Sidebar'
 import { useLivePlayback } from '@/player/useLivePlayback'
 import { useRealtimeConnection } from '@/realtime/useRealtimeConnection'
 import { useRealtimeStore } from '@/realtime/store'
@@ -60,7 +60,15 @@ function getOrCreatePresenceClientId(): string {
   }
 }
 
-export function ListenPage() {
+interface ListenPageProps {
+  // 테스트 화면이 같은 방송 화면에 코너 변경·엔진 로그를 끼워 넣는다
+  testPanel?: ReactNode
+  navActive?: NavKey
+  // 테스트 화면: 이 시각(초) 뒤 채팅만 보인다. null이면 아직 몰라 비워 둔다
+  chatSince?: number | null
+}
+
+export function ListenPage({ testPanel, navActive, chatSince }: ListenPageProps = {}) {
   const navigate = useNavigate()
   const [isSurveyOpen, setIsSurveyOpen] = useState(false)
   const [isSongRequestOpen, setIsSongRequestOpen] = useState(false)
@@ -121,7 +129,8 @@ export function ListenPage() {
   const submitRequestMutation = useMutation({ mutationFn: submitRequest })
   const bookmarkLiveMutation = useMutation({ mutationFn: (sessionId: string) => bookmarkReplay(sessionId) })
 
-  const allRequests = requestsQuery.data?.requests ?? []
+  const allRequests = (requestsQuery.data?.requests ?? []).filter((item) =>
+    chatSince === undefined || (chatSince !== null && Date.parse(item.createdAt) / 1000 >= chatSince))
   const chatMessages = allRequests.map((item) => ({
     id: item.id,
     author: item.listenerId === currentUser?.id ? '나' : (item.listenerName || '익명'),
@@ -164,10 +173,11 @@ export function ListenPage() {
 
   return (
     <div className="flex h-dvh overflow-hidden md:h-screen">
-      <Sidebar />
+      <Sidebar active={navActive} />
 
       <main className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col gap-4 bg-field-bg p-3.5 pb-20 md:flex-row">
-        <section className="flex shrink-0 flex-col gap-3.5 md:h-full md:flex-1">
+        {/* 테스트 패널이 붙으면 모바일은 플레이어를 한 줄로 줄이고 로그·채팅을 반씩 나눠 한 화면에 둔다 */}
+        <section className={`flex flex-col md:h-full md:flex-1 md:basis-auto ${testPanel ? 'min-h-0 flex-1 basis-0 gap-2.5 md:gap-3.5' : 'shrink-0 gap-3.5'}`}>
           <button
             type="button"
             onClick={() => navigate(-1)}
@@ -176,30 +186,53 @@ export function ListenPage() {
           >
             <BackIcon className="size-4.5" />
           </button>
-          <div className="relative h-72 overflow-hidden rounded-lg bg-thumbnail md:h-full md:flex-1">
+          {testPanel && (
+            <div className="flex shrink-0 items-center gap-3 rounded-lg bg-thumbnail px-4 py-2.5 md:hidden">
+              <button
+                type="button"
+                onClick={togglePlay}
+                disabled={!hlsUrl}
+                aria-label={isPlaying ? '방송 일시정지' : '방송 재생'}
+                className="flex size-6.5 shrink-0 items-center justify-center rounded-full bg-[#e6e6e6] text-text"
+              >
+                {isPlaying ? <PauseIcon className="size-3" /> : <PlayIcon className="size-3" />}
+              </button>
+              <div className="h-[5px] flex-1 rounded-full bg-[#737380]">
+                <div className="h-full rounded-full bg-primary" style={{ width: isPlaying ? '100%' : '0%' }} />
+              </div>
+              <span className="shrink-0 text-[11px] text-nav-inactive">{ended ? '종료' : ending ? '종료 중' : 'LIVE'}</span>
+            </div>
+          )}
+          {testPanel && playbackError && <p role="alert" className="text-xs text-danger md:hidden">{playbackError}</p>}
+          <div className={`relative h-72 overflow-hidden rounded-lg bg-thumbnail md:block md:h-full md:flex-1 ${testPanel ? 'hidden' : ''}`}>
             <div className="absolute inset-x-4 top-4 flex flex-wrap items-center justify-between gap-y-2">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[13px] font-semibold text-white">{STATION_INFO.name}</span>
-                <button
-                  type="button"
-                  onClick={() => stream?.sessionId && bookmarkLiveMutation.mutate(stream.sessionId)}
-                  disabled={!stream?.sessionId || ended || stationStatus === 'cleaning'
-                    || stationStatus === 'stopping' || bookmarkLiveMutation.isPending}
-                  className="flex items-center gap-1 rounded-full bg-black/45 px-2.5 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
-                >
-                  <ReplaySaveIcon className="size-3.5" />
-                  <span className="hidden sm:inline">
-                    {bookmarkLiveMutation.isPending
-                      ? '저장 중...'
-                      : bookmarkLiveMutation.isSuccess
-                        ? '저장됨'
-                        : '다시듣기 저장'}
-                  </span>
-                </button>
-                {bookmarkLiveMutation.isError && (
-                  <span className="text-[11px] text-danger">
-                    저장 실패: {(bookmarkLiveMutation.error as Error).message}
-                  </span>
+                {/* 테스트 방송은 다시듣기를 남기지 않는다 */}
+                {!testPanel && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => stream?.sessionId && bookmarkLiveMutation.mutate(stream.sessionId)}
+                      disabled={!stream?.sessionId || ended || stationStatus === 'cleaning'
+                        || stationStatus === 'stopping' || bookmarkLiveMutation.isPending}
+                      className="flex items-center gap-1 rounded-full bg-black/45 px-2.5 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
+                    >
+                      <ReplaySaveIcon className="size-3.5" />
+                      <span className="hidden sm:inline">
+                        {bookmarkLiveMutation.isPending
+                          ? '저장 중...'
+                          : bookmarkLiveMutation.isSuccess
+                            ? '저장됨'
+                            : '다시듣기 저장'}
+                      </span>
+                    </button>
+                    {bookmarkLiveMutation.isError && (
+                      <span className="text-[11px] text-danger">
+                        저장 실패: {(bookmarkLiveMutation.error as Error).message}
+                      </span>
+                    )}
+                  </>
                 )}
               </div>
               <div className="flex items-center gap-2 text-[11px] text-nav-inactive">
@@ -288,9 +321,10 @@ export function ListenPage() {
               </p>
             </div>
           </div>
+          {testPanel}
         </section>
 
-        <section className="flex min-h-0 w-full flex-1 flex-col gap-3 rounded-md border border-border bg-surface p-4 md:h-full md:w-[clamp(300px,28vw,360px)] md:flex-none">
+        <section className={`flex min-h-0 w-full flex-col gap-3 rounded-md border border-border bg-surface p-4 md:h-full md:w-[clamp(300px,28vw,360px)] md:flex-none ${testPanel ? 'flex-1 basis-0 md:basis-auto' : 'flex-1'}`}>
           <header className="flex items-center justify-between">
             <p className="text-sm font-semibold text-text">채팅</p>
             <span className="flex items-center gap-1 text-[11px] text-text-muted">
@@ -467,13 +501,16 @@ export function ListenPage() {
         </section>
       </main>
 
-      <button
-        type="button"
-        onClick={() => setIsSurveyOpen(true)}
-        className="fixed bottom-20 right-4 flex items-center gap-1.5 rounded-full bg-experiment px-3.5 py-2.5 text-[13px] font-semibold text-white shadow-lg md:bottom-8 md:right-8"
-      >
-        🧪 실험 참여
-      </button>
+      {/* 테스트 방송은 실험 설문 대상이 아니다 */}
+      {!testPanel && (
+        <button
+          type="button"
+          onClick={() => setIsSurveyOpen(true)}
+          className="fixed bottom-20 right-4 flex items-center gap-1.5 rounded-full bg-experiment px-3.5 py-2.5 text-[13px] font-semibold text-white shadow-lg md:bottom-8 md:right-8"
+        >
+          🧪 실험 참여
+        </button>
+      )}
 
       {isSurveyOpen && <ExperimentSurveyModal onClose={() => setIsSurveyOpen(false)} />}
       {isSongRequestOpen && (
