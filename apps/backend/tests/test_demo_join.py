@@ -7,17 +7,27 @@ import httpx
 
 from app.config import Settings, parse_admin_pins
 from app.main import create_app
-from app.users import ADMIN_DOMAIN, GUEST_DOMAIN, UserStore
+from app.users import ADMIN_DOMAIN, CREATE, DELETE_GUEST, GUEST_DOMAIN, UserStore
 
 
 class FakeRedis:
-    """users.CREATE 스크립트와 hget만 흉내 낸다."""
+    """users.CREATE·DELETE_GUEST 스크립트와 hget만 흉내 낸다."""
 
     def __init__(self):
         self.hashes: dict[str, dict[str, str]] = {}
 
-    async def eval(self, _script, _numkeys, users_key, names_key, email, name, entry):
+    async def eval(self, script, _numkeys, users_key, names_key, email, *args):
         users, names = self.hashes.setdefault(users_key, {}), self.hashes.setdefault(names_key, {})
+        if script == DELETE_GUEST:
+            raw = users.get(email)
+            if raw is None or json.loads(raw).get('kind') != 'guest':
+                return 0
+            name = json.loads(users.pop(email))['name']
+            if names.get(name) == email:
+                del names[name]
+            return 1
+        assert script == CREATE
+        name, entry = args
         if email in users:
             return 'email'
         if name in names:
@@ -114,6 +124,29 @@ class DemoJoinApiTests(unittest.IsolatedAsyncioTestCase):
         stored = json.loads(app.state.users.redis.hashes['backend:users'][guest['email']])
         self.assertIsNone(stored['passwordHash'])
         self.assertIsNone(await app.state.users.authenticate(guest['email'], 'anything'))
+
+
+class LogoutTests(unittest.IsolatedAsyncioTestCase):
+    async def test_guest_logout_deletes_account_and_frees_nickname(self):
+        app = make_app()
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
+            token = (await client.post('/api/auth/guest', json={'name': '잠깐손님'})).json()['accessToken']
+            auth = {'Authorization': f'Bearer {token}'}
+            self.assertEqual((await client.post('/api/auth/logout', headers=auth)).status_code, 204)
+            self.assertEqual((await client.get('/api/auth/me', headers=auth)).status_code, 401)
+            self.assertEqual((await client.post('/api/auth/guest', json={'name': '잠깐손님'})).status_code, 201)
+
+    async def test_member_and_admin_logout_keep_the_account(self):
+        app = make_app()
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
+            member = (await client.post('/api/auth/signup', json={
+                'email': 'member@example.com', 'password': 'password123', 'name': '회원'})).json()['accessToken']
+            admin = (await client.post('/api/auth/admin', json={'pin': '0808'})).json()['accessToken']
+            for token in (member, admin):
+                auth = {'Authorization': f'Bearer {token}'}
+                self.assertEqual((await client.post('/api/auth/logout', headers=auth)).status_code, 204)
+                self.assertEqual((await client.get('/api/auth/me', headers=auth)).status_code, 200)
+            self.assertEqual((await client.post('/api/auth/logout')).status_code, 401)
 
 
 if __name__ == '__main__':

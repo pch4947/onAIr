@@ -16,6 +16,18 @@ return 'ok'
 """
 
 
+# 저장된 계정이 게스트일 때만 계정과 닉네임 예약을 함께 지운다 (다른 계정을 지우지 않게).
+DELETE_GUEST = """
+local raw = redis.call('HGET', KEYS[1], ARGV[1])
+if not raw then return 0 end
+local user = cjson.decode(raw)
+if user.kind ~= 'guest' then return 0 end
+redis.call('HDEL', KEYS[1], ARGV[1])
+if redis.call('HGET', KEYS[2], user.name) == ARGV[1] then redis.call('HDEL', KEYS[2], user.name) end
+return 1
+"""
+
+
 class EmailAlreadyExists(ValueError):
     pass
 
@@ -69,6 +81,9 @@ class UserStore:
             return await self._insert(email, name, None, "admin")
         except EmailAlreadyExists:  # 같은 어드민이 동시에 처음 들어온 경우
             return await self.get_by_email(email)
+
+    async def delete_guest(self, email: str) -> bool:
+        return bool(await self.redis.eval(DELETE_GUEST, 2, self.key, self.names_key, email.lower()))
 
     async def get_by_email(self, email: str) -> dict | None:
         raw = await self.redis.hget(self.key, email.lower())

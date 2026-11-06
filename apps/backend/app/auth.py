@@ -170,3 +170,15 @@ async def join_as_admin(body: AdminInput, request: Request):
 @router.get("/me")
 async def me(current_user: Annotated[dict, Depends(get_current_user)]):
     return {"user": public_user(current_user)}
+
+
+@router.post("/logout", status_code=204)
+async def logout(request: Request, current_user: Annotated[dict, Depends(get_current_user)]):
+    """JWT는 서버에 남지 않으므로 일반 계정은 할 일이 없다. 게스트 계정은 지워 닉네임도 다시 쓸 수 있게 한다."""
+    if current_user.get("kind") != "guest":
+        return
+    try:
+        async with asyncio.timeout(3):
+            await request.app.state.users.delete_guest(current_user["email"])
+    except (RedisError, TimeoutError):
+        raise HTTPException(503, "Redis unavailable") from None

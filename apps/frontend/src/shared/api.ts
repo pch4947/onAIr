@@ -122,6 +122,17 @@ export async function login(email: string, password: string): Promise<AuthRespon
   return res.json() as Promise<AuthResponse>
 }
 
+// 게스트 계정이면 서버가 계정을 지운다. 일반 계정은 서버에서 하는 일이 없다
+export async function logoutSession(): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/auth/logout`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
+  })
+  if (!res.ok) {
+    throw new Error(`POST /api/auth/logout failed: ${res.status}`)
+  }
+}
+
 export async function joinAsGuest(name: string): Promise<AuthResponse> {
   const res = await fetch(`${API_BASE}/api/auth/guest`, {
     method: 'POST',

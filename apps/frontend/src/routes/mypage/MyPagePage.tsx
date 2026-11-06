@@ -7,7 +7,7 @@ import { AlertIcon, HistoryIcon, BoardIcon, FlaskIcon } from '@/app/icons'
 import { HeartIcon } from '@/routes/board/LikeButton'
 import { MyPageTabContent } from '@/routes/mypage/MyPageTabContent'
 import { ReplaySaveIcon } from '@/routes/listen/icons'
-import { clearAccessToken } from '@/shared/authToken'
+import { useLogout } from '@/shared/useLogout'
 import { useCurrentUser } from '@/shared/useCurrentUser'
 import { MYPAGE_TABS } from '@/routes/mypage/mock'
 import type { MyPageTab } from '@/routes/mypage/mock'
@@ -27,10 +27,7 @@ export function MyPagePage() {
   const [activeTab, setActiveTab] = useState<MyPageTab>('notifications')
   const activeTabConfig = MYPAGE_TABS.find((tab) => tab.id === activeTab) ?? MYPAGE_TABS[0]
 
-  const handleLogout = () => {
-    clearAccessToken()
-    navigate('/login')
-  }
+  const handleLogout = useLogout()
 
   return (
     <div className="flex min-h-screen">

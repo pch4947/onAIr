@@ -3,11 +3,12 @@
 import { Navigate, useNavigate, useParams } from 'react-router-dom'
 import { Sidebar } from '@/app/Sidebar'
 import { MyPageTabContent } from '@/routes/mypage/MyPageTabContent'
-import { clearAccessToken } from '@/shared/authToken'
+import { useLogout } from '@/shared/useLogout'
 import { MYPAGE_TABS } from '@/routes/mypage/mock'
 
 export function MyPageTabPage() {
   const navigate = useNavigate()
+  const handleLogout = useLogout()
   const { tab } = useParams<{ tab: string }>()
   const activeTabConfig = MYPAGE_TABS.find((item) => item.id === tab)
 
@@ -35,10 +36,7 @@ export function MyPageTabPage() {
           </div>
           <button
             type="button"
-            onClick={() => {
-              clearAccessToken()
-              navigate('/login')
-            }}
+            onClick={handleLogout}
             className="rounded-md border border-field-border px-3.5 py-2 text-xs font-semibold text-text-muted"
           >
             로그아웃
