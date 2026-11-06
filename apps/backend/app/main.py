@@ -9,6 +9,7 @@ from .notifications import router as notifications_router
 from .stations import router as stations_router
 from .replays import router as replays_router
 from .music import router as music_router
+from .test_controls import router as test_controls_router
 from .config import Settings, load_settings
 from .redis_connection import redis_health, redis_lifespan
 from fastapi import Request, HTTPException
@@ -76,6 +77,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(stations_router)
     application.include_router(replays_router)
     application.include_router(music_router)
+    application.include_router(test_controls_router)
     application.add_api_route("/hls/{station_id}/{filename}", hls_file, methods=["GET"])
     application.add_api_route("/hls/{station_id}/vod/{session_id}/{filename}", vod_file, methods=["GET"])
     application.add_api_route("/health", health, methods=["GET"])
