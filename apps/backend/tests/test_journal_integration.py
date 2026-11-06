@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import time
 import unittest
 import uuid
 
@@ -45,6 +46,39 @@ class JournalIntegrationTests(unittest.IsolatedAsyncioTestCase):
                             prefix + ':request-history:' + request_id, 0, -1)]
                         self.assertEqual([row['state'] for row in history if row.get('source') == 'broadcast'],
                                          ['mixing', 'published', 'played'])
+                finally:
+                    journal.close()
+        finally:
+            for pattern in (prefix + ':*', f'engine:{station}:*'):
+                keys = [key async for key in client.scan_iter(match=pattern)]
+                if keys:
+                    await client.delete(*keys)
+            await client.aclose()
+
+    async def test_corner_activates_when_its_segment_starts_playing(self):
+        station = 'st_corner_' + uuid.uuid4().hex
+        prefix = f'backend:{station}'
+        client = Redis.from_url('redis://127.0.0.1:6379/0', decode_responses=True)
+        first, second = dict(corner='opening'), dict(corner='topic_talk')
+        try:
+            await client.hset(prefix + ':corner-pending', mapping=dict(
+                seg_first=json.dumps(first), seg_second=json.dumps(second), seg_dropped=json.dumps(dict(corner='lost'))))
+            with tempfile.TemporaryDirectory() as directory:
+                journal = Journal(Path(directory) / 'broadcast.sqlite', station)
+                try:
+                    journal.segment_started(dict(id='seg_first'), time.time() + 60)
+                    await journal.flush(client)
+                    self.assertIsNone(await client.get(prefix + ':current-corner'))  # Not on air yet.
+                    journal.db.execute('DELETE FROM outbox')
+                    journal.db.execute('DELETE FROM segment_starts')
+                    journal.segment_started(dict(id='seg_first'), time.time() - 1)
+                    journal.segment_started(dict(id='seg_plain'), time.time() - 1)
+                    await journal.flush(client)
+                    self.assertEqual(json.loads(await client.get(prefix + ':current-corner')), first)
+                    journal.segment_started(dict(id='seg_second'), time.time() - 1)
+                    await journal.flush(client)
+                    self.assertEqual(json.loads(await client.get(prefix + ':current-corner')), second)
+                    self.assertEqual(await client.hkeys(prefix + ':corner-pending'), ['seg_dropped'])
                 finally:
                     journal.close()
         finally:

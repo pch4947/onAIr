@@ -170,6 +170,15 @@ async def station_summary(request: Request) -> tuple[str, str | None]:
     return record['status'], record.get('config', {}).get('format', 'talk')
 
 
+async def current_corner(request: Request) -> dict | None:
+    try:
+        async with asyncio.timeout(3):
+            raw = await request.app.state.redis.get(f'backend:{request.app.state.settings.station_id}:current-corner')
+    except (RedisError, TimeoutError):
+        return None
+    return json.loads(raw) if raw else None
+
+
 @router.post("/stations/{station_id}/presence", status_code=204)
 async def presence_heartbeat(station_id: str, body: PresenceInput, request: Request):
     if station_id != request.app.state.settings.station_id:
@@ -189,10 +198,11 @@ async def stream_state(request: Request, response: Response,
     result = request.app.state.broadcast.snapshot()
     result["stationId"] = request.app.state.settings.station_id
     # 둘 다 Redis 호출이라 순차 await하면 각자의 연결 타임아웃이 합산돼 버림; 동시에 실행.
-    viewers, metrics, (status, station_format) = await asyncio.gather(
-        viewer_count(request), request_metrics(request), station_summary(request))
+    viewers, metrics, (status, station_format), corner = await asyncio.gather(
+        viewer_count(request), request_metrics(request), station_summary(request), current_corner(request))
     result['stationStatus'] = status
     result['stationFormat'] = station_format
+    result['currentCorner'] = corner if status in ('started', 'draining') else None
     result["viewerCount"] = viewers
     result.update(metrics)
     hls = request.app.state.hls
