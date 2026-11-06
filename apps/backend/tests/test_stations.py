@@ -200,7 +200,8 @@ class StationRedisTests(unittest.IsolatedAsyncioTestCase):
             root = Path(directory)
             settings = EngineSettings(audio_dir=root / 'audio', sqlite_path=root / 'metrics.sqlite',
                 formats_dir=Path(__file__).resolve().parents[2] / 'engine/config/formats',
-                safety_rules_path=Path(__file__).resolve().parents[2] / 'engine/config/safety_rules.yaml')
+                safety_rules_path=Path(__file__).resolve().parents[2] / 'engine/config/safety_rules.yaml',
+                chat_rules_path=Path(__file__).resolve().parents[2] / 'engine/config/chat_rules.yaml')
             manager = EngineManager(settings, transport_factory=lambda sid:
                 RedisTransport('redis://127.0.0.1:6379/15', sid))
             consumer = EngineConsumer(self.redis, Settings('127.0.0.1', 3000, station_id=self.station))

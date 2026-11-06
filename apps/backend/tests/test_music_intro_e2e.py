@@ -74,6 +74,7 @@ class MusicIntroE2ETests(unittest.IsolatedAsyncioTestCase):
                 manager = EngineManager(EngineSettings(audio_dir=settings.audio_dir,
                     sqlite_path=root / 'engine.sqlite', safety_rules_path=engine_root / 'config/safety_rules.yaml',
                     formats_dir=engine_root / 'config/formats', tts='dummy', llm='dummy',
+                    chat_rules_path=engine_root / 'config/chat_rules.yaml',
                     dummy_tracks=False, target_buffer_sec=2),
                     transport_factory=lambda sid: RedisTransport(redis_url, sid, block_ms=100))
                 await manager.handle_event({'type': 'station.created', 'station_id': station,
