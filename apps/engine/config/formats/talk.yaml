@@ -31,7 +31,7 @@ corners:
     budget_sec: [60, 180]
     call: "{title} 시간이에요. 보내 주신 이야기 읽어 볼게요."
     close: "{title}였습니다. 계속 보내 주세요."
-    requires: {message: 2}       # 2건이 안 되면 이번 차례는 건너뛴다. message는 M4부터
+    requires: {message: 1}       # 문자가 없으면 이번 차례는 건너뛴다. 청취자가 적어도 1건이면 읽는다
     steps:
       - kind: glue
         glue: call

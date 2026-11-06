@@ -158,6 +158,18 @@ def test_repeat_follows_intensity_preset():
         assert steps.count("text_read") == count
 
 
+def test_text_corner_opens_with_one_message():
+    fmt = _fmt("talk")
+    sources = _sources()
+    sources.inbox.add(_input("m0", "message", "문자 내용 하나"))
+    assert sources.satisfies(fmt.corner("text_corner"))
+    run = _run(fmt, "text_corner", sources)
+    steps = []
+    while (s := run.next_step(0)) is not None:
+        steps.append(s.step.glue or s.step.kind)
+    assert steps == ["call", "text_read", "close"]
+
+
 def test_news_items_are_not_repeated_and_feed_recap():
     fmt = _fmt("news")
     sources = _sources(news=4)
