@@ -31,8 +31,14 @@ class RequestIntegrationTests(unittest.TestCase):
             sock.bind(('127.0.0.1', 0))
             self.port = sock.getsockname()[1]
         self.base = f'http://127.0.0.1:{self.port}'
+        self.token = None
         self.start()
         self.addCleanup(self.stop)
+        self.email, self.name = self.station + '@example.com', 'name_' + uuid.uuid4().hex[:12]
+        self.addCleanup(self.redis.hdel, 'backend:usernames', self.name)
+        self.addCleanup(self.redis.hdel, 'backend:users', self.email)
+        reply = self.call('/api/auth/signup', {'email': self.email, 'password': 'password-123', 'name': self.name})[1]
+        self.token, self.user_id = reply['accessToken'], reply['user']['id']
 
     def clean_keys(self):
         for pattern in [f'{self.prefix}:*', f'engine:{self.station}:*']:
@@ -60,6 +66,8 @@ class RequestIntegrationTests(unittest.TestCase):
 
     def call(self, path, body=None, key=None):
         headers = {'Content-Type': 'application/json'}
+        if self.token:
+            headers['Authorization'] = 'Bearer ' + self.token
         if key is not None:
             headers['Idempotency-Key'] = key
         request = Request(self.base + path, headers=headers,
@@ -80,13 +88,13 @@ class RequestIntegrationTests(unittest.TestCase):
         self.assertTrue(all(entry == entries[0] for entry in entries))
         entry = entries[0]
         self.assertEqual(entry['status'], 'requested')
-        self.assertEqual(entry['listenerId'], 'anonymous')
+        self.assertEqual(entry['listenerId'], self.user_id)
         self.assertEqual(self.redis.xlen(f'engine:{self.station}:in'), 1)
         fields = self.redis.xrange(f'engine:{self.station}:in')[0][1]
         self.assertEqual(fields['contract_version'], '1')
         self.assertEqual(fields['station_id'], self.station)
         self.assertEqual(json.loads(fields['payload']), dict(request_id=entry['id'], kind='chat',
-            body=body['prompt'], requester_ref='anonymous'))
+            body=body['prompt'], requester_ref=self.user_id))
         self.assertEqual(self.call('/api/requests', {'prompt': '다른 내용'}, 'retry-one')[0], 409)
         self.stop()
         self.start()
@@ -148,15 +156,25 @@ class RequestIntegrationTests(unittest.TestCase):
         self.assertEqual(self.call('/api/requests/' + entry['id'] + '/state')[1]['state'], 'rejected')
 
     def test_message_and_chat_deliver_kind_and_nickname(self):
-        status, reply = self.call('/api/requests', {'prompt': 'x' * 200, 'kind': 'message', 'listenerName': '밤샘러'})
+        # A client cannot choose who it speaks as: both identity fields come from the token.
+        status, reply = self.call('/api/requests', {'prompt': 'x' * 200, 'kind': 'message',
+                                                    'listenerId': 'someone-else', 'listenerName': '다른사람'})
         self.assertEqual(status, 202)
         self.assertEqual(reply['request']['kind'], 'message')
+        self.assertEqual((reply['request']['listenerId'], reply['request']['listenerName']), (self.user_id, self.name))
         status, chat = self.call('/api/requests', {'prompt': '안녕하세요', 'kind': 'chat'})
         self.assertEqual(status, 202)
         payloads = [json.loads(fields['payload']) for _, fields in self.redis.xrange(f'engine:{self.station}:in')]
         self.assertEqual(payloads, [
-            dict(request_id=reply['request']['id'], kind='message', body='x' * 200, requester_ref='anonymous', nickname='밤샘러'),
-            dict(request_id=chat['request']['id'], kind='chat', body='안녕하세요', requester_ref='anonymous')])
+            dict(request_id=reply['request']['id'], kind='message', body='x' * 200, requester_ref=self.user_id, nickname=self.name),
+            dict(request_id=chat['request']['id'], kind='chat', body='안녕하세요', requester_ref=self.user_id)])
+
+    def test_requests_need_a_valid_token(self):
+        for token in (None, 'not-a-token'):
+            self.token = token
+            self.assertEqual(self.call('/api/requests', {'prompt': '안녕하세요', 'listenerName': self.name})[0], 401)
+        self.assertEqual(self.redis.xlen(f'engine:{self.station}:in'), 0)
+        self.assertEqual(self.call('/api/requests'), (200, {'requests': []}))
 
     def test_validation_and_no_partial_write_on_wrong_key_type(self):
         for body in [{'prompt': '  '}, {'prompt': 'x', 'kind': 'song'}, {'prompt': 'x' * 4001},

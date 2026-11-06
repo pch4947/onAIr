@@ -45,7 +45,7 @@ export async function submitRequest(input: {
 }): Promise<SubmitRequestResponse> {
   const res = await fetch(`${API_BASE}/api/requests`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getAccessToken() ?? ''}` },
     body: JSON.stringify({
       prompt: input.prompt, listenerId: input.listenerId, listenerName: input.listenerName,
       kind: input.kind, trackTitle: input.trackTitle, trackArtist: input.trackArtist,

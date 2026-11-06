@@ -80,6 +80,23 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
             app.state.redis.get.side_effect = ConnectionError('offline')
             self.assertEqual((await client.get('/api/stations/st_local_dev')).status_code, 503)
 
+    async def test_request_input_is_validated_for_a_logged_in_listener(self):
+        app = create_app(Settings('127.0.0.1', 3000))
+        app.dependency_overrides[get_current_user] = lambda: {'id': 'user-1', 'name': '로그인이름'}
+        app.state.requests = SimpleNamespace(create=AsyncMock(return_value={'id': 'req-1'}))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
+            for body in [{}, {'prompt': ''}, {'prompt': 5}, {'prompt': '노래 부탁해요', 'kind': 'mood'},
+                         {'prompt': 'x' * 201, 'kind': 'message'}]:
+                with self.subTest(body=body):
+                    self.assertEqual((await client.post('/api/requests', json=body)).status_code, 422)
+            app.state.requests.create.assert_not_awaited()
+            sent = {'prompt': '안녕', 'kind': 'message', 'listenerId': 'someone-else'}
+            self.assertEqual((await client.post('/api/requests', json=sent)).status_code, 202)
+            args, kwargs = app.state.requests.create.await_args
+            self.assertEqual(args[:3], ('안녕', 'user-1', 'message'))
+            self.assertIsNone(kwargs['listener_name'])
+            await client.post('/api/requests', json=sent | {'listenerName': '다른사람'})
+            self.assertEqual(app.state.requests.create.await_args.kwargs['listener_name'], '로그인이름')
     async def test_stream_state_reports_current_corner_only_while_on_air(self):
         app = create_app(Settings('127.0.0.1', 3000))
         app.state.hls = SimpleNamespace()
