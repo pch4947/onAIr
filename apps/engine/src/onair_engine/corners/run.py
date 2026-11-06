@@ -82,8 +82,9 @@ class MaterialSources:
         self._rss = rss
         self._aired_news: set[str] = set()
         self.covered_news: list[str] = []  # 이번 순환에서 전한 기사 제목 — recap 소재
-        self.inbox = inbox or MessageInbox()
-        self.stories = stories or StoryPool()
+        # `or`로 받지 않는다 — 빈 inbox·풀은 길이가 0이라 거짓이어서 넘겨받은 설정이 사라진다
+        self.inbox = MessageInbox() if inbox is None else inbox
+        self.stories = StoryPool() if stories is None else stories
         self.votes: list[dict] = []
 
     def count(self, source: str, section: str | None = None) -> int:

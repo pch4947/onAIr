@@ -183,7 +183,10 @@ class DummyLlmClient:
 
     async def complete(self, prompt: Prompt, *, max_tokens: int) -> str:
         await asyncio.sleep(self.delay_sec)
-        # 구조화 출력 요청은 persona 초안뿐이다 — API 키 없이 방 생성 화면을 개발할 수 있게 한다
+        from ..inputs.story_judge import MARKER, dummy_judgement_json
+        if MARKER in prompt.user:
+            return dummy_judgement_json(prompt)
+        # 나머지 구조화 출력은 persona 초안이다 — API 키 없이 방 생성 화면을 개발할 수 있게 한다
         from ..personas import dummy_drafts_json  # 순환 import 회피 (personas가 llm을 쓴다)
         return dummy_drafts_json(prompt)
 

@@ -283,6 +283,15 @@ def test_board_story_is_read_with_story_id_and_no_state_is_sent(tmp_path):
     assert not any("user_secret" in p.user + p.system for p in prompts)
 
 
+def test_engine_keeps_its_configured_inbox_and_pool(tmp_path):
+    # 빈 inbox·풀은 거짓이다 — `or` 기본값으로 바뀌면 L2 검사와 사연 판정이 빠진다
+    engine, _ = _engine(tmp_path)
+    engine.telemetry.close()
+    assert engine.scheduler.sources.inbox._violates is not None
+    assert engine.scheduler.sources.stories.judged
+    assert engine.scheduler.sources.stories is engine.story_judge._pool
+
+
 def test_board_story_failing_l0_is_not_added(tmp_path):
     engine, _ = _engine(tmp_path)
     engine.on_board_story(_board(body="연락 주세요 https://example.com"))
