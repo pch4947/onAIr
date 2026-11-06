@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from ..domain import Material, Prompt, StationProfile
-from ..prompt_data import CHAT, CORNERS, SOURCES, STORY, TOPIC, TRACK, data_block
+from ..prompt_data import CHAT, CORNERS, SOURCES, STORY, TOPIC, TRACK, TREND, data_block
 from .base import system_prompt
 
 # 채팅 인용 지시 — 인용할지 말지를 LLM에 맡기지 않는다. 넣었으면 반드시 인용한다 (CORNER_DESIGN 5.1절)
@@ -18,6 +18,11 @@ QUOTE_RULE = ("아래 청취자 채팅을 '~라고 하신 분이 있네요'처�
               "닉네임이나 아이디는 말하지 않는다.")
 # 다음 단계부터 이 채팅이 화제가 된다 — 청취자가 흐름이 바뀐 이유를 알 수 있게 한다 (CORNER_DESIGN 5.2절)
 STEER_RULE = "그리고 이 얘기를 조금 더 해 보겠다고 자연스럽게 말한다."
+# 몰린 입력은 개인이 아니라 집계로 인정한다 — 특정 채팅을 인용하거나 건수를 지어내지 않는다 (9.2절)
+AGGREGATE_RULE = ("멘트 첫머리에 지금 채팅창에서 아래 화제 얘기가 많이 오간다고 한 문장으로 언급한다. "
+                  "특정 채팅을 인용하거나 숫자를 말하지 않는다.")
+PREVIEW_RULE = ("멘트 끝에 사연 문자가 많이 와 있으니 이따 '{title}' 시간에 읽겠다고 "
+                "한 문장으로 알린다. 숫자를 말하지 않는다.")
 
 
 def track_line(track: dict) -> str:
@@ -176,4 +181,8 @@ def build_prompt(step: str, material: Material, profile: StationProfile, *,
         chats = "\n".join(q.body for q in material.quotes)
         rule = f"{QUOTE_RULE} {STEER_RULE}" if material.extra.get("steer") else QUOTE_RULE
         user += f"\n{rule}\n" + data_block(CHAT, chats)
+    if trend := material.extra.get("aggregate"):
+        user += f"\n{AGGREGATE_RULE}\n" + data_block(TREND, trend.keyword)
+    elif preview := material.extra.get("preview"):
+        user += "\n" + PREVIEW_RULE.format(title=preview["title"])
     return Prompt(system=system_prompt(profile, plain=plain), user=user)

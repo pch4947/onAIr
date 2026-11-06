@@ -12,6 +12,7 @@ from __future__ import annotations
 STORY = "청취자 사연"
 CHAT = "청취자 채팅"  # 인용할 채팅 — 편성 관리자가 고른 것만 들어간다 (CORNER_DESIGN 5.1절)
 TOPIC = "지금 화제"
+TREND = "채팅창 화제"  # 채팅에서 뽑은 키워드 — 외부 텍스트다 (CORNER_DESIGN 9.2절)
 CORNERS = "오늘의 코너"
 SOURCES = "수집 소재"
 TRACK = "곡 정보"

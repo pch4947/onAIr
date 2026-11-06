@@ -147,6 +147,7 @@ class CornerRun:
         self.started_ms = started_ms  # 진입 시점의 누적 제출 오디오 — 예산 계산 기준
         self.step_index = 0
         self.steers = 0  # 코너당 화제 전환 횟수 (참여 강도 steer_limit)
+        self.aggregated = False  # 집계 언급은 코너당 1회 (CORNER_DESIGN 9.2절)
         self._sources = sources
         self._intensity = intensity
         self._done_in_step = 0

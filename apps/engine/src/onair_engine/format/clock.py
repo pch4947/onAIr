@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import itertools
+from collections import deque
 from collections.abc import Iterator
 from dataclasses import dataclass
 
@@ -30,6 +31,7 @@ class Clock:
         self._sections = [fmt.section_names.get(code, code)
                           for code in (sections or fmt.default_sections)]
         self._cycle = self._cycle_entries()
+        self._ahead: deque[ClockEntry] = deque()  # upcoming()이 미리 꺼낸 코너
         self._phase = "opening"  # opening → cycle → closing → done
 
     @property
@@ -44,6 +46,12 @@ class Clock:
         """오프닝의 코너 예고에 쓴다."""
         return [self.fmt.corner(c).title for c in self._main]
 
+    def upcoming(self, n: int) -> list[ClockEntry]:
+        """순환에서 다음에 올 코너 n개 — 진입 조건으로 건너뛸 수 있으므로 예상일 뿐이다."""
+        while len(self._ahead) < n:
+            self._ahead.append(next(self._cycle))
+        return list(self._ahead)[:n]
+
     def next(self, remaining_sec: float) -> ClockEntry | None:
         """다음 코너. 엔딩까지 끝났으면 None."""
         if self._phase == "opening":
@@ -51,7 +59,7 @@ class Clock:
             return ClockEntry(self.fmt.corner(self.fmt.opening))
         if self._phase == "cycle":
             if remaining_sec > self.closing_sec():
-                return next(self._cycle)
+                return self._ahead.popleft() if self._ahead else next(self._cycle)
             self._phase = "closing"
         if self._phase == "closing":
             self._phase = "done"

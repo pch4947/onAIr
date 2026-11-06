@@ -22,6 +22,13 @@ class ChatRules(BaseModel):
     steer_questions: list[str] = Field(default_factory=list)
     steer_requests: list[str] = Field(default_factory=list)
     steer_address: list[str] = Field(default_factory=list)
+    aggregate_share: float = Field(default=0.4, gt=0, le=1)
+    aggregate_min_people: int = Field(default=3, ge=1)
+    aggregate_stopwords: list[str] = Field(default_factory=list)
+    aggregate_predicate_endings: list[str] = Field(default_factory=list)
+    preview_min_messages: int = Field(default=5, ge=1)
+    preview_lookahead: int = Field(default=2, ge=0)
+    preview_min_remaining_sec: float = Field(default=300.0, ge=0)
 
 
 def load_chat_rules(path: str | Path) -> ChatRules:
