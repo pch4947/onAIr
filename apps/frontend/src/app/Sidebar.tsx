@@ -136,7 +136,7 @@ export function Sidebar({ active }: SidebarProps) {
         </button>
 
         <nav className="flex flex-col gap-1">
-          {NAV_ITEMS.map((item) => (
+          {NAV_ITEMS.filter((item) => item.key !== 'test' || user?.isAdmin).map((item) => (
             <button
               key={item.key}
               type="button"

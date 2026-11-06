@@ -122,6 +122,50 @@ export async function login(email: string, password: string): Promise<AuthRespon
   return res.json() as Promise<AuthResponse>
 }
 
+// 게스트 계정이면 서버가 계정을 지운다. 일반 계정은 서버에서 하는 일이 없다
+export async function logoutSession(): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/auth/logout`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
+  })
+  if (!res.ok) {
+    throw new Error(`POST /api/auth/logout failed: ${res.status}`)
+  }
+}
+
+export async function joinAsGuest(name: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/api/auth/guest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  if (res.status === 409) {
+    throw new Error('NAME_TAKEN')
+  }
+  if (!res.ok) {
+    throw new Error(`POST /api/auth/guest failed: ${res.status}`)
+  }
+  return res.json() as Promise<AuthResponse>
+}
+
+export async function joinAsAdmin(pin: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/api/auth/admin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pin }),
+  })
+  if (res.status === 401) {
+    throw new Error('INVALID_PIN')
+  }
+  if (res.status === 429) {
+    throw new Error('TOO_MANY_ATTEMPTS')
+  }
+  if (!res.ok) {
+    throw new Error(`POST /api/auth/admin failed: ${res.status}`)
+  }
+  return res.json() as Promise<AuthResponse>
+}
+
 async function fetchBoardPostPage(
   path: string,
   params: { offset?: number; limit?: number },

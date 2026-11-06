@@ -16,6 +16,18 @@ return 'ok'
 """
 
 
+# 저장된 계정이 게스트일 때만 계정과 닉네임 예약을 함께 지운다 (다른 계정을 지우지 않게).
+DELETE_GUEST = """
+local raw = redis.call('HGET', KEYS[1], ARGV[1])
+if not raw then return 0 end
+local user = cjson.decode(raw)
+if user.kind ~= 'guest' then return 0 end
+redis.call('HDEL', KEYS[1], ARGV[1])
+if redis.call('HGET', KEYS[2], user.name) == ARGV[1] then redis.call('HDEL', KEYS[2], user.name) end
+return 1
+"""
+
+
 class EmailAlreadyExists(ValueError):
     pass
 
@@ -32,16 +44,20 @@ def verify_password(password: str, password_hash: str) -> bool:
     return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
 
 
+# 게스트·어드민 계정의 저장 키. .invalid는 예약 도메인이라 EmailStr이 거부해서
+# 일반 가입·이메일 로그인과 겹칠 수 없다.
+GUEST_DOMAIN = "guest.onair.invalid"
+ADMIN_DOMAIN = "admin.onair.invalid"
+
+
 class UserStore:
     def __init__(self, redis):
         self.redis = redis
         self.key = "backend:users"
         self.names_key = "backend:usernames"
 
-    async def create(self, email: str, password: str, name: str) -> dict:
-        email = email.lower()
-        name = name.strip()
-        entry = dict(id=str(uuid4()), email=email, name=name, passwordHash=hash_password(password),
+    async def _insert(self, email: str, name: str, password_hash: str | None, kind: str) -> dict:
+        entry = dict(id=str(uuid4()), email=email, name=name, passwordHash=password_hash, kind=kind,
                      createdAt=datetime.now(timezone.utc).isoformat(timespec="milliseconds"))
         result = await self.redis.eval(CREATE, 2, self.key, self.names_key,
                                         email, name, json.dumps(entry, ensure_ascii=False))
@@ -51,12 +67,31 @@ class UserStore:
             raise NameAlreadyExists()
         return entry
 
+    async def create(self, email: str, password: str, name: str) -> dict:
+        return await self._insert(email.lower(), name.strip(), hash_password(password), "member")
+
+    async def create_guest(self, name: str) -> dict:
+        return await self._insert(f"guest-{uuid4().hex}@{GUEST_DOMAIN}", name.strip(), None, "guest")
+
+    async def get_or_create_admin(self, name: str) -> dict:
+        email = f"{name.lower()}@{ADMIN_DOMAIN}"
+        if existing := await self.get_by_email(email):
+            return existing
+        try:
+            return await self._insert(email, name, None, "admin")
+        except EmailAlreadyExists:  # 같은 어드민이 동시에 처음 들어온 경우
+            return await self.get_by_email(email)
+
+    async def delete_guest(self, email: str) -> bool:
+        return bool(await self.redis.eval(DELETE_GUEST, 2, self.key, self.names_key, email.lower()))
+
     async def get_by_email(self, email: str) -> dict | None:
         raw = await self.redis.hget(self.key, email.lower())
         return json.loads(raw) if raw else None
 
     async def authenticate(self, email: str, password: str) -> dict | None:
         user = await self.get_by_email(email)
-        if user is None or not verify_password(password, user["passwordHash"]):
+        # 게스트·어드민 계정은 비밀번호가 없어 이메일 로그인이 안 된다
+        if user is None or not user.get("passwordHash") or not verify_password(password, user["passwordHash"]):
             return None
         return user

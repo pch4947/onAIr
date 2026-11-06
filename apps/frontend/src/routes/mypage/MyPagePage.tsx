@@ -7,7 +7,7 @@ import { AlertIcon, HistoryIcon, BoardIcon, FlaskIcon } from '@/app/icons'
 import { HeartIcon } from '@/routes/board/LikeButton'
 import { MyPageTabContent } from '@/routes/mypage/MyPageTabContent'
 import { ReplaySaveIcon } from '@/routes/listen/icons'
-import { clearAccessToken } from '@/shared/authToken'
+import { useLogout } from '@/shared/useLogout'
 import { useCurrentUser } from '@/shared/useCurrentUser'
 import { MYPAGE_TABS } from '@/routes/mypage/mock'
 import type { MyPageTab } from '@/routes/mypage/mock'
@@ -27,10 +27,7 @@ export function MyPagePage() {
   const [activeTab, setActiveTab] = useState<MyPageTab>('notifications')
   const activeTabConfig = MYPAGE_TABS.find((tab) => tab.id === activeTab) ?? MYPAGE_TABS[0]
 
-  const handleLogout = () => {
-    clearAccessToken()
-    navigate('/login')
-  }
+  const handleLogout = useLogout()
 
   return (
     <div className="flex min-h-screen">
@@ -64,12 +61,14 @@ export function MyPagePage() {
                 </button>
               )
             })}
-            <button type="button" onClick={() => navigate('/test')} className="flex flex-col items-center gap-2">
-              <span className="flex size-16 items-center justify-center rounded-full bg-field-bg">
-                <FlaskIcon className="size-7 text-text" />
-              </span>
-              <span className="text-center text-xs font-medium text-text">테스트</span>
-            </button>
+            {currentUser?.isAdmin && (
+              <button type="button" onClick={() => navigate('/test')} className="flex flex-col items-center gap-2">
+                <span className="flex size-16 items-center justify-center rounded-full bg-field-bg">
+                  <FlaskIcon className="size-7 text-text" />
+                </span>
+                <span className="text-center text-xs font-medium text-text">테스트</span>
+              </button>
+            )}
           </div>
 
           <button
