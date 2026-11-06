@@ -1,4 +1,4 @@
-import type { Persona, PersonaFieldError, PersonaForm, StationInfo, Voice } from '../../shared/types'
+import type { Persona, PersonaFieldError, PersonaForm, StationFormat, StationInfo, TalkCorner, Voice } from '../../shared/types'
 
 type WirePersona = Omit<Persona, 'musicTaste' | 'djName' | 'signaturePhrases'> & {
   music_taste: string[]; dj_name: string; signature_phrases: string[]
@@ -12,6 +12,7 @@ export interface StationResult {
   hls_url: string
   engine_result: { reason?: string; detail?: string } | null
   first_song_status?: 'preparing' | 'ready' | 'failed'
+  config?: { format?: StationFormat; corners?: TalkCorner[] | null; persona?: { dj_name?: string } }
 }
 
 export class StationApiError extends Error {

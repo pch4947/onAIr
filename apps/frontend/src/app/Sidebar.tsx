@@ -47,7 +47,7 @@ function NotificationToast({ notification, onClick, onExpire }: NotificationToas
   )
 }
 
-type NavKey = 'main' | 'board' | 'mypage' | 'test'
+export type NavKey = 'main' | 'board' | 'mypage' | 'test'
 
 interface SidebarProps {
   active?: NavKey

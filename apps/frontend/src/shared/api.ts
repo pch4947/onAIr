@@ -23,6 +23,53 @@ export async function getBroadcastState(): Promise<BroadcastStateResponse> {
   return res.json() as Promise<BroadcastStateResponse>
 }
 
+// 테스트 화면 — 어드민만. 202는 요청 접수이고 실제 전환은 엔진이 한다
+export async function skipCorner(stationId: string, corner: string): Promise<{ corner: string; discarded: number }> {
+  const res = await fetch(`${API_BASE}/api/stations/${encodeURIComponent(stationId)}/corner-skip`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getAccessToken() ?? ''}` },
+    body: JSON.stringify({ corner }),
+  })
+  if (!res.ok) {
+    throw new Error(`CORNER_SKIP_${res.status}`)
+  }
+  return res.json() as Promise<{ corner: string; discarded: number }>
+}
+
+export interface DecisionInput {
+  request_id: string
+  kind: string | null
+  body: string | null
+  chat_type: 'reaction' | 'standalone' | null
+  rule: string | null // 분류 근거 — pointing | anchor_keyword | short_reaction | default
+  state: string | null
+  nickname: string | null
+}
+
+export interface EngineDecision {
+  id: number
+  at: number
+  action: 'generate' | 'glue' | 'no_material' | 'tts_blocked' | 'idle'
+  corner: string | null
+  step: string | null
+  situation: 'quiet' | 'normal' | 'flood' | null
+  criterion: 'recency' | 'relevance' | 'diversity' | null
+  quotes: DecisionInput[]
+  pending: DecisionInput[]
+}
+
+// 테스트 화면 — 어드민만. 엔진 편성 결정 중 무엇을 만들었는지만 (대기 판단은 백엔드가 뺀다)
+export async function getDecisions(stationId: string, after?: number | null): Promise<{ decisions: EngineDecision[]; next: number | null }> {
+  const query = after == null ? '' : `?after=${after}`
+  const res = await fetch(`${API_BASE}/api/stations/${encodeURIComponent(stationId)}/decisions${query}`, {
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
+  })
+  if (!res.ok) {
+    throw new Error(`GET decisions failed: ${res.status}`)
+  }
+  return res.json() as Promise<{ decisions: EngineDecision[]; next: number | null }>
+}
+
 export async function sendPresenceHeartbeat(stationId: string, clientId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/api/stations/${stationId}/presence`, {
     method: 'POST',
