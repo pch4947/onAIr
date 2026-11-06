@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { normalizeYoutubeLink } from '@/routes/listen/trackClient'
 import { GENRE_OPTIONS, MAX_MUSIC_TASTE, getVoices } from '@/routes/station-create/api'
 import type {
   Energy,
@@ -122,6 +123,7 @@ export function PersonaFormStep({ format, onBack, onSubmit, serverErrors = {} }:
   const [voiceAttempt, setVoiceAttempt] = useState(0)
   const [broadcastMinutes, setBroadcastMinutes] = useState(30)
   const [topic, setTopic] = useState('')
+  const [firstSongUrl, setFirstSongUrl] = useState('')
   const [corners, setCorners] = useState<TalkCorner[]>(DEFAULT_CORNERS)
   const [newsSections, setNewsSections] = useState<NewsSection[]>(DEFAULT_NEWS_SECTIONS)
   const [intensity, setIntensity] = useState<Intensity>('mid')
@@ -162,6 +164,8 @@ export function PersonaFormStep({ format, onBack, onSubmit, serverErrors = {} }:
     if (topic.length > 60) nextErrors.topic = '60자 이하로 입력해주세요'
     if (format === 'talk' && corners.length < 2) nextErrors.corners = '본 코너를 2~3개 골라주세요'
     if (format === 'news' && newsSections.length < 2) nextErrors.newsSections = '분야를 2~3개 골라주세요'
+    const firstSong = firstSongUrl.trim() ? normalizeYoutubeLink(firstSongUrl) : null
+    if (firstSongUrl.trim() && !firstSong) nextErrors.firstSongUrl = '올바른 유튜브 영상 링크를 입력해주세요'
     setErrors(nextErrors)
     if (Object.keys(nextErrors).length > 0) return
 
@@ -176,6 +180,7 @@ export function PersonaFormStep({ format, onBack, onSubmit, serverErrors = {} }:
       {
         broadcastMinutes,
         topic: topic.trim() || undefined,
+        firstSongUrl: firstSong ?? undefined,
         format,
         intensity,
         corners: format === 'talk' ? corners : undefined,
@@ -385,10 +390,15 @@ export function PersonaFormStep({ format, onBack, onSubmit, serverErrors = {} }:
         <span className={fieldLabelClass}>첫 노래 (선택, YouTube 링크)</span>
         <input
           type="text"
-          disabled
-          placeholder="첫 노래 지정은 준비 중이에요"
+          maxLength={2048}
+          value={firstSongUrl}
+          onChange={(event) => setFirstSongUrl(event.target.value)}
+          placeholder="https://youtu.be/... (10분 이하 영상)"
           className={textInputClass}
         />
+        <span className={errors.firstSongUrl ? errorTextClass : 'block text-xs text-text-muted'}>
+          {errors.firstSongUrl || '방송이 시작되면 이 곡이 먼저 나오고, DJ가 오프닝에서 소개해요.'}
+        </span>
       </label>
 
       <label className="flex flex-col gap-1.5">

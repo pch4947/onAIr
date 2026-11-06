@@ -17,7 +17,7 @@ BGM을 -15 dB로 낮춰 반복 믹싱하고 0.3초 페이드를 적용합니다.
 Lavalink(OAuth + remoteCipher) 다운로드 → MP3 변환 → 기존 Redis 큐 → FFmpeg HLS 송출 순서로 처리합니다.
 현재 음원을 중단하지 않습니다. 청취 화면의 신청곡 버튼에서 로그인한 사용자가 유튜브 링크를
 등록하거나 가수·곡 제목으로 검색해 최대 3개 후보 중 선택할 수 있습니다.
-방 생성의 `first_song`은 아직 지원하지 않습니다.
+방 생성 때 `first_song_url`(YouTube 링크)을 주면 첫 노래로 씁니다. 자세한 흐름은 `docs/BACKEND_STATION_CREATION.md`의 "첫 노래" 절을 참고하세요.
 곡 이벤트와 소개 예약 모드는 [곡 이벤트 가이드](../../docs/BACKEND_TRACK_EVENTS.md)를 참고합니다.
 
 ### 화면에서 테스트

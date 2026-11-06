@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from .first_song import ensure_first_song_task
 from .streaming.hls import HlsPublisher
 
 log = logging.getLogger(__name__)
@@ -158,6 +159,8 @@ class StationLifecycle:
             status = record['status']
             if status == 'ended':
                 return
+            # 첫 노래를 받는 중에 백엔드가 재시작됐으면 다시 받는다 — 그동안 엔진은 방을 모른다
+            ensure_first_song_task(self.state, record)
             if status == 'cleaning':
                 await self.cleanup(raw, record)
                 return

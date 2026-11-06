@@ -11,6 +11,7 @@ export interface StationResult {
   hls_ready: boolean
   hls_url: string
   engine_result: { reason?: string; detail?: string } | null
+  first_song_status?: 'preparing' | 'ready' | 'failed'
 }
 
 export class StationApiError extends Error {
@@ -86,9 +87,9 @@ export function createStationClient(base: string, getToken: () => string | null)
       }
     },
     async createStation(input: StationInfo & { persona: Persona }, key: string): Promise<StationResult> {
-      if (input.firstSongUrl) throw new Error('첫 노래 지정은 아직 지원하지 않아요.')
       return (await request<{ station: StationResult }>('/stations', {
         persona: toWire(input.persona), broadcast_minutes: input.broadcastMinutes, topic: input.topic || null,
+        ...(input.firstSongUrl ? { first_song_url: input.firstSongUrl } : {}),
         format: input.format, intensity: input.intensity,
         ...(input.format === 'talk' && input.corners ? { corners: input.corners } : {}),
         ...(input.format === 'news' && input.newsSections ? { news_sections: input.newsSections } : {}),

@@ -45,7 +45,17 @@ FastAPI 형식 오류는 `detail` 배열로 원래 형태를 유지한다.
 ```
 
 `voice` 예시는 dummy TTS용이다. 실제 TTS에서는 해당 제공자의 유효한 ID를 사용한다.
-`persona_id`는 전송하지 않는다. `first_song`은 아직 재생 경로가 없어 422로 거부한다.
+`persona_id`는 전송하지 않는다.
+
+### 첫 노래 (#201)
+
+본문에 `first_song_url`(YouTube 링크)을 넣으면 방송 시작과 함께 그 곡을 소개 없이 틀고, 엔진은 오프닝에서 "방금 들으신 곡"으로 소개한다(계약 3.3·3.4절).
+
+- 엔진에 보내는 `station.created`에는 곡 정보(`first_song`: `track_ref`·제목·아티스트·길이)가 있어야 하므로, 방은 `preparing`으로 바로 만들고 **음원 준비가 끝난 뒤** `station.created`를 보낸다. 방 생성 요청은 다운로드를 기다리지 않는다.
+- 방 기록의 `first_song_status`: `preparing`(받는 중) → `ready`(곡과 함께 발행) 또는 `failed`(첫 노래 없이 발행).
+- 받는 동안 방송이 종료되면 `station.created`를 보내지 않는다. 백엔드가 받는 중에 재시작되면 수명주기 점검이 다시 받는다.
+- `station.started`를 받으면 미리 받아 둔 음원을 대기열에 넣는다. 출처 `first`는 반복 재생 목록에 넣지 않고 `track.queued`도 보내지 않는다(엔진이 이미 아는 곡이라 두 번 소개하지 않게).
+- 같은 `Idempotency-Key`로 다시 보내면 첫 노래를 받는 중이어도 같은 기록을 돌려준다.
 
 ### 방송 형식 선택 (#102 백엔드)
 
