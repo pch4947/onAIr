@@ -3,6 +3,7 @@ import json
 import sqlite3
 import time
 import uuid
+from ..board_stories import STORY_PREFIX, settle_read
 from .tracks import MUSIC_SEGMENT_PREFIX, deliver_start
 
 
@@ -96,14 +97,20 @@ class Journal:
             # Quotes can belong to any speech corner, not just request_reply.
             # Music requests are completed by their own audio, not by an unrelated introduction.
             ref = segment.get('request_ref')
-            request_id = ref if (segment.get('kind') == 'speech' and not (ref or '').startswith(MUSIC_SEGMENT_PREFIX)) or (
+            # A board story is not a request: it is settled as read once it goes on air.
+            request_id = ref if (segment.get('kind') == 'speech'
+                                 and not (ref or '').startswith((MUSIC_SEGMENT_PREFIX, STORY_PREFIX))) or (
                 segment.get('kind') == 'music' and ref == segment.get('id')) else None
+            story = ref if (segment.get('kind') == 'speech' and state == 'PUBLISHED'
+                            and (ref or '').startswith(STORY_PREFIX)) else None
             self._enqueue('encoding.failed' if state == 'FAILED' else 'state.transition',
-                          dict(segment_id=segment['id'], state=state, at=at), request_id or '', at)
+                          dict(segment_id=segment['id'], state=state, at=at), request_id or '', at, story)
 
-    def _enqueue(self, kind, payload, request_id='', at=None):
+    def _enqueue(self, kind, payload, request_id='', at=None, story=None):
         at = time.time() if at is None else at
         event = dict(type=kind, station_id=self.station, at=at, payload=payload)
+        if story:
+            event['story_id'] = story
         self.db.execute('INSERT INTO outbox(id,body,request_id) VALUES(?,?,?)',
                         ('evt_' + uuid.uuid4().hex, json.dumps(event), request_id))
 
@@ -158,6 +165,8 @@ class Journal:
                       prefix + ':track-plan', prefix + ':intro-tracks',
                     prefix + ':corner-pending', prefix + ':current-corner',
                     event_id, body, request_id)
+            if event.get('story_id'):
+                await settle_read(redis, self.station, event['story_id'])
             with self.db:
                 self.db.execute('DELETE FROM outbox WHERE seq=?', (seq,))
 

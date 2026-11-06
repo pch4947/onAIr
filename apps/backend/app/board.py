@@ -1,12 +1,12 @@
 """Redis-backed board posts, comments, and likes (사연 게시판). Mirrors the storage pattern used by RequestStore.
 
-Engine hand-off (board.story) and topic matching are out of scope here —
-see issue tracking for the follow-up that wires posts into the broadcast pipeline.
+Engine hand-off (board.story) lives in board_stories.py.
 """
 from datetime import datetime, timezone
 from typing import Annotated
 import asyncio
 import json
+import logging
 import time
 from uuid import uuid4
 
@@ -15,7 +15,9 @@ from pydantic import BaseModel, Field
 from redis.exceptions import RedisError
 
 from .auth import get_current_user
+from .board_stories import POSTS_KEY
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/board")
 User = Annotated[dict, Depends(get_current_user)]
 Offset = Annotated[int, Query(ge=0)]
@@ -34,7 +36,7 @@ class CommentInput(BaseModel):
 class BoardStore:
     def __init__(self, redis):
         self.redis = redis
-        self.key = "backend:board:posts"
+        self.key = POSTS_KEY
 
     async def create(self, author_id: str, author_name: str, title: str, body: str,
                      song_request_url: str | None) -> dict:
@@ -189,6 +191,12 @@ async def create_post(body: BoardPostInput, request: Request, current_user: User
                 current_user["id"], current_user["name"], body.title, body.body, body.songRequestUrl)
     except (RedisError, TimeoutError):
         raise HTTPException(503, "Redis unavailable") from None
+    # The post is saved; a retry would duplicate it, so a missed offer only costs this broadcast.
+    try:
+        async with asyncio.timeout(3):
+            await request.app.state.story_feed.offer(entry)
+    except (RedisError, TimeoutError):
+        log.warning("Board story offer skipped for %s", entry["id"])
     return {"post": with_like_status(entry, 0, False)}
 
 
@@ -276,6 +284,7 @@ async def delete_post(post_id: str, request: Request, current_user: User):
                 await request.app.state.comment_likes.delete(comment_id)
             await request.app.state.post_likes.delete(post_id)
             await request.app.state.board.delete(post_id)
+            await request.app.state.story_feed.withdraw(post_id)
     except (RedisError, TimeoutError):
         raise HTTPException(503, "Redis unavailable") from None
     return None

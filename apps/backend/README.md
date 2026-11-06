@@ -305,6 +305,7 @@ WebSocket은 미연동이므로 화면의 연결 상태는 HLS 재생 여부와 
 POST /api/requests → 엔진 request.arrived 발행은 다음 단계입니다.
 HLS에 마지막 조각을 발행한 뒤 큐에서 제거하며, 실제 청취 완료(PLAYED)를 의미하지 않습니다.
 모든 세그먼트는 첫 조각 발행 때 서버 방송 시각으로 엔진에 segment.started를 한 번 보냅니다(계약 10.6절). 그 시각이 되기 전에는 전달하지 않고, 복구로 다시 송출해도 처음 시각을 유지합니다.
+게시판 사연은 방송 시작 때와 방송 중 새 글이 올라올 때 `board.story`로 엔진에 전달합니다. 사연토크 형식에서 `story_corner`가 있을 때만, 아직 안 읽힌 최근 7일 안의 500자 이하 글을 최신순 30건까지 보내며 주제로 거르지는 않습니다. 이 기능이 처음 시작한 시각(`backend:board:stories-since`, 한 번만 기록)보다 먼저 쓴 글은 작성자가 방송 안내를 보지 못했으므로 보내지 않습니다. `request_ref`가 `story_`로 시작하는 멘트는 요청 상태에 기록하지 않고, `PUBLISHED`에서 읽힘으로 표시하고 작성자에게 알립니다. 방송 중 글을 지우면 `board.story.withdrawn`을 보냅니다.
 엔진의 corner.changed(계약 10.7절)는 기준 세그먼트의 segment.started가 전달될 때 활성화되어 `/api/stream/state`의 `currentCorner`(`corner`, `title`, `contract`)로 나갑니다. 기준 세그먼트가 송출되지 않으면 활성화되지 않고 이전 코너가 유지됩니다. 방송 중(`started`, `draining`)이 아니면 null입니다.
 중간 재시작 시 큐 선두 음원이 반복될 수 있습니다. 같은 방송에 백엔드를 중복 실행하면 안 됩니다.
 Redis 조회 장애 중에는 무음을 공급하지만, 큐 제거/오류 기록 중 장애가 나면 발행기가 중단되어
