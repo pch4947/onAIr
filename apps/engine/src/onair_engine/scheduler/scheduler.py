@@ -363,7 +363,7 @@ class Scheduler:
                                       thread=Thread(topic=topic, keywords=sorted(keywords(topic))),
                                       started_ms=self._produced_ms)
                 self.telemetry.log_corner(entry.corner.corner_type, entry.label, "enter",
-                                          self._produced_ms)
+                                          self._produced_ms, entry.corner.title)
             planned = self._run.next_step(self._produced_ms)
             if planned is not None:
                 if planned.step.kind == "glue" and self.glue.get(
@@ -371,7 +371,7 @@ class Scheduler:
                     continue  # 이 코너는 그 문구가 없다
                 return planned
             self.telemetry.log_corner(self._run.spec.corner_type, self._run.label, "exit",
-                                      self._produced_ms)
+                                      self._produced_ms, self._run.spec.title)
             self._run = None
             empty += 1
             if empty >= _MAX_EMPTY_CORNERS:
@@ -384,12 +384,12 @@ class Scheduler:
         fallback = entry.corner.fallback
         if fallback and self.sources.satisfies(self.fmt.corner(fallback), entry.label):
             self.telemetry.log_corner(entry.corner.corner_type, entry.label, "fallback",
-                                      self._produced_ms)
+                                      self._produced_ms, entry.corner.title)
             return ClockEntry(self.fmt.corner(fallback), entry.label)
         key = (entry.corner.corner_type, entry.label)
         if key not in self._skip_logged:  # 소재를 기다리는 동안 같은 skip을 계속 쌓지 않는다
             self._skip_logged.add(key)
-            self.telemetry.log_corner(*key, "skip", self._produced_ms)
+            self.telemetry.log_corner(*key, "skip", self._produced_ms, entry.corner.title)
         return None
 
     async def _build_job(self, planned: PlannedStep) -> GenerationJob:

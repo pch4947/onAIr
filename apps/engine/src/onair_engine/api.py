@@ -25,7 +25,7 @@ from .manager import EngineManager
 from .personas import DraftsFailed, FormRejected, PersonaDrafter
 from .pipeline.llm import LlmError
 from .pipeline.tts import VOICE_LISTERS
-from .telemetry import read_decisions, recent_latency_p95_ms
+from .telemetry import read_decisions, read_events, recent_latency_p95_ms
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +131,13 @@ def create_app(manager: EngineManager, drafter: PersonaDrafter, settings: Engine
                                        after, limit)
         # 끝난 방송의 기록도 조회할 수 있어야 하므로 방이 떠 있는지는 따지지 않는다
         return {"decisions": rows, "next": rows[-1]["id"] if len(rows) == limit else None}
+
+    @app.get("/v1/stations/{station_id}/events", dependencies=v1)
+    async def events(station_id: str, after: Annotated[int, Query(ge=0)] = 0,
+                     limit: Annotated[int, Query(ge=1, le=500)] = 100):
+        """엔진 패널용 이벤트 — 코너, 입력 라우팅, 채팅 선별, 생성 단계, 송출 (계약 6.1절)."""
+        rows = await asyncio.to_thread(read_events, settings.sqlite_path, station_id, after, limit)
+        return {"events": rows, "next": rows[-1]["id"] if len(rows) == limit else None}
 
     @app.post("/v1/personas/drafts", dependencies=v1)
     async def drafts(body: DraftsRequest):

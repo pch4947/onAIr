@@ -204,6 +204,21 @@ def test_decisions_are_paged_by_cursor(tmp_path):
     assert other == {"decisions": [], "next": None}
 
 
+def test_events_are_paged_by_cursor(tmp_path):
+    client, settings = _client(tmp_path)
+    telemetry = Telemetry(settings.sqlite_path, "st_a")
+    for i in range(3):
+        telemetry.log_corner("topic_talk", None, "enter", i, "주제 토크")
+    telemetry.close()
+
+    first = client.get("/v1/stations/st_a/events?limit=2", headers=AUTH).json()
+    assert [e["summary"] for e in first["events"]] == ["코너 진입 · 주제 토크"] * 2
+    assert first["events"][0]["data"]["corner_type"] == "topic_talk"
+    rest = client.get(f"/v1/stations/st_a/events?after={first['next']}", headers=AUTH).json()
+    assert len(rest["events"]) == 1 and rest["next"] is None
+    assert client.get("/v1/stations/st_b/events", headers=AUTH).json() == {"events": [], "next": None}
+
+
 def test_status_reports_latency_p95(tmp_path):
     client, settings = _client(tmp_path)
     assert client.get("/v1/engine/status", headers=AUTH).json()["recent_latency_p95_ms"] is None
