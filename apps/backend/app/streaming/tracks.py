@@ -11,7 +11,8 @@ if meta.source == 'playlist' then
  redis.call('HSET', KEYS[8], meta.track.track_ref, cjson.encode({segment=cjson.decode(ARGV[2]),meta=meta}))
 end
 local nextid = redis.call('HGET', KEYS[6], 'next')
-if not nextid or (meta.source ~= 'playlist' and redis.call('HEXISTS', KEYS[6], 'frozen') == 0) then
+-- 첫 곡(first)은 엔진이 station.created로 이미 알고 소개 없이 틀므로 track.queued를 보내지 않는다
+if meta.source ~= 'first' and (not nextid or (meta.source ~= 'playlist' and redis.call('HEXISTS', KEYS[6], 'frozen') == 0)) then
  redis.call('HSET', KEYS[6], 'next', ARGV[1])
  redis.call('XADD', KEYS[7], '*', 'type', 'track.queued', 'contract_version', '1',
   'event_id', 'evt_track_' .. ARGV[1], 'station_id', ARGV[6], 'at', ARGV[7], 'payload', ARGV[5])

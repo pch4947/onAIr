@@ -11,6 +11,7 @@ from redis.exceptions import RedisError, ResponseError
 
 from .contracts import CornerChanged, Segment, StationStarted, StationRejected, decode, validate_audio
 from ..board_stories import StoryFeed
+from ..first_song import enqueue_first_song
 from ..stations import StationStore
 from ..streaming.tracks import MUSIC_SEGMENT_PREFIX
 
@@ -93,6 +94,7 @@ class EngineConsumer:
         self.stream = f"engine:{settings.station_id}:out"
         self.name = f"backend-{socket.gethostname()}-{uuid.uuid4().hex[:8]}"
         self.lifecycle_lock = asyncio.Lock()
+        self.state = None  # app.state — 첫 노래를 대기열에 넣을 때 MusicService가 필요하다
 
     async def ensure_group(self):
         try:
@@ -156,9 +158,13 @@ class EngineConsumer:
                     'segment_id_conflict' if result == -1 else 'track_unavailable_or_reserved')
                 return
         elif isinstance(event, (StationStarted, StationRejected)):
-            await StationStore(self.redis, self.settings.station_id).result(
-                fields['type'], event.model_dump(), float(fields['at']))
+            store = StationStore(self.redis, self.settings.station_id)
+            await store.result(fields['type'], event.model_dump(), float(fields['at']))
             if isinstance(event, StationStarted):
+                # 엔진의 첫 멘트보다 먼저 대기열에 들어가야 오프닝이 "방금 들으신 곡"이 된다
+                raw = await self.redis.get(store.key)
+                if raw and self.state is not None:
+                    await enqueue_first_song(self.state, json.loads(raw))
                 await StoryFeed(self.redis, self.settings.station_id).offer_recent()
         elif isinstance(event, CornerChanged):
             # The engine schedules ahead of the broadcast; this waits for the segment to start playing.

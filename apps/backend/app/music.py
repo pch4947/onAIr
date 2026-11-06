@@ -267,11 +267,21 @@ async def run_process(args, timeout, *, env=None):
         raise HTTPException(502, 'Audio preparation failed; the video may be unavailable or unsupported')
 
 
+def music_segment_id(generation, owner, retry_key):
+    # A reused client key in a new broadcast must not inherit an old PLAYED state.
+    scope = f'{generation}:' if generation else ''
+    return MUSIC_SEGMENT_PREFIX + hashlib.sha256(f'{scope}{owner}:{retry_key}'.encode()).hexdigest()
+
+
 class MusicService:
     def __init__(self, redis, settings):
         self.redis, self.settings = redis, settings
         self.prefix = f'backend:{settings.station_id}'
         self.lock = asyncio.Lock()
+
+    def is_cached(self, segment_id):
+        directory = self.settings.audio_dir / self.settings.station_id / 'youtube'
+        return (directory / (segment_id + '.mp3')).is_file() and (directory / (segment_id + '.json')).is_file()
 
     async def prepare(self, video_id, segment_id):
         directory = self.settings.audio_dir / self.settings.station_id / 'youtube'
@@ -332,9 +342,7 @@ class MusicService:
         station = json.loads(station_raw) if station_raw else {}
         generation = station.get('generation', '')
         created_at = station.get('created_at')
-        # A reused client key in a new broadcast must not inherit an old PLAYED state.
-        scope = f'{generation}:' if generation else ''
-        segment_id = MUSIC_SEGMENT_PREFIX + hashlib.sha256(f'{scope}{owner}:{retry_key}'.encode()).hexdigest()
+        segment_id = music_segment_id(generation, owner, retry_key)
         async def existing():
             raw = await self.redis.hget(self.prefix + ':music-submissions', segment_id)
             if raw:

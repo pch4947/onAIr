@@ -49,6 +49,7 @@ async def redis_lifespan(app):
                                    headers=headers, timeout=httpx.Timeout(30, connect=3), trust_env=False)
     app.state.engine_http = engine_http
     app.state.engine_consumer = EngineConsumer(client, app.state.settings)
+    app.state.engine_consumer.state = app.state
     task = asyncio.create_task(app.state.engine_consumer.run(), name="engine-consumer")
     publisher = HlsPublisher(client, app.state.settings, app.state.replay_sessions)
     app.state.hls = publisher

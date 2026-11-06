@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from onair_schema import Persona, PersonaForm, StationCreated
 from onair_schema.persona import text
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from redis.exceptions import RedisError
 
 from .auth import get_current_user
@@ -32,10 +32,25 @@ if old then
  if s.status ~= 'ended' then return '' end
 end
 redis.call('HSET', KEYS[2], ARGV[4], ARGV[5])
+-- 첫 노래가 있으면 음원을 받은 뒤 RELEASE가 station.created를 보낸다
+if ARGV[11] == '1' then
+ redis.call('SET', KEYS[1], ARGV[6])
+ return ARGV[6]
+end
 local control_id = redis.call('XADD', KEYS[3], '*', 'type', 'station.created', 'contract_version', '1',
  'event_id', ARGV[7], 'station_id', ARGV[8], 'at', ARGV[9], 'payload', ARGV[10])
 -- Preserve empty JSON arrays in persona; Redis cjson would turn them into objects.
 local encoded = string.sub(ARGV[6], 1, -2) .. ', "control_id":' .. cjson.encode(control_id) .. '}'
+redis.call('SET', KEYS[1], encoded)
+return encoded
+"""
+
+# 첫 노래 준비가 끝난 방의 station.created를 보낸다. 그 사이 기록이 바뀌었으면(종료 등) 보내지 않는다.
+RELEASE = """
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return '' end
+local control_id = redis.call('XADD', KEYS[2], '*', 'type', 'station.created', 'contract_version', '1',
+ 'event_id', ARGV[3], 'station_id', ARGV[4], 'at', ARGV[5], 'payload', ARGV[6])
+local encoded = string.sub(ARGV[2], 1, -2) .. ', "control_id":' .. cjson.encode(control_id) .. '}'
 redis.call('SET', KEYS[1], encoded)
 return encoded
 """
@@ -63,7 +78,17 @@ class StationInput(BaseModel):
     news_sections: list[Literal['general', 'economy', 'it', 'sports', 'culture']] | None = Field(
         default=None, min_length=2, max_length=3, description='News format only; omitted uses engine defaults')
     intensity: Literal['low', 'mid', 'high'] = Field(default='mid', description='Ignored by the engine for news')
-    # Music playback is not implemented yet; do not silently accept a first_song.
+    first_song_url: str | None = Field(default=None, max_length=2048,
+                                       description='YouTube link played without introduction at broadcast start')
+
+    @field_validator('first_song_url')
+    @classmethod
+    def validate_first_song_url(cls, value):
+        if value is None:
+            return None
+        from .music import youtube_id  # music imports this module
+        youtube_id(value)
+        return value
 
     @model_validator(mode='after')
     def validate_format_options(self):
@@ -83,7 +108,7 @@ class StationInput(BaseModel):
         return self.model_dump(include=names)
 
     def legacy_fields(self):
-        return self.model_dump(exclude={'format', 'corners', 'news_sections', 'intensity'})
+        return self.model_dump(exclude={'format', 'corners', 'news_sections', 'intensity', 'first_song_url'})
 
 
 class DraftInput(BaseModel):
@@ -105,6 +130,8 @@ class StationStore:
     async def create(self, body, owner, retry_key):
         # Preserve fingerprints and wire shape for clients that omit M3 fields.
         fields = body.legacy_fields() | body.format_options()
+        if body.first_song_url:
+            fields['first_song_url'] = body.first_song_url
         fingerprint = hashlib.sha256(json.dumps(fields, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
         persona = body.persona.model_copy(update={'persona_id': 'psn_' + uuid4().hex})
         payload = StationCreated(**{**body.legacy_fields(), 'persona': persona}).model_dump(
@@ -114,13 +141,34 @@ class StationStore:
                       generation=uuid4().hex,
                       created_at=now, updated_at=now, config=payload,
                       retry_key=retry_key, fingerprint=fingerprint, engine_result=None)
+        if body.first_song_url:
+            record |= dict(first_song_url=body.first_song_url, first_song_status='preparing')
         raw = await self.redis.eval(CREATE, 3, self.key, f'backend:{self.station_id}:personas',
             'engine:control', owner, retry_key, fingerprint, persona.persona_id,
             persona.model_dump_json(), json.dumps(record), 'evt_' + uuid4().hex,
-            self.station_id, str(now), json.dumps(payload))
+            self.station_id, str(now), json.dumps(payload), '1' if body.first_song_url else '0')
         if not raw:
             raise HTTPException(409, 'Configured station already exists; replay the same request and Idempotency-Key')
         return json.loads(raw)
+
+    async def release(self, generation, first_song):
+        """첫 노래 준비가 끝난(또는 실패한) 방의 station.created를 보낸다. 보냈으면 기록, 아니면 None."""
+        for _ in range(5):
+            raw = await self.redis.get(self.key)
+            record = json.loads(raw) if raw else None
+            if (not record or record.get('generation') != generation or record['status'] != 'preparing'
+                    or record.get('control_id')):
+                return None
+            payload = dict(record['config'])
+            if first_song:
+                payload['first_song'] = first_song
+            updated = dict(record, config=payload, first_song_status='ready' if first_song else 'failed',
+                           updated_at=time.time())
+            released = await self.redis.eval(RELEASE, 2, self.key, 'engine:control', raw, json.dumps(updated),
+                'evt_' + uuid4().hex, self.station_id, str(time.time()), json.dumps(payload))
+            if released:
+                return json.loads(released)
+        return None
 
     async def result(self, kind, payload, at):
         raw = await self.redis.get(self.key)
@@ -159,6 +207,8 @@ async def create_station(body: StationInput, request: Request, user: User,
                 record = await request.app.state.stations.create(body, user['id'], idempotency_key)
     except (RedisError, TimeoutError):
         raise HTTPException(503, 'Redis unavailable; retry with the same Idempotency-Key') from None
+    from .first_song import ensure_first_song_task  # first_song imports this module
+    ensure_first_song_task(request.app.state, record)
     return {'station': public_station(record, request)}
 
 
