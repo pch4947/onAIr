@@ -64,12 +64,14 @@ export function MyPagePage() {
                 </button>
               )
             })}
-            <button type="button" onClick={() => navigate('/test')} className="flex flex-col items-center gap-2">
-              <span className="flex size-16 items-center justify-center rounded-full bg-field-bg">
-                <FlaskIcon className="size-7 text-text" />
-              </span>
-              <span className="text-center text-xs font-medium text-text">테스트</span>
-            </button>
+            {currentUser?.isAdmin && (
+              <button type="button" onClick={() => navigate('/test')} className="flex flex-col items-center gap-2">
+                <span className="flex size-16 items-center justify-center rounded-full bg-field-bg">
+                  <FlaskIcon className="size-7 text-text" />
+                </span>
+                <span className="text-center text-xs font-medium text-text">테스트</span>
+              </button>
+            )}
           </div>
 
           <button

@@ -3,8 +3,12 @@
 import { useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { AuthBrandPanel } from '@/routes/auth/AuthBrandPanel'
+import { DemoJoinModal } from '@/routes/auth/DemoJoinModal'
+import type { DemoJoinMode } from '@/routes/auth/DemoJoinModal'
 import { login } from '@/shared/api'
 import { setAccessToken } from '@/shared/authToken'
+
+const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === '1'
 
 const fieldLabelClass = 'text-[13px] font-medium text-label'
 const textInputClass =
@@ -19,6 +23,7 @@ export function LoginPage() {
   const [keepSignedIn, setKeepSignedIn] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState('')
+  const [demoJoinMode, setDemoJoinMode] = useState<DemoJoinMode | null>(null)
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -103,6 +108,30 @@ export function LoginPage() {
             {isSubmitting ? '로그인 중...' : '로그인'}
           </button>
 
+          {DEMO_MODE && (
+            <div className="flex flex-col gap-2.5">
+              <div className="flex items-center gap-3 text-xs text-text-muted">
+                <span className="h-px flex-1 bg-border" />
+                데모 참가
+                <span className="h-px flex-1 bg-border" />
+              </div>
+              <button
+                type="button"
+                onClick={() => setDemoJoinMode('guest')}
+                className="rounded-md border border-primary py-3 text-sm font-semibold text-primary"
+              >
+                닉네임으로 참가하기
+              </button>
+              <button
+                type="button"
+                onClick={() => setDemoJoinMode('admin')}
+                className="rounded-md border border-field-border py-3 text-sm font-semibold text-text-muted"
+              >
+                어드민으로 참가하기
+              </button>
+            </div>
+          )}
+
           <p className="text-center text-[13px] text-text-muted">
             계정이 없으신가요?{' '}
             <button
@@ -115,6 +144,8 @@ export function LoginPage() {
           </p>
         </form>
       </main>
+
+      {demoJoinMode && <DemoJoinModal mode={demoJoinMode} onClose={() => setDemoJoinMode(null)} />}
     </div>
   )
 }

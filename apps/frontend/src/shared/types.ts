@@ -71,6 +71,8 @@ export interface AuthUser {
   email: string
   name: string
   createdAt: string
+  isGuest?: boolean
+  isAdmin?: boolean
 }
 
 export interface AuthResponse {

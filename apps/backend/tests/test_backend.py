@@ -96,6 +96,7 @@ class BackendTests(unittest.TestCase):
                           "/api/requests/{request_id}/history", "/api/broadcast/segments/{segment_id}/state",
                           "/api/broadcast/queue", "/api/requests/{request_id}/state", "/hls/{station_id}/{filename}",
                           "/api/auth/signup", "/api/auth/login", "/api/auth/me",
+                          "/api/auth/guest", "/api/auth/admin",
                           "/api/stations", "/api/stations/{station_id}", "/api/voices",
                           "/api/stations/{station_id}/stop", "/api/stations/{station_id}/tracks/access",
                           "/api/stations/{station_id}/tracks/queue",

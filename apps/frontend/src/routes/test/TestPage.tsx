@@ -1,7 +1,7 @@
 // 코너·페르소나 테스트 — 방송이 하나뿐이라(#161 전) 한 번에 한 조합만 띄운다
 
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Navigate, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Sidebar } from '@/app/Sidebar'
 import { createStation, getVoices } from '@/routes/station-create/api'
@@ -25,7 +25,7 @@ const optionClass = (selected: boolean) =>
 
 export function TestPage() {
   const navigate = useNavigate()
-  useCurrentUser()
+  const { data: currentUser } = useCurrentUser()
   const [cornerId, setCornerId] = useState(CORNER_PRESETS[0].id)
   const [personaId, setPersonaId] = useState(PERSONA_PRESETS[0].id)
   const [voiceId, setVoiceId] = useState('')
@@ -54,6 +54,11 @@ export function TestPage() {
     },
     onSuccess: () => navigate('/listen'),
   })
+
+  // 테스트 화면은 어드민만 쓴다. 메뉴는 숨겼지만 주소로 직접 들어와도 돌려보낸다
+  if (currentUser && !currentUser.isAdmin) {
+    return <Navigate to="/main" replace />
+  }
 
   return (
     <div className="flex min-h-screen">

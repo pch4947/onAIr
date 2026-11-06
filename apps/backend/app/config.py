@@ -33,6 +33,21 @@ class Settings:
     lavalink_password: str | None = field(default=None, repr=False)
     bgm_audio: Path | None = None
     track_intro_enabled: bool = False
+    # 데모용 어드민 참가 핀 → 어드민 닉네임 (ONAIR_ADMIN_PINS). 비어 있으면 어드민 참가를 막는다
+    admin_pins: dict[str, str] = field(default_factory=dict, repr=False)
+
+
+def parse_admin_pins(raw: str) -> dict[str, str]:
+    """'0808:ADMIN1,0707:ADMIN2' 형식. 핀은 숫자 4~8자리, 닉네임은 영문·숫자 20자 이하."""
+    pins: dict[str, str] = {}
+    for item in filter(None, (part.strip() for part in raw.split(','))):
+        pin, sep, name = item.partition(':')
+        if not sep or not re.fullmatch(r'\d{4,8}', pin) or not re.fullmatch(r'[A-Za-z0-9_]{1,20}', name):
+            raise ValueError('ONAIR_ADMIN_PINS must look like 0808:ADMIN1,0707:ADMIN2')
+        if pin in pins or name in pins.values():
+            raise ValueError('ONAIR_ADMIN_PINS has a duplicate pin or name')
+        pins[pin] = name
+    return pins
 
 
 def load_settings() -> Settings:
@@ -78,4 +93,5 @@ def load_settings() -> Settings:
                     lavalink_password=os.environ.get('ONAIR_LAVALINK_PASSWORD'),
                     bgm_audio=Path(os.environ['ONAIR_BGM_AUDIO']).expanduser().resolve()
                     if os.environ.get('ONAIR_BGM_AUDIO') else None,
-                    track_intro_enabled=os.environ.get('ONAIR_TRACK_INTRO_ENABLED', '0') == '1')
+                    track_intro_enabled=os.environ.get('ONAIR_TRACK_INTRO_ENABLED', '0') == '1',
+                    admin_pins=parse_admin_pins(os.environ.get('ONAIR_ADMIN_PINS', '')))
