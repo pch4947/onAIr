@@ -1,13 +1,18 @@
 """Demo guest join and admin-pin join. No real Redis required (in-memory fake of the CREATE script)."""
 import json
+import os
+import time
 import unittest
 from dataclasses import replace
+from uuid import uuid4
 
 import httpx
+import jwt
+from redis.asyncio import Redis
 
 from app.config import Settings, parse_admin_pins
 from app.main import create_app
-from app.users import ADMIN_DOMAIN, CREATE, DELETE_GUEST, GUEST_DOMAIN, UserStore
+from app.users import ADMIN_DOMAIN, CREATE, DELETE_GUEST, GUEST_DOMAIN, GUEST_TTL_SECONDS, NameAlreadyExists, UserStore
 
 
 class FakeRedis:
@@ -27,11 +32,14 @@ class FakeRedis:
                 del names[name]
             return 1
         assert script == CREATE
-        name, entry = args
+        name, entry, now = args
         if email in users:
             return 'email'
-        if name in names:
-            return 'name'
+        holder = json.loads(users[names[name]]) if name in names else None
+        if holder:
+            if holder.get('kind') != 'guest' or holder.get('expiresAt', 0) > float(now):
+                return 'name'
+            del users[names[name]]
         users[email], names[name] = entry, email
         return 'ok'
 
@@ -124,6 +132,86 @@ class DemoJoinApiTests(unittest.IsolatedAsyncioTestCase):
         stored = json.loads(app.state.users.redis.hashes['backend:users'][guest['email']])
         self.assertIsNone(stored['passwordHash'])
         self.assertIsNone(await app.state.users.authenticate(guest['email'], 'anything'))
+
+
+class GuestExpiryApiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_guest_token_ends_with_the_guest(self):
+        app = make_app()
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
+            created = (await client.post('/api/auth/guest', json={'name': '하루손님'})).json()
+            admin = (await client.post('/api/auth/admin', json={'pin': '0808'})).json()
+        for token, lifetime in ((created['accessToken'], GUEST_TTL_SECONDS), (admin['accessToken'], 7 * 24 * 3600)):
+            claims = jwt.decode(token, app.state.settings.jwt_secret, algorithms=['HS256'])
+            self.assertAlmostEqual(claims['exp'] - time.time(), lifetime, delta=5)
+        self.assertNotIn('expiresAt', created['user'])
+
+    async def test_expired_guest_gives_the_name_back_and_loses_the_account(self):
+        app = make_app()
+        users = app.state.users.redis.hashes
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
+            old = (await client.post('/api/auth/guest', json={'name': '떠난손님'})).json()
+            self.assertEqual((await client.post('/api/auth/guest', json={'name': '떠난손님'})).status_code, 409)
+            record = json.loads(users['backend:users'][old['user']['email']])
+            users['backend:users'][old['user']['email']] = json.dumps(record | {'expiresAt': time.time() - 1})
+            new = await client.post('/api/auth/guest', json={'name': '떠난손님'})
+            self.assertEqual(new.status_code, 201)
+            self.assertNotEqual(new.json()['user']['id'], old['user']['id'])
+            stale = {'Authorization': f"Bearer {old['accessToken']}"}
+            self.assertEqual((await client.get('/api/auth/me', headers=stale)).status_code, 401)
+
+
+@unittest.skipUnless(os.environ.get('ONAIR_INTEGRATION_TEST') == '1', 'Requires Redis')
+class GuestNameScriptTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.redis = Redis.from_url('redis://127.0.0.1:6379/0', decode_responses=True)
+        self.store = UserStore(self.redis)
+        self.names = ['이름' + uuid4().hex[:8] for _ in range(4)]
+        self.emails = []
+
+    async def asyncTearDown(self):
+        await self.redis.hdel(self.store.names_key, *self.names)
+        await self.redis.hdel(self.store.key, *self.emails)
+        await self.redis.aclose()
+
+    async def expire(self, user):
+        await self.redis.hset(self.store.key, user['email'], json.dumps(user | {'expiresAt': time.time() - 1}, ensure_ascii=False))
+
+    async def test_active_guest_keeps_the_name_and_expired_guest_releases_it(self):
+        first = await self.store.create_guest(self.names[0])
+        self.emails.append(first['email'])
+        with self.assertRaises(NameAlreadyExists):
+            await self.store.create_guest(self.names[0])
+        await self.expire(first)
+        second = await self.store.create_guest(self.names[0])
+        self.emails.append(second['email'])
+        self.assertIsNone(await self.store.get_by_email(first['email']))
+        self.assertEqual(await self.redis.hget(self.store.names_key, self.names[0]), second['email'])
+
+    async def test_a_guest_without_expiry_is_treated_as_expired(self):
+        first = await self.store.create_guest(self.names[1])
+        self.emails.append(first['email'])
+        await self.redis.hset(self.store.key, first['email'], json.dumps(
+            {k: v for k, v in first.items() if k != 'expiresAt'}, ensure_ascii=False))
+        second = await self.store.create_guest(self.names[1])
+        self.emails.append(second['email'])
+        self.assertIsNone(await self.store.get_by_email(first['email']))
+
+    async def test_member_name_is_never_released(self):
+        email = f'{uuid4().hex}@example.com'
+        self.emails.append(email)
+        await self.store.create(email, 'password123', self.names[2])
+        with self.assertRaises(NameAlreadyExists):
+            await self.store.create_guest(self.names[2])
+        self.assertIsNotNone(await self.store.get_by_email(email))
+
+    async def test_expired_guest_name_opens_to_signup(self):
+        guest = await self.store.create_guest(self.names[3])
+        await self.expire(guest)
+        email = f'{uuid4().hex}@example.com'
+        self.emails.append(email)
+        await self.store.create(email, 'password123', self.names[3])
+        self.assertEqual(await self.redis.hget(self.store.names_key, self.names[3]), email)
+        self.assertIsNone(await self.store.get_by_email(guest['email']))
 
 
 class LogoutTests(unittest.IsolatedAsyncioTestCase):

@@ -98,9 +98,10 @@ FastAPI가 엔진의 Redis 이벤트를 받아 방송 큐에 저장하고, FFmpe
 
 ## 데모 참가 (게스트·어드민)
 
-- `POST /api/auth/guest {name}`: 닉네임(20자 이하)만으로 비밀번호 없는 게스트 계정을 만들고 토큰을 돌려줍니다. 닉네임이 겹치면 409입니다.
+- `POST /api/auth/guest {name}`: 닉네임(20자 이하)만으로 비밀번호 없는 게스트 계정을 만들고 토큰을 돌려줍니다. 참가 중인 닉네임과 겹치면 409입니다. 게스트 참가는 24시간 뒤 끝나며(토큰도 함께 만료), 로그아웃하거나 만료되면 그 닉네임을 다시 쓸 수 있습니다.
 - `POST /api/auth/admin {pin}`: `ONAIR_ADMIN_PINS`(`핀:닉네임` 쉼표 구분)에 있는 핀이면 그 어드민 계정으로 토큰을 돌려줍니다. 계정은 처음 들어올 때 만들고 이후에는 같은 계정을 씁니다. 설정이 비어 있으면 404, 틀린 핀이 같은 접속지에서 1분에 5번 넘으면 1분 동안 429입니다.
 - 게스트·어드민 계정은 `.invalid` 도메인 키로 저장해 일반 가입·이메일 로그인과 겹치지 않습니다. 어드민 닉네임은 다른 가입·게스트 참가에서 쓸 수 없습니다.
+- 방송 생성(`POST /api/stations`)과 페르소나 초안·검사(`POST /api/personas/drafts`, `/check`)는 일반 회원과 어드민이 쓸 수 있고 게스트는 403입니다. 게스트는 청취, 요청 입력, 게시판을 씁니다.
 - `/api/auth/me`의 `isGuest`, `isAdmin`으로 구분합니다. 실제 핀은 `.env`나 서버 환경변수에만 둡니다.
 
 ## 실행 (Windows PowerShell)
@@ -137,8 +138,8 @@ macOS/Linux에서는 가상환경 실행 파일이 `.venv/bin/python`입니다.
 | --- | --- |
 | GET /health | 서버 생존 확인 |
 | GET /api/stream/state | 방송 상태, 대기 요청 수와 최장 대기시간 |
-| GET /api/requests | 요청 목록 |
-| POST /api/requests | 로그인 필수. prompt를 받아 202 반환. 청취자는 토큰으로 정함 |
+| GET /api/requests | 로그인 필수. 요청 목록. 청취자 ID 대신 내 요청 여부(`mine`)를 돌려줌 |
+| POST /api/requests | 로그인 필수. prompt를 받아 202 반환. 청취자는 토큰으로 정하며 응답은 목록과 같은 형식 |
 | POST /api/scheduler/tick | 버퍼 기준 정책 판단 및 방송 상태 갱신 |
 
 Node 서버와 package.json은 제거했습니다. 실행은 `python -m app`입니다.

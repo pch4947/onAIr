@@ -83,7 +83,6 @@ export async function sendPresenceHeartbeat(stationId: string, clientId: string)
 
 export async function submitRequest(input: {
   prompt: string
-  listenerId?: string
   listenerName?: string
   kind?: 'story' | 'message'
   trackTitle?: string
@@ -94,7 +93,7 @@ export async function submitRequest(input: {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getAccessToken() ?? ''}` },
     body: JSON.stringify({
-      prompt: input.prompt, listenerId: input.listenerId, listenerName: input.listenerName,
+      prompt: input.prompt, listenerName: input.listenerName,
       kind: input.kind, trackTitle: input.trackTitle, trackArtist: input.trackArtist,
       trackThumbnailUrl: input.trackThumbnailUrl,
     }),
@@ -109,7 +108,9 @@ export async function submitRequest(input: {
 }
 
 export async function getRequests(): Promise<{ requests: RequestRecord[] }> {
-  const res = await fetch(`${API_BASE}/api/requests`)
+  const res = await fetch(`${API_BASE}/api/requests`, {
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
+  })
   if (!res.ok) {
     throw new Error(`GET /api/requests failed: ${res.status}`)
   }

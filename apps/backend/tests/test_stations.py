@@ -83,7 +83,7 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_request_input_is_validated_for_a_logged_in_listener(self):
         app = create_app(Settings('127.0.0.1', 3000))
         app.dependency_overrides[get_current_user] = lambda: {'id': 'user-1', 'name': '로그인이름'}
-        app.state.requests = SimpleNamespace(create=AsyncMock(return_value={'id': 'req-1'}))
+        app.state.requests = SimpleNamespace(create=AsyncMock(return_value={'id': 'req-1', 'listenerId': 'user-1'}))
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
             for body in [{}, {'prompt': ''}, {'prompt': 5}, {'prompt': '노래 부탁해요', 'kind': 'mood'},
                          {'prompt': 'x' * 201, 'kind': 'message'}]:
@@ -91,7 +91,9 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual((await client.post('/api/requests', json=body)).status_code, 422)
             app.state.requests.create.assert_not_awaited()
             sent = {'prompt': '안녕', 'kind': 'message', 'listenerId': 'someone-else'}
-            self.assertEqual((await client.post('/api/requests', json=sent)).status_code, 202)
+            result = await client.post('/api/requests', json=sent)
+            self.assertEqual(result.status_code, 202)
+            self.assertEqual(result.json()['request'], {'id': 'req-1', 'mine': True})
             args, kwargs = app.state.requests.create.await_args
             self.assertEqual(args[:3], ('안녕', 'user-1', 'message'))
             self.assertIsNone(kwargs['listener_name'])
@@ -162,7 +164,21 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
             base_url='http://engine')
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
             self.assertEqual((await client.get('/api/voices')).status_code, 401)
-            app.dependency_overrides[get_current_user] = lambda: {'id': 'u1'}
+            self.assertEqual((await client.post('/api/stations', json=BODY, headers={'Idempotency-Key': 'one'})).status_code, 401)
+            app.dependency_overrides[get_current_user] = lambda: {'id': 'u1', 'kind': 'guest'}
+            for path, body, headers in (('/api/stations', BODY, {'Idempotency-Key': 'one'}),
+                                        ('/api/personas/drafts', {'form': {}}, {}),
+                                        ('/api/personas/check', {'persona': {}}, {})):
+                with self.subTest(path=path):
+                    self.assertEqual((await client.post(path, json=body, headers=headers)).status_code, 403)
+            self.assertEqual((await client.get('/api/voices')).status_code, 200)
+            app.state.stations.create.assert_not_awaited()
+            # kind가 없는 계정은 게스트 도입 전에 가입한 일반 회원이다
+            for kind in ('admin', None):
+                app.dependency_overrides[get_current_user] = lambda kind=kind: {'id': 'u1', 'kind': kind}
+                with self.subTest(kind=kind):
+                    self.assertEqual((await client.post('/api/stations', json=BODY, headers={'Idempotency-Key': 'one'})).status_code, 202)
+            app.dependency_overrides[get_current_user] = lambda: {'id': 'u1', 'kind': 'member'}
             self.assertEqual((await client.post('/api/stations', json=BODY)).status_code, 422)
             headers = {'Idempotency-Key': 'one'}
             self.assertEqual((await client.post('/api/stations', json={**BODY, 'first_song': {}}, headers=headers)).status_code, 422)
