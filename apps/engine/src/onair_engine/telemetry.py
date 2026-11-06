@@ -41,6 +41,10 @@ CREATE TABLE IF NOT EXISTS reflection_log (
     started_at REAL, quote_age REAL, quote_age_net REAL, topic_match INTEGER,
     script_chars INTEGER, quote_chars INTEGER
 );
+CREATE TABLE IF NOT EXISTS steer_log (
+    request_id TEXT, station_id TEXT, segment_id TEXT, at REAL, corner_type TEXT, rule TEXT,
+    old_topic TEXT, new_topic TEXT
+);
 CREATE TABLE IF NOT EXISTS aired_log (
     station_id TEXT, segment_id TEXT, at REAL, script TEXT
 );
@@ -204,6 +208,16 @@ class Telemetry:
             (req.request_id, self.station_id, segment_id, str(req.chat_type or req.kind), req.received_at,
              started_at, started_at - req.received_at, quote_age_net,
              None if topic_match is None else int(topic_match), script_chars, len(req.body)),
+        )
+        self._db.commit()
+
+    def log_steer(self, *, request_id: str, segment_id: str, corner_type: str, rule: str,
+                  old_topic: str | None, new_topic: str) -> None:
+        """화제 전환 — 반영 ③단계(CORNER_DESIGN 9.4절). 실제 송출 여부는 reflection_log와 잇는다."""
+        self._db.execute(
+            "INSERT INTO steer_log VALUES (?,?,?,?,?,?,?,?)",
+            (request_id, self.station_id, segment_id, time.time(), corner_type, rule,
+             old_topic, new_topic),
         )
         self._db.commit()
 

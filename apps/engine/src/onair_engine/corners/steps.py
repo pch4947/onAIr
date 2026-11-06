@@ -16,6 +16,8 @@ from .base import system_prompt
 # 채팅 인용 지시 — 인용할지 말지를 LLM에 맡기지 않는다. 넣었으면 반드시 인용한다 (CORNER_DESIGN 5.1절)
 QUOTE_RULE = ("아래 청취자 채팅을 '~라고 하신 분이 있네요'처럼 짧게 인용하고 한 문장으로 반응한다. "
               "닉네임이나 아이디는 말하지 않는다.")
+# 다음 단계부터 이 채팅이 화제가 된다 — 청취자가 흐름이 바뀐 이유를 알 수 있게 한다 (CORNER_DESIGN 5.2절)
+STEER_RULE = "그리고 이 얘기를 조금 더 해 보겠다고 자연스럽게 말한다."
 
 
 def track_line(track: dict) -> str:
@@ -172,5 +174,6 @@ def build_prompt(step: str, material: Material, profile: StationProfile, *,
         if not kind.quotable:
             raise ValueError(f"{step} 단계는 채팅을 인용하지 않는다")
         chats = "\n".join(q.body for q in material.quotes)
-        user += f"\n{QUOTE_RULE}\n" + data_block(CHAT, chats)
+        rule = f"{QUOTE_RULE} {STEER_RULE}" if material.extra.get("steer") else QUOTE_RULE
+        user += f"\n{rule}\n" + data_block(CHAT, chats)
     return Prompt(system=system_prompt(profile, plain=plain), user=user)

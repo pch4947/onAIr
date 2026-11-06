@@ -13,6 +13,7 @@ from ..format.spec import CornerSpec, Intensity, StepSpec
 from ..inputs.inbox import MessageInbox
 from ..inputs.stories import StoryPool
 from ..sources.rss import RssCollector, source_name
+from .steps import STEP_KINDS
 
 
 @dataclass
@@ -145,7 +146,7 @@ class CornerRun:
         self.thread = thread
         self.started_ms = started_ms  # 진입 시점의 누적 제출 오디오 — 예산 계산 기준
         self.step_index = 0
-        self.steers = 0  # 코너당 화제 전환 횟수 (참여 강도 steer_limit) — M4
+        self.steers = 0  # 코너당 화제 전환 횟수 (참여 강도 steer_limit)
         self._sources = sources
         self._intensity = intensity
         self._done_in_step = 0
@@ -170,6 +171,24 @@ class CornerRun:
                     continue
             self._done_in_step += 1
             return PlannedStep(self.spec, step, items, self.label)
+        return None
+
+    def can_steer(self, limit: int, produced_ms: int) -> bool:
+        """횟수 상한 미만이고, 바뀐 화제로 이야기할 단계와 그 시간이 남았다 (CORNER_DESIGN 5.2절)."""
+        if self.steers >= limit:
+            return False
+        step = self._next_topic_step()
+        if step is None:
+            return False
+        left_sec = self.spec.budget_sec[1] - (produced_ms - self.started_ms) / 1000
+        return left_sec >= STEP_KINDS[step.kind].seconds[0]
+
+    def _next_topic_step(self) -> StepSpec | None:
+        """남은 단계 중 화제로 이야기하는 첫 단계 — 항목이 소재인 단계는 화제를 쓰지 않는다."""
+        for i, step in enumerate(self.spec.steps[self.step_index:]):
+            left = self._repeat(step) - (self._done_in_step if i == 0 else 0)
+            if left > 0 and step.items is None and step.kind != "glue":
+                return step
         return None
 
     def _advance(self) -> None:

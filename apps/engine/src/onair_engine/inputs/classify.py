@@ -32,6 +32,21 @@ def keywords(text: str | None) -> frozenset[str]:
     return frozenset(w for w in words if len(w) >= 2 and w not in _STOPWORDS)
 
 
+def steer_rule(body: str, rules: ChatRules, dj_name: str) -> str | None:
+    """화제를 바꿀 채팅이면 맞은 규칙(question·request·address), 아니면 None (CORNER_DESIGN 5.2절)."""
+    text = body.strip()
+    if len(text) < rules.steer_min_chars or not keywords(text):
+        return None
+    if any(p in text for p in rules.steer_questions):
+        return "question"
+    if any(p in text for p in rules.steer_requests):
+        return "request"
+    lowered = text.lower()
+    if any(p.lower() in lowered for p in (*rules.steer_address, dj_name)):
+        return "address"
+    return None
+
+
 def classify(body: str, anchor: Anchor | None, rules: ChatRules) -> tuple[ChatType, str]:
     """(유형, 맞은 규칙). 위에서부터 처음 맞는 규칙을 쓴다. 정규화 전 원문으로 판단한다."""
     text = body.strip()
