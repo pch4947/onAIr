@@ -71,7 +71,8 @@ _KINDS = {"chat": "채팅", "story": "채팅", "mood": "채팅", "message": "문
 _ROUTES = {"pool": "채팅 후보", "inbox": "문자 받은편지함", "song_request": "곡 대기",
            "story_pool": "사연 후보", "not_on_air": "방송 미반영"}
 _CORNER_EVENTS = {"enter": "코너 진입", "exit": "코너 종료", "skip": "코너 건너뜀",
-                  "fallback": "코너 대체", "length": "코너 멘트 길이"}
+                  "fallback": "코너 대체", "length": "코너 멘트 길이",
+                  "hold": "곡 건너뜀"}
 _CRITERIA = {"recency": "최신순", "relevance": "주제 관련", "diversity": "다양성"}
 _EXCERPT = 40
 
@@ -248,7 +249,8 @@ class Telemetry:
             (self.station_id, time.time(), corner_type, label, event, produced_ms),
         )
         name = " · ".join(p for p in (title or corner_type, label) if p)
-        reason = " (소재 없음)" if event in ("skip", "fallback") else ""
+        reason = {"skip": " (소재 없음)", "fallback": " (소재 없음)",
+                  "hold": " (곡 사이에 다른 코너가 없었음)"}.get(event, "")
         if event == "length":
             reason = f" ({produced_ms / 1000:.0f}초)"
         self._event("corner", f"{_CORNER_EVENTS.get(event, event)} · {name}{reason}",
