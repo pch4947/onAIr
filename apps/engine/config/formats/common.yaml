@@ -4,7 +4,7 @@
 # 코너 필드
 #   title       방송에서 부르는 코너 이름 (접착 문구의 {title})
 #   steps       진행 단계. kind는 corners/steps.py의 단계 유형 또는 glue(사전 렌더 문구)
-#               items: 항목 출처(track·next_track·news·covered_news·board_story·message·vote), take: 한 번에 꺼낼 개수,
+#               items: 항목 출처(track·next_track·news·covered_news·board_story·message·vote·talk_point), take: 한 번에 꺼낼 개수,
 #               repeat: 최대 반복 — 문자열이면 참여 강도 프리셋 값
 #               again: 같은 방송에서 두 번째 진입부터 대신 쓸 단계 유형 (glue면 call·close·resume)
 #   contract    입력 종류별 반영 모드 (quote·steer·read·feature·solicit·closed·defer·none). 적지 않으면 defer
@@ -58,8 +58,9 @@ corners:
         again: resume
       - kind: talk_open          # 화제 꺼내기 (참여 강도에 따라 청취자에게 질문) + 이야기 갈래 1
         again: talk_resume       # 두 번째 진입부터는 주제를 다시 소개하지 않고 다음 갈래로 잇는다
-      - kind: talk               # 이야기 + 채팅 인용 (이번 갈래의 말할 거리)
-        repeat: 3
+      - kind: talk               # 말할 거리 하나로 한 멘트 — 채팅 → 다시 꺼내기 → 갈래의 말할 거리.
+        items: talk_point        # 떨어지면 거기서 끝내고 곡으로 간다 (청취자가 많을수록 길어진다)
+        repeat: 4
     contract: {chat: steer}
 
   filler:

@@ -37,6 +37,7 @@ def test_steer_rule(body, rule):
 def _run(corner="topic_talk") -> CornerRun:
     fmt = load_format("talk", ROOT / "config" / "formats")
     sources = MaterialSources(tracks=TrackSource(), rss=RssCollector())
+    sources.talk_points = lambda run: {"source": "topic"}  # 말할 거리가 떨어지지 않는다
     return CornerRun(ClockEntry(fmt.corner(corner)), sources=sources, intensity=fmt.intensity["mid"],
                      thread=Thread())
 
@@ -53,7 +54,7 @@ def test_can_steer_needs_count_budget_and_a_remaining_talk_step():
     run.spent_ms = run.spec.budget_sec[1] * 1000 - 1000
     assert not run.can_steer(1)  # 한 단계 시간이 안 남았다
     run.spent_ms = 0
-    for _ in range(3):
+    for _ in range(4):
         assert run.next_step().step.kind == "talk"
     assert not run.can_steer(1)  # 마지막 이야기 — 바뀐 화제로 말할 단계가 없다
 

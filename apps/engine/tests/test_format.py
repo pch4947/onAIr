@@ -124,11 +124,14 @@ def _run(fmt: FormatSpec, corner: str, sources: MaterialSources, intensity="mid"
 
 def test_corner_runs_steps_in_order_with_repeats():
     fmt = _fmt("talk")
-    run = _run(fmt, "topic_talk", _sources())
+    sources = _sources()
+    points = iter(range(2))
+    sources.talk_points = lambda run: {"source": "angle", "n": n} if (n := next(points, None)) is not None else None
+    run = _run(fmt, "topic_talk", sources)
     kinds = []
     while (step := run.next_step()) is not None:
         kinds.append(step.step.glue or step.step.kind)
-    assert kinds == ["call", "talk_open", "talk", "talk", "talk"]
+    assert kinds == ["call", "talk_open", "talk", "talk"], "말할 거리가 떨어지면 이야기 단계를 끝낸다"
 
 
 def test_corner_over_budget_skips_to_close_glue():

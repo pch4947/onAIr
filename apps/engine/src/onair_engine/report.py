@@ -13,6 +13,7 @@ from pathlib import Path
 from .telemetry import _read
 
 Q_MAX_SEC = 120.0  # 제때 반영 기준 — telemetry.reflection_summary와 같은 값 (CORNER_DESIGN 9.5절)
+_MATERIALS = {"chat": "채팅", "callback": "다시 꺼내기", "angle": "갈래", "topic": "주제만"}
 
 
 def _percentile(values: list[float], pct: int) -> float | None:
@@ -163,6 +164,11 @@ def station_report(sqlite_path: str | Path, station_id: str, run: int = -1) -> d
         "fallback_rate": _ratio(outcomes["fallback"], len(jobs)),
         "stage_sec": {s: _spread(v) for s, v in sorted(stages.items())},
         "job_sec": _spread([j["total"] for j in jobs.values() if j["outcome"] == "ok"]),
+        # 이야기 단계가 무엇을 소재로 말했는지 — chat·callback·angle·topic (CORNER_DESIGN 7.7절, #226)
+        "talk_material": dict(q(
+            "SELECT json_extract(decision_json, '$.material') AS m, COUNT(*) FROM decision_log "
+            "WHERE station_id = ? {w} AND json_extract(decision_json, '$.action') = 'generate' "
+            "AND m IS NOT NULL GROUP BY m")),
     }
 
     stories = {f"{method}_{'relevant' if rel else 'dropped'}": n for method, rel, n in q(
@@ -243,6 +249,8 @@ def render(report: dict) -> str:
               "| 단계 | 건수 | 중앙값 (초) | P95 (초) |", "|---|---|---|---|"]
     rows = [*gen["stage_sec"].items(), ("세그먼트 합계", gen["job_sec"])]
     lines += [f"| {name} | {s['count']} | {_fmt(s['p50'])} | {_fmt(s['p95'])} |" for name, s in rows]
+    material = ", ".join(f"{_MATERIALS.get(k, k)} {n}" for k, n in sorted(gen["talk_material"].items())) or "-"
+    lines += ["", f"이야기 단계 소재: {material}"]
 
     stories = ", ".join(f"{k} {n}" for k, n in sorted(r["stories"].items())) or "-"
     aggregate = ", ".join(f"{k} {n}" for k, n in sorted(r["aggregate"].items())) or "-"

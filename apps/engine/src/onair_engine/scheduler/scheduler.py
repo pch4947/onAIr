@@ -39,13 +39,14 @@ from ..format.clock import Clock, ClockEntry
 from ..format.spec import QUOTABLE, FormatSpec, Intensity, Mode
 from ..glue import WIRE_KIND, GlueBank
 from ..inputs.aggregate import chat_trend
+from ..inputs.callbacks import CallbackStore
 from ..inputs.classify import classify, keywords, steer_rule
 from ..inputs.on_air import OnAirTimeline
 from ..inputs.pool import QuotePool
 from ..inputs.router import BOARD_STORY, CHAT, MESSAGE, SONG_REQUEST, normalize_kind
 from ..inputs.rules import ChatRules
 from ..inputs.selector import RELEVANCE, QuoteSelector
-from ..inputs.topic_plan import TopicPlan
+from ..inputs.topic_plan import Angle, TopicPlan
 from ..pipeline.pipeline import GenerationPipeline
 from ..telemetry import Telemetry
 from ..transport import Transport
@@ -104,6 +105,8 @@ class Scheduler:
         self._sem = asyncio.Semaphore(max_concurrent)
         self.chat_rules = chat_rules
         self.timeline = OnAirTimeline()
+        self.callbacks = CallbackStore()  # 방송에 나간 청취자 입력 — 다시 꺼내기·엔딩 돌아보기 소재
+        sources.talk_points = self._talk_point
         # 일반 방의 기본 기준은 화제 관련성 우선(U12). 실험용 방은 조건이 정한다
         experiment = config.experiment or {}
         self.pool = QuotePool(
@@ -244,6 +247,7 @@ class Scheduler:
         req, job = quoted
         req.state = RequestState.REFLECTED
         self.telemetry.log_request_state(req.request_id, req.state)
+        self.callbacks.add(req, started_at)
         # 곡 재생 중에 도착한 반응은 곡 위에서 말할 수 없어 기다린다 — 그 구조적 대기를 뺀다
         song_end = self.timeline.track_end(req.anchor_id)
         waited = max(0.0, song_end - req.received_at) if song_end else 0.0
@@ -345,7 +349,8 @@ class Scheduler:
                     action="generate", corner_type=job.corner_type, step=job.step,
                     quotes=[q.request_id for q in job.material.quotes],
                     situation=selection.situation if selection else None,
-                    criterion=selection.criterion if selection else None))
+                    criterion=selection.criterion if selection else None,
+                    material=job.material.extra.get("material")))
                 seq = self._reserve()
                 asyncio.create_task(self._generate(job, seq))
             await asyncio.sleep(0)  # 생성 태스크에 실행 양보
@@ -437,14 +442,23 @@ class Scheduler:
             material.extra.update(guide=self.fmt.guide, corners=self.clock.main_titles())
         elif step.kind in _OPENERS:
             self._open_thread(material)
-        elif step.kind == "talk" and self._run is not None and self._run.thread.angle:
-            material.extra["angle"] = self._run.thread.angle
+        elif step.kind == "closing_lookback":
+            material.extra["lookback"] = self.callbacks.lookback()
+            if self.topic_plan is not None and self.topic_plan.used:
+                material.extra["covered_angles"] = [a.title for a in self.topic_plan.used]
         elif step.kind == "news_recap":
             material.extra["covered"] = list(self.sources.covered_news)
             self.sources.covered_news.clear()  # 다음 순환은 새로 센다
+        point = planned.items[0] if step.items == "talk_point" else None
+        if point is not None:
+            material.items = []
         anchor = self._anchor_for(planned)
         await self._expire_inputs(time.time())
         material.quotes = self._take_quotes(corner.mode("chat"), step.kind, anchor, material)
+        if point is not None:
+            if point["source"] == "chat" and not material.quotes:  # 선별기가 고르지 않았다 — 다른 소재로
+                point = self._quiet_point(self._run) or {"source": "topic"}
+            self._use_point(point, material)
         if corner.mode("chat") == Mode.STEER:
             self._mark_steer(material)
         self._mark_aggregate(corner.mode("chat"), step.kind, material)
@@ -462,11 +476,48 @@ class Scheduler:
             return
         covered = [a.title for a in self.topic_plan.used]
         angle = self.topic_plan.next_angle()
-        self._run.thread.angle = angle
-        if angle is not None:
-            material.extra["angle"] = angle
+        thread = self._run.thread
+        thread.angle = angle
+        if angle is not None:  # 꺼내기는 첫 말할 거리로 — 나머지는 이야기 단계가 하나씩 쓴다
+            material.extra["angle"] = Angle(angle.title, angle.points[:1])
+            thread.points_used = min(1, len(angle.points))
         if covered:
             material.extra["covered_angles"] = covered
+
+    def _talk_point(self, run: CornerRun) -> dict | None:
+        """이야기 단계의 소재 하나 — 인용할 채팅 → 다시 꺼낼 청취자 이야기 → 갈래의 말할 거리 (CORNER_DESIGN 7.7절).
+
+        None이면 할 말이 떨어졌다 — 이야기 단계를 끝내고 다음 코너(곡)로 간다. 억지로 채우지 않는다.
+        """
+        if self._quote_ready(run.spec.mode("chat"), "talk"):
+            return {"source": "chat"}
+        return self._quiet_point(run)
+
+    def _quiet_point(self, run: CornerRun | None) -> dict | None:
+        """채팅 없이 말할 거리."""
+        if run is None:
+            return None
+        if not run.called_back and (aired := self.callbacks.take(time.time())) is not None:
+            run.called_back = True
+            return {"source": "callback", "callback": aired}
+        thread = run.thread
+        if thread.angle is not None:
+            if thread.points_used < len(thread.angle.points):
+                thread.points_used += 1
+                return {"source": "angle", "point": thread.angle.points[thread.points_used - 1]}
+            return None
+        if thread.free_points > 0:  # 갈래가 없다(계획 실패·다 씀·화제 전환) — 주제만으로 정해진 횟수
+            thread.free_points -= 1
+            return {"source": "topic"}
+        return None
+
+    def _use_point(self, point: dict, material: Material) -> None:
+        material.extra["material"] = point["source"]
+        if point["source"] == "callback":
+            material.extra["callback"] = point["callback"]
+            self.telemetry.log_callback(point["callback"])
+        elif point["source"] == "angle" and self._run is not None and self._run.thread.angle:
+            material.extra["angle"] = Angle(self._run.thread.angle.title, (point["point"],))
 
     def _next_anchor_id(self, kind: str) -> str:
         self._anchor_no += 1
@@ -500,17 +551,20 @@ class Scheduler:
         for req in requests:
             await self._transition(req, RequestState.EXPIRED)
 
+    def _quote_ready(self, chat_mode, step_kind: str) -> bool:
+        """지금 이 단계에 채팅을 인용할 수 있다 — 풀에 채팅이 있고 계약·참여 강도·인용 간격이 허용한다."""
+        return (bool(len(self.pool)) and chat_mode in QUOTABLE and STEP_KINDS[step_kind].quotable
+                and min(self.intensity.quote_limit, _V1_QUOTES_PER_SEGMENT) > 0
+                and time.time() - self._last_quote_at >= self.intensity.quote_gap_sec)
+
     def _take_quotes(self, chat_mode, step_kind: str, anchor: Anchor,
                      material: Material) -> list[ListenerRequest]:
         """코너 계약과 참여 강도가 허용하면 선별기가 고른다 (CORNER_DESIGN 5.1, 5.7절)."""
-        if not len(self.pool) or chat_mode not in QUOTABLE or not STEP_KINDS[step_kind].quotable:
-            return []
-        if material.feature_ref:  # 계약 v1의 request_ref는 하나뿐이다 — input_refs 전까지 함께 싣지 못한다
+        # 계약 v1의 request_ref는 하나뿐이다 — input_refs 전까지 주 소재와 함께 싣지 못한다
+        if material.feature_ref or not self._quote_ready(chat_mode, step_kind):
             return []
         limit = min(self.intensity.quote_limit, _V1_QUOTES_PER_SEGMENT)
         now = time.time()
-        if limit <= 0 or now - self._last_quote_at < self.intensity.quote_gap_sec:
-            return []
         topic_words = anchor.keywords | keywords(material.topic)
         selection = self.selector.select(
             self.pool.items, limit=limit, arrivals=self.pool.recent_arrivals(now),
@@ -579,7 +633,8 @@ class Scheduler:
         """다음 단계부터 이 채팅이 화제다 (CORNER_DESIGN 5.2절). 앵커도 새 화제로 새로 만든다."""
         run = self._run
         old_topic = run.thread.topic
-        run.thread = Thread(topic=req.body, keywords=sorted(keywords(req.body)))
+        # 바뀐 화제에는 갈래가 없다 — 그 화제로 두 번까지 이야기한다
+        run.thread = Thread(topic=req.body, keywords=sorted(keywords(req.body)), free_points=2)
         run.steers += 1
         self._run_anchor = None
         self.telemetry.log_steer(request_id=req.request_id, segment_id=segment_id,

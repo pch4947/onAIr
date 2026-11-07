@@ -364,6 +364,11 @@ class Telemetry:
                     index=index, total=total)
         self._db.commit()
 
+    def log_callback(self, aired) -> None:
+        """청취자 이야기 다시 꺼내기 — 패널에만 남긴다. 소재 출처는 decision_log의 material에 있다."""
+        self._event("callback", f"다시 꺼내기 · \"{_excerpt(aired.body)}\"", kind=aired.kind)
+        self._db.commit()
+
     def log_track(self, track: dict) -> None:
         """다음 곡(track.queued) — 패널에만 남긴다. 곡 기록의 원본은 백엔드에 있다."""
         title = " - ".join(str(track[k]) for k in ("title", "artist") if track.get(k))

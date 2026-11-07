@@ -218,3 +218,5 @@ class Decision:
     quotes: list[str] = field(default_factory=list)  # 이 멘트에 넣은 입력의 request_id
     situation: str | None = None  # 채팅 상황 quiet | normal | flood (선별했을 때만)
     criterion: str | None = None  # 선별 기준 (선별했을 때만)
+    # 이야기 단계의 소재 — chat | callback(다시 꺼내기) | angle(갈래의 말할 거리) | topic(주제만) (CORNER_DESIGN 7.7절)
+    material: str | None = None
