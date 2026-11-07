@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from onair_engine.audio import measure_duration_ms
 from onair_engine.domain import SegmentKind, SegmentSubmission
 from onair_engine.scenario import runner
-from onair_engine.scenario.sim import SimBackend, SimTts
+from onair_engine.scenario.sim import Played, SimBackend, SimTts
 from onair_engine.scenario.spec import ScenarioSpec, SimSpec, TrackSpec, load_scenario, parse_at
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -141,6 +141,24 @@ def test_after_engine_finishes_the_queue_is_recorded_without_waiting():
     asyncio.run(scenario())
     assert [round(p.at) for p in backend.played] == [0, 60, 120]
     assert not any(c[0] == "on_segment_published" for c in backend.engine.calls), "닫힌 계측에 쓰지 않는다"
+
+
+def test_flow_metrics_count_talk_between_songs():
+    def speech(at, sec, corner="topic_talk"):
+        return Played(at, "speech", sec, corner_type=corner)
+
+    played = [
+        speech(0, 30, "opening"),  # 첫 곡 전 — 곡 사이가 아니다
+        speech(30, 10, "music_intro"), Played(40, "music", 200),
+        speech(240, 10, "music_intro"), Played(250, "music", 200),  # 곡 소개만 두고 곡이 이어졌다
+        speech(450, 50), speech(500, 10, "music_intro"), Played(510, "music", 200),
+        speech(710, 20, "closing"),  # 마지막 곡 뒤
+    ]
+    flow = runner._flow(played)
+    assert flow["speech_sec"] == 130 and flow["music_sec"] == 600
+    assert flow["talk_ratio"] == pytest.approx(130 / 730, abs=0.001)
+    assert flow["talk_between_songs_p50"] == 10, "곡 사이 두 구간: 10초, 60초"
+    assert flow["back_to_back_songs"] == 1
 
 
 # ── 1회 실행 ───────────────────────────────────────────────────────────

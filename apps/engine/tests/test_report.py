@@ -7,7 +7,7 @@ import pytest
 
 from onair_engine.domain import StationConfig, StationProfile
 from onair_engine.engine import EngineSettings, StationEngine
-from onair_engine.report import cli, render, station_report
+from onair_engine.report import cli, render, script_stats, station_report
 from onair_engine.telemetry import Telemetry
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -86,6 +86,35 @@ def test_outcomes_and_rates_from_synthetic_log(tmp_path):
     assert gen["job_sec"] == {"count": 1, "p50": 3.0, "p95": 3.0}, "대체·거부는 지연에 넣지 않는다"
     assert report["corner_rates"] == {"turns": 3, "skip_rate": 0.333, "fallback_rate": 0.333}
     assert report["corners"]["topic_talk"]["produced_sec"]["p50"] == 60.0
+
+
+def test_script_stats_catches_repetition_and_topic_reintroduction():
+    # 1차 시나리오 실행의 quiet 대본처럼 — 매번 "겨울 간식은 …"으로 시작하고 주제를 다시 소개한다 (#222)
+    repetitive = [
+        "오늘은 겨울 간식 이야기를 나눠 볼게요. 손이 시린 밤이네요.",
+        "겨울 간식은 손끝을 녹여 주죠. 어떤 간식이 떠오르세요?",
+        "겨울 간식은 봉지를 열 때 냄새가 좋죠. 어떤 간식이 떠오르세요?",
+        "오늘은 겨울간식 이야기를 해 볼게요. 요즘 생각나는 간식은요?",
+    ]
+    varied = [
+        "오늘은 겨울 간식 이야기를 나눠 볼게요.",
+        "붕어빵은 꼬리부터 드세요, 머리부터 드세요?",
+        "편의점 호빵은 전자레인지에 물을 살짝 뿌려 데우면 촉촉해요.",
+        "아까 밤샘러 님이 퇴근길 군고구마 얘기를 해 주셨죠.",
+    ]
+    bad, good = script_stats(repetitive, "겨울 간식"), script_stats(varied, "겨울 간식")
+    assert bad["same_opening_rate"] == 0.5 and good["same_opening_rate"] == 0
+    assert bad["topic_intros"] == 2, "띄어쓰기가 달라도 같은 주제 소개다"
+    assert good["topic_intros"] == 1, "오프닝의 소개 1번이 정상이다"
+    assert bad["similarity_mean"] > good["similarity_mean"]
+    assert script_stats([], "겨울 간식")["same_opening_rate"] is None
+    assert script_stats(varied, None)["topic_intros"] is None
+
+
+def test_report_has_script_section(broadcast):
+    report = station_report(broadcast, "st_report")
+    assert report["scripts"]["segments"] == report["aired"]["segments"]
+    assert "## 멘트" in render(report)
 
 
 def test_reused_station_id_is_split_into_runs(tmp_path):
