@@ -1,0 +1,27 @@
+# 데모 시나리오의 토크 부분 — 데모에서 실패하면 안 되는 장면의 합격 테스트 (데모 ②~③ 4:00~6:00)
+# 코너 버튼·형식 전환·페르소나 전환은 기능이 아직 없어 넣지 않았다. 통과 회차 수가 데모 성공률이다.
+name: demo
+description: 데모 입력(채팅 1, 문자 2, 신청곡 1, 게시판 사연 3)이 제때 방송에 나오는지 본다.
+station:
+  format: talk
+  corners: [topic_talk, text_corner, story_corner]
+  intensity: mid
+  topic: 겨울 간식
+board_stories:
+  - {body: "퇴근길에 붕어빵 세 개 사서 집까지 걸으면서 다 먹었어요. 손이 따뜻해서 좋았어요.", nickname: 밤샘러}
+  - {body: "엄마가 군고구마를 구워 주셨는데 어릴 때 할머니 댁 생각이 났어요.", nickname: 고구마}
+  - {body: "편의점 호빵을 데우다 터져서 한참 닦았는데 그래도 맛있었어요.", nickname: null}
+inputs:
+  - {at: "0:40", kind: chat, who: phone, body: "오늘 너무 피곤해요", id: tired}
+  - {at: "1:00", kind: message, who: m1, nickname: 퇴근길, body: "회사 앞에 호떡 노점이 새로 생겼어요. 오늘 처음 먹어 봤는데 꿀이 뜨거웠어요.", id: msg1}
+  - {at: "1:10", kind: message, who: m2, body: "시험 끝나고 친구랑 어묵 먹으러 가요.", id: msg2}
+  - {at: "1:30", kind: song_request, who: s1, nickname: 눈사람, title: 첫눈, artist: 가상의 가수, body: "첫눈 오는 날 들으면 좋을 것 같아서요", id: song}
+expect:
+  - {type: reflected, input: tired, within_sec: 180, note: 휴대폰으로 보낸 채팅이 3분 안에 들린다}
+  - {type: reflected, input: msg1, note: 닉네임 있는 문자가 읽힌다}
+  - {type: reflected, input: msg2, note: 익명 문자가 읽힌다}
+  - {type: aired_contains, text: 퇴근길, note: 문자 닉네임을 부른다}
+  - {type: reflected, input: song, note: 신청곡을 사연과 함께 소개한다}
+  - {type: aired_contains, text: 눈사람, note: 신청자 닉네임을 부른다}
+  - {type: max_fallback, value: 0, note: 대체 멘트 없음}
+  - {type: max_silence_sec, value: 5, note: 긴 무음 없음}

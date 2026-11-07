@@ -1,0 +1,12 @@
+# 입력이 전혀 없는 방송 — 할 말이 바닥나는지, 같은 얘기를 되풀이하는지 (2026-11-07 회의 4번)
+# 게시판 사연도 없어서 사연 코너는 주제 토크로 대체된다. 문자 소개 코너는 건너뛴다.
+name: quiet
+description: 청취자 입력 없음. 할 말이 바닥나는지, 반복, 멘트가 겉도는지 본다.
+station:
+  format: talk
+  corners: [topic_talk, text_corner, story_corner]
+  intensity: mid
+  topic: 겨울 간식
+expect:
+  - {type: max_fallback, value: 0, note: 대체 멘트 없음}
+  - {type: max_silence_sec, value: 5, note: 긴 무음 없음}

@@ -1,0 +1,37 @@
+# 채팅 폭주 — 선별, 집계 언급, 부하가 걸릴 때 무음 (CORNER_DESIGN 5.7, 9.2절)
+name: flood
+description: 20명이 분당 15건. 선별과 집계 언급, 생성 지연과 무음을 본다.
+station:
+  format: talk
+  corners: [topic_talk, text_corner, story_corner]
+  intensity: mid
+  topic: 겨울 간식
+board_stories:
+  - {body: "퇴근길에 붕어빵 세 개 사서 집까지 걸으면서 다 먹었어요.", nickname: 밤샘러}
+  - {body: "엄마가 군고구마를 구워 주셨어요.", nickname: 고구마}
+chatter:
+  per_minute: 15
+  people: 20
+  lines:
+    - 붕어빵은 팥이죠
+    - 슈크림 붕어빵이 최고예요
+    - 붕어빵 파는 곳 찾기 어려워요
+    - 붕어빵 지도 앱 있대요
+    - 호떡 먹고 싶다
+    - 군고구마 냄새 좋아요
+    - 어묵 국물 최고
+    - 오늘 너무 춥네요
+    - 퇴근 중이에요
+    - 노래 좋다
+    - ㅋㅋㅋㅋ
+    - 저도 피곤해요
+    - 호빵은 야채 호빵이요
+    - 겨울엔 귤이죠
+    - 귤 까먹으면서 듣는 중
+inputs:
+  - {at: "2:00", kind: message, who: m1, nickname: 퇴근길, body: "붕어빵 노점 아저씨가 하나 더 주셨어요.", id: msg1}
+  - {at: "8:00", kind: message, who: m2, nickname: 귤러버, body: "귤 한 박스 샀는데 벌써 반 먹었어요.", id: msg2}
+expect:
+  - {type: reflected, input: msg1, note: 폭주 중에도 문자가 읽힌다}
+  - {type: max_fallback, value: 0, note: 대체 멘트 없음}
+  - {type: max_silence_sec, value: 10, note: 부하에서도 긴 무음 없음}
