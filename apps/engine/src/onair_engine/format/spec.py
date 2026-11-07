@@ -119,7 +119,7 @@ class FormatSpec(BaseModel):
     corners: dict[str, CornerSpec]
     intensity: dict[Literal["low", "mid", "high"], Intensity]
     track_sec_estimate: int = 240  # 곡 길이를 모를 때 클락 계산에 쓰는 값 (ENGINE_ARCHITECTURE 4.3절)
-    # false면 곡 사이에 곡 소개 말고 코너가 하나는 있어야 한다 — 사이 코너가 다 빠졌으면 다음 곡도 한 번 건너뛴다.
+    # false면 곡 사이에 곡 소개 말고 코너가 하나는 있어야 한다 — 사이 코너가 다 빠졌으면 다음 곡도 건너뛴다.
     # 음악 형식은 곡이 이어지는 것이 정상이라 true (CORNER_DESIGN 6.2절, #228)
     songs_back_to_back: bool = True
 

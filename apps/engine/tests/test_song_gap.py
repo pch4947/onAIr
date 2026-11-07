@@ -1,4 +1,4 @@
-"""곡 연속 방지 — 사이 코너가 다 빠지면 다음 곡도 한 번 건너뛴다 (#228)."""
+"""곡 연속 방지 — 사이 코너가 다 빠지면 다음 곡도 건너뛴다. 연달아서는 두 번까지 (#228)."""
 import asyncio
 import sqlite3
 from itertools import pairwise
@@ -30,8 +30,16 @@ def test_skipped_text_corner_also_skips_the_song_after_it(tmp_path):
     assert entered[:5] == ["opening", "topic_talk", "music_intro", "topic_talk", "music_intro"]
 
 
+def test_main_corners_that_skip_in_a_row_do_not_leave_songs_back_to_back(tmp_path):
+    # quiet 시나리오 구성 — 본 코너에 문자 소개가 있다. 빠짐 → 곡 → 빠짐 → 곡이 되면 곡이 이어진다
+    rows = _corners(tmp_path, max_segments=40, corners=["topic_talk", "text_corner", "story_corner"])
+    entered = _entered(rows)
+    assert entered.count("topic_talk") >= 3
+    assert all(not (a == b == "music_intro") for a, b in pairwise(entered)), entered
+
+
 def test_songs_still_play_when_every_talk_corner_is_skipped(tmp_path):
-    # 본 코너가 문자 소개뿐이고 문자가 없다 — 곡까지 막으면 무음이다. 연달아서는 한 번만 건너뛴다
+    # 본 코너가 문자 소개뿐이고 문자가 없다 — 곡까지 막으면 무음이다. 연달아서는 두 번까지만 건너뛴다
     entered = _entered(_corners(tmp_path, max_segments=8, corners=["text_corner"]))
     assert entered.count("music_intro") >= 3
 

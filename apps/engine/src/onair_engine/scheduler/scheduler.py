@@ -64,6 +64,10 @@ _WAIT = object()  # _next_planned: 낼 수 있는 단계가 지금은 없다
 # v1 계약은 세그먼트당 요청 하나(request_ref)만 싣는다 — 참여 강도가 2여도 1건 (계약 v2 input_refs 전까지)
 _V1_QUOTES_PER_SEGMENT = 1
 _TEXT_CORNER = "text_corner"  # 예고가 가리키는 코너
+# 곡 연속 방지로 연달아 건너뛸 수 있는 곡 수 (#228). 건너뛰기는 시간이 들지 않는 결정이고, 클락이 코너를
+# _MAX_EMPTY_CORNERS번 연달아 못 넣어야 기다린다. 1번이면 본 코너에 문자 소개가 있는 방송(빠짐 → 곡 → 빠짐 → 곡)에서
+# 곡이 여전히 이어졌다 (2026-11-07 quiet)
+_MAX_SONGS_HELD = 2
 _OPENERS = ("talk_open", "talk_resume")  # 코너의 화제를 꺼내는 단계 — 갈래와 시간 맥락은 여기에만 붙인다
 _KST = timezone(timedelta(hours=9))  # 방송 시각은 한국 시간이다 (서머타임 없음)
 _WEEKDAYS = "월화수목금토일"
@@ -146,9 +150,9 @@ class Scheduler:
         self._backpressure = False
         self._run: CornerRun | None = None
         self._entered: dict[str, int] = {}  # 코너별 진입 횟수 — 두 번째부터 단계의 again을 쓴다
-        # 곡 연속 방지 (#228) — 지난 곡 뒤로 다른 코너가 있었나, 이번 곡 사이에 이미 곡을 한 번 건너뛰었나
+        # 곡 연속 방지 (#228) — 지난 곡 뒤로 다른 코너가 있었나, 그 사이 곡을 몇 번 건너뛰었나
         self._talk_since_song = True
-        self._song_held = False
+        self._songs_held = 0
         self._skip_logged: set[tuple[str, str | None]] = set()  # 기다리는 동안 skip 로그를 반복하지 않는다
         self._last_quote_at = float("-inf")
         # 순서 보장 제출 — 순번 발급, 다음에 낼 순번, 끝났지만 앞 순번을 기다리는 결과
@@ -413,7 +417,7 @@ class Scheduler:
     def _admit(self, entry: ClockEntry) -> ClockEntry | None:
         """진입 조건(requires)을 못 채우면 대체 코너로, 대체도 없으면 이번 차례를 건너뛴다."""
         if self._holds_song(entry.corner):
-            self._song_held = True
+            self._songs_held += 1
             self.telemetry.log_corner(entry.corner.corner_type, entry.label, "hold", self._produced_ms,
                                       entry.corner.title)
             return None
@@ -437,10 +441,11 @@ class Scheduler:
     def _holds_song(self, corner: CornerSpec) -> bool:
         """곡 연속 방지 (#228) — 지난 곡 뒤로 곡 소개 말고 진입한 코너가 없으면 이번 곡은 건너뛴다.
 
-        연달아서는 한 번만 건너뛴다. 사이 코너가 계속 빠지면(문자·사연이 없는 방송) 곡까지 막혀 무음이 된다.
-        신청곡은 기다리게 하지 않는다.
+        연달아서는 _MAX_SONGS_HELD번까지만 건너뛴다. 사이 코너가 계속 빠지면(본 코너가 문자 소개뿐이고 문자가
+        없는 방송) 곡까지 막혀 무음이 된다. 신청곡은 기다리게 하지 않는다.
         """
-        if self.fmt.songs_back_to_back or self._talk_since_song or self._song_held:
+        if (self.fmt.songs_back_to_back or self._talk_since_song
+                or self._songs_held >= _MAX_SONGS_HELD):
             return False
         if not self._plays_song(corner):
             return False
@@ -450,7 +455,7 @@ class Scheduler:
     def _note_entry(self, corner: CornerSpec) -> None:
         if self._plays_song(corner):
             self._talk_since_song = False
-            self._song_held = False
+            self._songs_held = 0
         else:
             self._talk_since_song = True
 
