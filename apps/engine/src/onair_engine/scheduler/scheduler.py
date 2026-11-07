@@ -36,7 +36,7 @@ from ..domain import (
     wire_state,
 )
 from ..format.clock import Clock, ClockEntry
-from ..format.spec import QUOTABLE, FormatSpec, Intensity, Mode
+from ..format.spec import QUOTABLE, CornerSpec, FormatSpec, Intensity, Mode
 from ..glue import WIRE_KIND, GlueBank
 from ..inputs.aggregate import chat_trend
 from ..inputs.callbacks import CallbackStore
@@ -146,6 +146,9 @@ class Scheduler:
         self._backpressure = False
         self._run: CornerRun | None = None
         self._entered: dict[str, int] = {}  # 코너별 진입 횟수 — 두 번째부터 단계의 again을 쓴다
+        # 곡 연속 방지 (#228) — 지난 곡 뒤로 다른 코너가 있었나, 이번 곡 사이에 이미 곡을 한 번 건너뛰었나
+        self._talk_since_song = True
+        self._song_held = False
         self._skip_logged: set[tuple[str, str | None]] = set()  # 기다리는 동안 skip 로그를 반복하지 않는다
         self._last_quote_at = float("-inf")
         # 순서 보장 제출 — 순번 발급, 다음에 낼 순번, 끝났지만 앞 순번을 기다리는 결과
@@ -378,6 +381,7 @@ class Scheduler:
                         return _WAIT
                     continue
                 self._skip_logged.clear()
+                self._note_entry(entry.corner)
                 self.sources.inbox.begin_corner()
                 if entry.corner.corner_type == _TEXT_CORNER:
                     self._previewed = False
@@ -408,6 +412,11 @@ class Scheduler:
 
     def _admit(self, entry: ClockEntry) -> ClockEntry | None:
         """진입 조건(requires)을 못 채우면 대체 코너로, 대체도 없으면 이번 차례를 건너뛴다."""
+        if self._holds_song(entry.corner):
+            self._song_held = True
+            self.telemetry.log_corner(entry.corner.corner_type, entry.label, "hold", self._produced_ms,
+                                      entry.corner.title)
+            return None
         if self.sources.satisfies(entry.corner, entry.label):
             return entry
         fallback = entry.corner.fallback
@@ -420,6 +429,30 @@ class Scheduler:
             self._skip_logged.add(key)
             self.telemetry.log_corner(*key, "skip", self._produced_ms, entry.corner.title)
         return None
+
+    def _plays_song(self, corner: CornerSpec) -> bool:
+        """곡을 소개하는(틀게 하는) 코너. 엔딩은 마지막 곡이 있어도 건너뛰지 않는다."""
+        return corner.corner_type != self.fmt.closing and any(s.items == "track" for s in corner.steps)
+
+    def _holds_song(self, corner: CornerSpec) -> bool:
+        """곡 연속 방지 (#228) — 지난 곡 뒤로 곡 소개 말고 진입한 코너가 없으면 이번 곡은 건너뛴다.
+
+        연달아서는 한 번만 건너뛴다. 사이 코너가 계속 빠지면(문자·사연이 없는 방송) 곡까지 막혀 무음이 된다.
+        신청곡은 기다리게 하지 않는다.
+        """
+        if self.fmt.songs_back_to_back or self._talk_since_song or self._song_held:
+            return False
+        if not self._plays_song(corner):
+            return False
+        track = self.sources.tracks.peek()
+        return not (track and (track.get("requested") or track.get("request_id")))
+
+    def _note_entry(self, corner: CornerSpec) -> None:
+        if self._plays_song(corner):
+            self._talk_since_song = False
+            self._song_held = False
+        else:
+            self._talk_since_song = True
 
     async def _build_job(self, planned: PlannedStep) -> GenerationJob:
         corner, step = planned.corner, planned.step
