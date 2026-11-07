@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>대본 검토</title>
+<!-- onair_engine/scenario/review.py가 데이터를 채운다. 외부 리소스 없이 파일로 연다 (#229) -->
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --ink: #1f2328; --muted: #6b7078; --line: #e3e3df;
+  --accent: #3b5bdb; --accent-soft: #e7ecff; --warn: #b35c00; --warn-soft: #fff1e0;
+  --bad: #c92a2a; --bad-soft: #ffe8e8; --good: #2b8a3e; --good-soft: #e6f6ea;
+  --music: #7a7f87; --music-soft: #f0f0ee; --sel: #fff8d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15171a; --panel: #1d2024; --ink: #e6e6e3; --muted: #9aa0a8; --line: #2e3238;
+    --accent: #8ea4ff; --accent-soft: #252c48; --warn: #ffb35c; --warn-soft: #3a2a17;
+    --bad: #ff8787; --bad-soft: #3d1f1f; --good: #69db7c; --good-soft: #1d3324;
+    --music: #9aa0a8; --music-soft: #23262b; --sel: #3a3420;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 14px/1.6 system-ui, -apple-system, "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; }
+button, select, textarea, input { font: inherit; color: inherit; }
+header { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+header h1 { font-size: 16px; margin: 0 12px 0 0; }
+.tabs { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.tabs button { border: 0; background: none; padding: 4px 12px; cursor: pointer; }
+.tabs button.on { background: var(--accent); color: #fff; }
+.spacer { flex: 1; }
+.btn { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 4px 10px; cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+label.chk { display: inline-flex; gap: 4px; align-items: center; color: var(--muted); cursor: pointer; }
+.layout { display: grid; grid-template-columns: 280px 1fr; min-height: calc(100vh - 52px); }
+aside { border-right: 1px solid var(--line); padding: 12px; overflow-y: auto; max-height: calc(100vh - 52px);
+  position: sticky; top: 52px; }
+aside h2 { font-size: 12px; color: var(--muted); margin: 14px 0 4px; text-transform: none; }
+aside h3 { font-size: 13px; margin: 8px 0 4px; }
+.runitem { display: block; width: 100%; text-align: left; border: 1px solid transparent; background: none;
+  border-radius: 8px; padding: 6px 8px; cursor: pointer; }
+.runitem:hover { background: var(--accent-soft); }
+.runitem.on { border-color: var(--accent); background: var(--accent-soft); }
+.runitem .meta { color: var(--muted); font-size: 12px; }
+main { padding: 16px; min-width: 0; }
+.runhead { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
+.runhead h2 { margin: 0 0 4px; font-size: 16px; }
+.metrics { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--muted); font-size: 13px; }
+.metrics b { color: var(--ink); font-weight: 600; }
+.rows { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.row { display: grid; grid-template-columns: 52px 1fr; gap: 10px; padding: 8px 12px; border-top: 1px solid var(--line); }
+.row:first-child { border-top: 0; }
+.row .t { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; padding-top: 2px; }
+.row.speech { cursor: pointer; }
+.row.speech:hover { background: var(--accent-soft); }
+.row.sel { background: var(--sel) !important; }
+.row.music { background: var(--music-soft); color: var(--music); padding-top: 4px; padding-bottom: 4px; font-size: 13px; }
+.row.silence { background: var(--bad-soft); color: var(--bad); font-weight: 600; }
+.row.input { color: var(--muted); font-size: 13px; padding-top: 4px; padding-bottom: 4px; }
+.row.glue .script { color: var(--muted); font-style: italic; }
+.head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 2px; }
+.corner { font-weight: 600; font-size: 13px; }
+.dur { color: var(--muted); font-size: 12px; }
+.chip { display: inline-block; font-size: 11px; line-height: 18px; padding: 0 7px; border-radius: 9px; white-space: nowrap; }
+.chip.flag { background: var(--warn-soft); color: var(--warn); }
+.chip.refl { background: var(--good-soft); color: var(--good); }
+.chip.tag { background: var(--bad-soft); color: var(--bad); }
+.chip.tag.good { background: var(--good-soft); color: var(--good); }
+.gap { font-size: 12px; color: var(--muted); margin-left: auto; }
+.gap.short { color: var(--warn); font-weight: 600; }
+.memo { color: var(--bad); font-size: 13px; margin-top: 2px; }
+.editor { margin-top: 8px; padding: 8px; border: 1px dashed var(--line); border-radius: 8px; background: var(--panel); cursor: default; }
+.cats { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.cats button { border: 1px solid var(--line); background: var(--panel); border-radius: 14px; padding: 2px 10px; cursor: pointer; font-size: 13px; }
+.cats button.on { background: var(--bad); border-color: var(--bad); color: #fff; }
+.cats button.on.good { background: var(--good); border-color: var(--good); }
+.cats kbd { font-size: 10px; color: var(--muted); margin-right: 3px; }
+.cats button.on kbd { color: #fff; }
+.editor textarea { width: 100%; min-height: 48px; border: 1px solid var(--line); border-radius: 6px; padding: 6px; background: var(--bg); }
+.hint { color: var(--muted); font-size: 12px; }
+.compare { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.pick { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin-bottom: 8px; }
+.compare select { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 4px; background: var(--panel); }
+.vote { position: sticky; bottom: 0; margin-top: 12px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: 10px 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.vote textarea { flex: 1 1 240px; min-height: 34px; border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; background: var(--bg); }
+table.votes { border-collapse: collapse; width: 100%; margin-top: 12px; font-size: 13px; background: var(--panel); }
+table.votes th, table.votes td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; }
+.empty { color: var(--muted); padding: 40px; text-align: center; }
+.legend { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+@media (max-width: 860px) {
+  .layout { grid-template-columns: 1fr; }
+  aside { position: static; max-height: none; border-right: 0; border-bottom: 1px solid var(--line); }
+  .compare { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>대본 검토</h1>
+  <div class="tabs" role="tablist">
+    <button id="tab-review" class="on" role="tab">검토</button>
+    <button id="tab-compare" role="tab">비교</button>
+  </div>
+  <label class="chk"><input type="checkbox" id="opt-flags" checked> 자동 표시</label>
+  <label class="chk"><input type="checkbox" id="opt-inputs" checked> 청취자 입력</label>
+  <label class="chk"><input type="checkbox" id="opt-music" checked> 곡</label>
+  <span class="spacer"></span>
+  <button class="btn" id="export-csv" title="표시한 멘트 — issues.csv 형식">표시 CSV</button>
+  <button class="btn" id="export-votes" title="비교 결과">비교 CSV</button>
+  <button class="btn" id="export-json" title="표시와 비교 결과 전부 — 다른 사람과 나눌 때">백업</button>
+  <label class="btn" title="백업 파일 불러오기">불러오기<input type="file" id="import-json" accept=".json" hidden></label>
+</header>
+<div class="layout">
+  <aside id="sidebar"></aside>
+  <main id="main"></main>
+</div>
+<script id="review-data" type="application/json">/*__REVIEW_DATA__*/null</script>
+<script>
+"use strict";
+const DATA = JSON.parse(document.getElementById("review-data").textContent) || { runs: [] };
+const RUNS = DATA.runs.map((r, i) => ({ ...r, id: `${r.source}|${r.scenario}|${r.run}`, idx: i }));
+// 분류 — 숫자 키로 켜고 끈다. "좋음"은 잘된 멘트를 남겨 두는 용도
+const CATS = ["반복", "흐름 단절", "청취자 오해", "지어냄", "전환 어색", "질문 남발", "길이", "소리·발음", "좋음"];
+const GOOD = "좋음";
+const STORE_KEY = "onair-review/v1";
+const SIMILAR = 0.3, WINDOW = 8, OPENING = 5;  // 자동 표시 기준 — report.py 반복 지표와 같은 방식
+const SHORT_GAP_SEC = 15;  // 곡 사이 말이 이보다 짧으면 강조한다
+
+// ── 저장 — localStorage가 막힌 환경(사생활 보호 창 등)에서도 페이지는 동작한다 ─────────
+let store = { tags: {}, votes: [] };
+try { store = { ...store, ...JSON.parse(localStorage.getItem(STORE_KEY) || "{}") }; } catch (e) { /* 저장 없이 진행 */ }
+function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(store)); } catch (e) { /* 무시 */ } }
+
+let state = { mode: location.hash === "#compare" ? "compare" : "review", runId: RUNS[0] && RUNS[0].id,
+  a: null, b: null, blind: true, sel: null, revealed: null };
+
+// 블라인드 비교의 다음 쌍 — 같은 시나리오에서 출처가 다른 두 회차. 출처가 하나뿐이면 같은 출처의 다른 회차
+function randomPair() {
+  const pick = (xs) => xs[Math.floor(Math.random() * xs.length)];
+  const byScenario = new Map();
+  for (const r of RUNS) { if (!byScenario.has(r.scenario)) byScenario.set(r.scenario, []); byScenario.get(r.scenario).push(r); }
+  const mixed = [...byScenario.values()].filter((rs) => new Set(rs.map((r) => r.source)).size > 1);
+  const pool = mixed.length ? mixed : [...byScenario.values()].filter((rs) => rs.length > 1);
+  if (!pool.length) return;
+  const runs = pick(pool), a = pick(runs);
+  const others = runs.filter((r) => r.id !== a.id && (!mixed.length || r.source !== a.source));
+  state.a = a.id; state.b = pick(others).id;
+}
+if (RUNS.length > 1) randomPair();
+
+// ── 공통 ─────────────────────────────────────────────────────────────
+const $ = (sel) => document.querySelector(sel);
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") node.className = v;
+    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else if (v !== null && v !== undefined && v !== false) node.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of children.flat()) if (c !== null && c !== undefined && c !== false) node.append(c);
+  return node;
+}
+const clock = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+const pct = (v) => (v === null || v === undefined ? "-" : `${Math.round(v * 100)}%`);
+const fmt = (v, unit = "") => (v === null || v === undefined ? "-" : `${v}${unit}`);
+const runById = (id) => RUNS.find((r) => r.id === id);
+const norm = (t) => (t || "").replace(/[\s\p{P}\p{S}]+/gu, "");
+function trigrams(t) { const s = norm(t), out = new Set(); for (let i = 0; i + 3 <= s.length; i++) out.add(s.slice(i, i + 3)); return out; }
+function jaccard(a, b) { if (!a.size || !b.size) return 0; let n = 0; for (const x of a) if (b.has(x)) n++; return n / (a.size + b.size - n); }
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// ── 자동 표시 — 사람이 먼저 볼 곳을 짚을 뿐 판정은 아니다 ────────────────
+function analyze(run) {
+  const flags = new Map(), gaps = new Map();
+  const spoken = [];  // [index, script, trigrams, opening]
+  const topic = run.summary && run.summary.topic;
+  const intro = topic ? new RegExp(`(오늘|이번)[^.?!]{0,15}${topic.split(/\s+/).map(escapeRe).join("\\s*")}[^.?!]{0,15}(이야기|얘기)`) : null;
+  let intros = 0, questions = 0, talkSince = null;
+  run.played.forEach((p, i) => {
+    if (p.kind === "music") { if (talkSince !== null) gaps.set(i, talkSince); talkSince = 0; return; }
+    if (p.kind !== "speech") return;
+    if (talkSince !== null) talkSince += p.sec;
+    if (!p.script) return;  // 고정 문구
+    const f = [], tri = trigrams(p.script), opening = norm(p.script).slice(0, OPENING);
+    if (opening.length === OPENING && spoken.some((s) => s[3] === opening)) f.push("같은 첫머리");
+    let best = 0, bestAt = null;
+    for (const s of spoken.slice(-WINDOW)) { const v = jaccard(tri, s[2]); if (v > best) { best = v; bestAt = s[0]; } }
+    if (best >= SIMILAR) f.push(`비슷한 멘트 ${best.toFixed(2)} (${clock(run.played[bestAt].at)})`);
+    questions = /[?？]\s*$/.test(p.script) ? questions + 1 : 0;
+    if (questions >= 3) f.push(`질문으로 끝남 ${questions}번째 연속`);
+    if (intro && intro.test(p.script) && ++intros > 1) f.push("주제 다시 소개");
+    if (f.length) flags.set(i, f);
+    spoken.push([i, p.script, tri, opening]);
+  });
+  return { flags, gaps };
+}
+
+const tagKey = (run, i) => `${run.id}|${i}`;
+const tagsOf = (run) => Object.entries(store.tags).filter(([k]) => k.startsWith(run.id + "|"));
+
+// ── 사이드바 ──────────────────────────────────────────────────────────
+function renderSidebar() {
+  const side = $("#sidebar");
+  side.replaceChildren();
+  if (!RUNS.length) return;
+  if (state.mode === "compare" && state.blind) {  // 출처와 지표가 보이면 블라인드가 아니다
+    side.append(el("h2", {}, "블라인드 비교"),
+      el("p", { class: "hint" }, "회차 목록과 지표를 숨겼습니다. 같은 시나리오에서 출처가 다른 두 회차를 무작위로 보여 줍니다. 고르면 다음 쌍으로 넘어가고, 직전 쌍이 무엇이었는지 알려 줍니다."),
+      el("button", { class: "btn", onclick: () => { randomPair(); state.revealed = null; render(); } }, "다음 쌍"));
+    return;
+  }
+  const groups = new Map();
+  for (const r of RUNS) {
+    const key = `${r.source}`;
+    if (!groups.has(key)) groups.set(key, new Map());
+    const g = groups.get(key);
+    if (!g.has(r.scenario)) g.set(r.scenario, []);
+    g.get(r.scenario).push(r);
+  }
+  for (const [source, scenarios] of groups) {
+    side.append(el("h2", {}, `출처 · ${source}`));
+    for (const [scenario, runs] of scenarios) {
+      side.append(el("h3", { title: runs[0].description || "" }, scenario));
+      for (const r of runs) {
+        const s = r.summary || {}, marks = tagsOf(r).length;
+        const on = state.mode === "review" ? r.id === state.runId : r.id === state.a || r.id === state.b;
+        side.append(el("button", { class: `runitem${on ? " on" : ""}`, onclick: () => pickRun(r.id) },
+          el("div", {}, `${r.run}${marks ? ` · 표시 ${marks}` : ""}`),
+          el("div", { class: "meta" },
+            `말 ${pct(s.talk_ratio)} · 곡 연속 ${fmt(s.back_to_back_songs)} · 무음 ${fmt(s.silence_total_sec, "초")} · 기대 ${fmt(s.expect)}`)));
+      }
+    }
+  }
+  side.append(el("p", { class: "legend" },
+    "멘트를 누르면 분류와 메모를 답니다. j/k로 이동, 1~9로 분류, Esc로 닫기. 표시는 이 브라우저에만 저장됩니다 — 나눌 때는 백업을 쓰세요."));
+}
+
+function pickRun(id) {
+  if (state.mode === "review") { state.runId = id; state.sel = null; }
+  else if (id !== state.a && id !== state.b) { state.b = state.a; state.a = id; }
+  render();
+}
+
+// ── 회차 대본 ─────────────────────────────────────────────────────────
+function metricsLine(run) {
+  const s = run.summary || {};
+  return el("div", { class: "metrics" },
+    el("span", {}, "말 비율 ", el("b", {}, pct(s.talk_ratio))),
+    el("span", {}, "곡 사이 토크 ", el("b", {}, fmt(s.talk_between_songs_p50 == null ? null : Math.round(s.talk_between_songs_p50), "초"))),
+    el("span", {}, "곡 연속 ", el("b", {}, fmt(s.back_to_back_songs))),
+    el("span", {}, "무음 ", el("b", {}, fmt(s.silence_total_sec, "초"))),
+    el("span", {}, "대체 멘트 ", el("b", {}, fmt(s.fallback))),
+    el("span", {}, "문자 반영 ", el("b", {}, pct(s.message_reflection_rate))),
+    el("span", {}, "독립형 채팅 반영 ", el("b", {}, pct(s.standalone_reflection_rate))),
+    el("span", {}, "기대 결과 ", el("b", {}, fmt(s.expect))),
+    el("span", {}, `${run.llm || "-"} · TTS ${run.tts || "-"} · ${run.git || "-"}`));
+}
+
+function editor(run, i, p) {
+  const key = tagKey(run, i);
+  const tag = store.tags[key] || { cats: [], memo: "" };
+  const update = () => {
+    if (!tag.cats.length && !tag.memo.trim()) delete store.tags[key];
+    else store.tags[key] = { ...tag, at: p.at, corner: p.corner, script: p.script, source: run.source, scenario: run.scenario, run: run.run };
+    save();
+  };
+  const memo = el("textarea", { placeholder: "무엇이 어색한지 — 예: 앞에서 퇴근길 얘기를 이미 했다", onclick: (e) => e.stopPropagation(),
+    oninput: (e) => { tag.memo = e.target.value; update(); }, onblur: () => render() });
+  memo.value = tag.memo;
+  return el("div", { class: "editor", onclick: (e) => e.stopPropagation() },
+    el("div", { class: "cats" }, CATS.map((c, n) => el("button", {
+      class: `${tag.cats.includes(c) ? "on" : ""}${c === GOOD ? " good" : ""}`,
+      onclick: () => { toggleCat(run, i, p, c); },
+    }, el("kbd", {}, String(n + 1)), c))),
+    memo);
+}
+
+function toggleCat(run, i, p, cat) {
+  const key = tagKey(run, i);
+  const tag = store.tags[key] || { cats: [], memo: "" };
+  tag.cats = tag.cats.includes(cat) ? tag.cats.filter((c) => c !== cat) : [...tag.cats, cat];
+  if (!tag.cats.length && !(tag.memo || "").trim()) delete store.tags[key];
+  else store.tags[key] = { ...tag, at: p.at, corner: p.corner, script: p.script, source: run.source, scenario: run.scenario, run: run.run };
+  save();
+  render();
+}
+
+function rowsOf(run, { editable = true } = {}) {
+  const { flags, gaps } = analyze(run);
+  const showFlags = $("#opt-flags").checked, showInputs = $("#opt-inputs").checked, showMusic = $("#opt-music").checked;
+  const box = el("div", { class: "rows" });
+  run.played.forEach((p, i) => {
+    if (p.kind === "input" && !showInputs) return;
+    if (p.kind === "music" && !showMusic) return;
+    if (p.kind === "music") {
+      const g = gaps.get(i);
+      box.append(el("div", { class: "row music" }, el("div", { class: "t" }, clock(p.at)),
+        el("div", { class: "head" }, `♪ ${p.text || "곡"} (${clock(p.sec)})`,
+          g === undefined ? null : el("span", { class: `gap${g < SHORT_GAP_SEC ? " short" : ""}` }, `직전 곡 뒤 말 ${Math.round(g)}초`))));
+      return;
+    }
+    if (p.kind === "silence") {
+      box.append(el("div", { class: "row silence" }, el("div", { class: "t" }, clock(p.at)), el("div", {}, `무음 ${p.sec}초`)));
+      return;
+    }
+    if (p.kind === "input") {
+      box.append(el("div", { class: "row input" }, el("div", { class: "t" }, clock(p.at)), el("div", {}, `▶ ${p.text || ""}`)));
+      return;
+    }
+    const tag = store.tags[tagKey(run, i)];
+    const selected = editable && state.sel === i && state.runId === run.id;
+    const row = el("div", {
+      class: `row speech${p.script ? "" : " glue"}${selected ? " sel" : ""}`, "data-i": i,
+      onclick: editable ? () => { state.runId = run.id; state.sel = state.sel === i ? null : i; render(); } : null,
+    },
+      el("div", { class: "t" }, clock(p.at)),
+      el("div", {},
+        el("div", { class: "head" },
+          el("span", { class: "corner" }, p.corner || p.corner_type || "멘트"),
+          el("span", { class: "dur" }, `${Math.round(p.sec)}초`),
+          (p.reflected || []).length ? el("span", { class: "chip refl" }, `반영 ${p.reflected.join(", ")}`) : null,
+          showFlags ? (flags.get(i) || []).map((f) => el("span", { class: "chip flag" }, f)) : null,
+          tag ? tag.cats.map((c) => el("span", { class: `chip tag${c === GOOD ? " good" : ""}` }, c)) : null),
+        el("div", { class: "script" }, p.script || "(고정 문구 — 대본 기록 없음)"),
+        tag && tag.memo && !selected ? el("div", { class: "memo" }, tag.memo) : null,
+        selected ? editor(run, i, p) : null));
+    box.append(row);
+  });
+  return box;
+}
+
+function renderReview() {
+  const run = runById(state.runId);
+  if (!run) return el("div", { class: "empty" }, "회차가 없습니다");
+  return el("div", {},
+    el("div", { class: "runhead" }, el("h2", {}, `${run.scenario} · ${run.run}`),
+      el("div", { class: "hint" }, `${run.source}${run.description ? " · " + run.description : ""}`), metricsLine(run)),
+    rowsOf(run));
+}
+
+// ── 비교 — 블라인드면 출처를 숨기고 좌우를 섞는다 ──────────────────────────
+function pairSides() {
+  const a = runById(state.a), b = runById(state.b);
+  if (!a || !b) return [a, b];
+  if (!state.blind) return [a, b];
+  const key = [a.id, b.id].sort().join("~");  // 같은 쌍이면 늘 같은 배치
+  let h = 0; for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return h % 2 ? [b, a] : [a, b];
+}
+
+function renderCompare() {
+  if (RUNS.length < 2) return el("div", { class: "empty" }, "비교하려면 회차가 2개 이상 필요합니다");
+  const [left, right] = pairSides();
+  const select = (which) => el("select", { onchange: (e) => { state[which] = e.target.value; render(); } },
+    RUNS.map((r) => el("option", { value: r.id, selected: r.id === state[which] }, `${r.source} · ${r.scenario} · ${r.run}`)));
+  const column = (run, name) => el("div", {},
+    el("div", { class: "runhead" }, el("h2", {}, state.blind ? `${name} · ${run.scenario}` : `${name} · ${run.source} · ${run.scenario} · ${run.run}`),
+      state.blind ? el("div", { class: "hint" }, "블라인드 — 지표와 출처는 고른 뒤에 봅니다") : metricsLine(run)),
+    rowsOf(run, { editable: false }));
+  const note = el("textarea", { placeholder: "고른 이유 — 예: B는 곡 사이가 휑하다" });
+  const vote = (choice) => {
+    store.votes.push({ at: new Date().toISOString(), left: left.id, right: right.id, choice, note: note.value.trim(),
+      winner: choice === "left" ? left.id : choice === "right" ? right.id : null });
+    save();
+    if (state.blind) {  // 고른 뒤에 공개하고 다음 쌍으로
+      state.revealed = `직전 쌍 — 왼쪽: ${left.source} · ${left.run} / 오른쪽: ${right.source} · ${right.run} · 고른 쪽: ${{ left: "왼쪽", right: "오른쪽", same: "비슷함" }[choice]}`;
+      randomPair();
+    }
+    render();
+  };
+  return el("div", {},
+    el("div", { class: "pick" },
+      el("label", { class: "chk" }, el("input", { type: "checkbox", checked: state.blind, onchange: (e) => { state.blind = e.target.checked; state.revealed = null; render(); } }), "블라인드"),
+      state.revealed ? el("span", { class: "hint" }, state.revealed) : null),
+    state.blind ? null : el("div", { class: "compare" },
+      el("div", { class: "pick" }, "가", select("a")),
+      el("div", { class: "pick" }, "나", select("b"))),
+    el("div", { class: "compare" }, column(left, "왼쪽"), column(right, "오른쪽")),
+    el("div", { class: "vote" },
+      el("b", {}, "어느 쪽이 더 자연스러운가요?"),
+      el("button", { class: "btn", onclick: () => vote("left") }, "왼쪽"),
+      el("button", { class: "btn", onclick: () => vote("same") }, "비슷함"),
+      el("button", { class: "btn", onclick: () => vote("right") }, "오른쪽"),
+      note),
+    voteTable());
+}
+
+function voteTable() {
+  if (!store.votes.length) return null;
+  const wins = new Map();
+  for (const v of store.votes) {
+    const w = v.winner ? runById(v.winner) : null;
+    const k = w ? w.source : "비슷함";
+    wins.set(k, (wins.get(k) || 0) + 1);
+  }
+  return el("div", {},
+    el("table", { class: "votes" },
+      el("tr", {}, el("th", {}, "출처별 선택"), el("th", {}, "횟수")),
+      [...wins].map(([k, n]) => el("tr", {}, el("td", {}, k), el("td", {}, String(n))))),
+    el("table", { class: "votes" },
+      el("tr", {}, ["시각", "왼쪽", "오른쪽", "선택", "이유", ""].map((h) => el("th", {}, h))),
+      store.votes.map((v, n) => el("tr", {},
+        el("td", {}, v.at.slice(5, 16).replace("T", " ")), el("td", {}, v.left), el("td", {}, v.right),
+        el("td", {}, { left: "왼쪽", right: "오른쪽", same: "비슷함" }[v.choice]), el("td", {}, v.note || ""),
+        el("td", {}, el("button", { class: "btn", onclick: () => { store.votes.splice(n, 1); save(); render(); } }, "삭제"))))));
+}
+
+// ── 내보내기 ──────────────────────────────────────────────────────────
+function download(name, text, type) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = el("a", { href: url, download: name });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+const csvCell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+function csv(rows) { return "﻿" + rows.map((r) => r.map(csvCell).join(",")).join("\r\n") + "\r\n"; }  // 엑셀이 한글을 읽게 BOM
+
+function exportTags() {
+  const tags = Object.values(store.tags);
+  // 재현 횟수 — 같은 출처·시나리오에서 같은 분류가 나온 회차 수
+  const seen = new Map();
+  for (const t of tags) for (const c of t.cats) {
+    const k = `${t.source}|${t.scenario}|${c}`;
+    if (!seen.has(k)) seen.set(k, new Set());
+    seen.get(k).add(t.run);
+  }
+  const rows = [["출처", "시나리오", "회차", "시각", "세그먼트", "증상 (대본 일부)", "분류", "재현 횟수", "메모"]];
+  for (const t of tags.sort((x, y) => (x.source + x.scenario + x.run).localeCompare(y.source + y.scenario + y.run) || x.at - y.at)) {
+    const reps = t.cats.map((c) => seen.get(`${t.source}|${t.scenario}|${c}`).size);
+    rows.push([t.source, t.scenario, t.run, clock(t.at), t.corner || "", (t.script || "").slice(0, 80),
+      t.cats.join(" / "), reps.length ? Math.max(...reps) : "", t.memo || ""]);
+  }
+  download("review_issues.csv", csv(rows), "text/csv");
+}
+function exportVotes() {
+  const rows = [["시각", "왼쪽", "오른쪽", "선택", "고른 회차", "이유"]];
+  for (const v of store.votes) rows.push([v.at, v.left, v.right, v.choice, v.winner || "", v.note || ""]);
+  download("review_votes.csv", csv(rows), "text/csv");
+}
+
+// ── 화면 ─────────────────────────────────────────────────────────────
+function render() {
+  $("#tab-review").classList.toggle("on", state.mode === "review");
+  $("#tab-compare").classList.toggle("on", state.mode === "compare");
+  renderSidebar();
+  $("#main").replaceChildren(RUNS.length ? (state.mode === "review" ? renderReview() : renderCompare())
+    : el("div", { class: "empty" }, "회차가 없습니다 — onair-review로 실행 결과 폴더를 넘기세요"));
+  const sel = document.querySelector(".row.sel");
+  if (sel && !sel.contains(document.activeElement)) sel.scrollIntoView({ block: "nearest" });
+}
+
+$("#tab-review").onclick = () => { state.mode = "review"; render(); };
+$("#tab-compare").onclick = () => { state.mode = "compare"; render(); };
+for (const id of ["#opt-flags", "#opt-inputs", "#opt-music"]) $(id).onchange = render;
+$("#export-csv").onclick = exportTags;
+$("#export-votes").onclick = exportVotes;
+$("#export-json").onclick = () => download("review_backup.json", JSON.stringify(store, null, 2), "application/json");
+$("#import-json").onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const loaded = JSON.parse(await file.text());
+    store = { tags: { ...store.tags, ...(loaded.tags || {}) }, votes: [...store.votes, ...(loaded.votes || [])] };
+    save(); render();
+  } catch (err) { alert("백업 파일을 읽지 못했습니다: " + err.message); }
+  e.target.value = "";
+};
+
+document.addEventListener("keydown", (e) => {
+  if (state.mode !== "review" || /^(TEXTAREA|INPUT|SELECT)$/.test(e.target.tagName)) return;
+  const run = runById(state.runId);
+  if (!run) return;
+  const speech = run.played.map((p, i) => [p, i]).filter(([p]) => p.kind === "speech").map(([, i]) => i);
+  const pos = speech.indexOf(state.sel);
+  if (e.key === "j" || e.key === "k") {
+    const next = e.key === "j" ? speech[Math.min(speech.length - 1, pos + 1)] : speech[Math.max(0, pos === -1 ? 0 : pos - 1)];
+    state.sel = next ?? null; render(); e.preventDefault();
+  } else if (e.key === "Escape") { state.sel = null; render(); }
+  else if (/^[1-9]$/.test(e.key) && state.sel !== null) {
+    toggleCat(run, state.sel, run.played[state.sel], CATS[Number(e.key) - 1]);
+  }
+});
+
+render();
+</script>
+</body>
+</html>

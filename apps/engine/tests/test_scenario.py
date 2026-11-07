@@ -168,8 +168,11 @@ def test_run_one_with_dummy_llm(tmp_path, monkeypatch):
     assert report["sim"]["error"] is None
     assert report["generation"]["jobs"] > 0
     assert [e["passed"] for e in report["expect"]] == [True, True]
-    for name in ("transcript.md", "report.md", "report.json", "run.json"):
+    for name in ("transcript.md", "report.md", "report.json", "run.json", "played.json"):
         assert (tmp_path / "run-1" / name).exists()
+    played = json.loads((tmp_path / "run-1" / "played.json").read_text(encoding="utf-8"))["played"]
+    first = next(p for p in played if p["kind"] == "speech")
+    assert first["corner"] == "오프닝" and first["script"], "검토 페이지가 코너 이름과 대본을 쓴다"
     assert "**[오프닝]**" in (tmp_path / "run-1" / "transcript.md").read_text(encoding="utf-8")
     assert json.loads((tmp_path / "run-1" / "run.json").read_text(encoding="utf-8"))["seed"] == 1
     assert not (tmp_path / "run-1" / "audio").exists(), "흉내 TTS의 무음 파일은 지운다"
