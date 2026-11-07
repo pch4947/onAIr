@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 
 from ..corners.run import CornerRun, MaterialSources, PlannedStep, Thread
 from ..corners.steps import STEP_KINDS
@@ -38,12 +39,14 @@ from ..format.clock import Clock, ClockEntry
 from ..format.spec import QUOTABLE, FormatSpec, Intensity, Mode
 from ..glue import WIRE_KIND, GlueBank
 from ..inputs.aggregate import chat_trend
+from ..inputs.callbacks import CallbackStore
 from ..inputs.classify import classify, keywords, steer_rule
 from ..inputs.on_air import OnAirTimeline
 from ..inputs.pool import QuotePool
 from ..inputs.router import BOARD_STORY, CHAT, MESSAGE, SONG_REQUEST, normalize_kind
 from ..inputs.rules import ChatRules
 from ..inputs.selector import RELEVANCE, QuoteSelector
+from ..inputs.topic_plan import Angle, TopicPlan
 from ..pipeline.pipeline import GenerationPipeline
 from ..telemetry import Telemetry
 from ..transport import Transport
@@ -61,8 +64,22 @@ _WAIT = object()  # _next_planned: 낼 수 있는 단계가 지금은 없다
 # v1 계약은 세그먼트당 요청 하나(request_ref)만 싣는다 — 참여 강도가 2여도 1건 (계약 v2 input_refs 전까지)
 _V1_QUOTES_PER_SEGMENT = 1
 _TEXT_CORNER = "text_corner"  # 예고가 가리키는 코너
+_OPENERS = ("talk_open", "talk_resume")  # 코너의 화제를 꺼내는 단계 — 갈래와 시간 맥락은 여기에만 붙인다
+_KST = timezone(timedelta(hours=9))  # 방송 시각은 한국 시간이다 (서머타임 없음)
+_WEEKDAYS = "월화수목금토일"
 
 logger = logging.getLogger(__name__)
+
+
+def time_context(now: float, started_at: float) -> str:
+    """'금요일 밤 11시 40분, 방송 18분째' — 화제를 꺼낼 때 DJ가 쓸 수 있는 시간 맥락."""
+    t = datetime.fromtimestamp(now, _KST)
+    part = ("밤" if t.hour in (0, 21, 22, 23) else "새벽" if t.hour < 5 else "아침" if t.hour < 9
+            else "오전" if t.hour < 12 else "오후" if t.hour < 18 else "저녁")
+    clock = f"{t.hour % 12 or 12}시" + (f" {t.minute}분" if t.minute else "")
+    minutes = int(max(0.0, now - started_at) // 60)
+    elapsed = f"방송 {minutes}분째" if minutes else "방송 시작 직후"
+    return f"{_WEEKDAYS[t.weekday()]}요일 {part} {clock}, {elapsed}"
 
 
 class Scheduler:
@@ -71,13 +88,14 @@ class Scheduler:
                  pipeline: GenerationPipeline, glue: GlueBank, transport: Transport,
                  telemetry: Telemetry, chat_rules: ChatRules, violates,
                  target_buffer_sec: float = 30.0, max_concurrent: int = 2,
-                 emit_corner_changed: bool = False):
+                 emit_corner_changed: bool = False, topic_plan: TopicPlan | None = None):
         self.config = config
         self.fmt = fmt
         self.clock = clock
         self.sources = sources
         self.intensity = intensity
         self.topic = topic
+        self.topic_plan = topic_plan  # 이야기 갈래 — 없으면 주제 한 줄로 말한다
         self.pipeline = pipeline
         self.glue = glue
         self.transport = transport
@@ -87,6 +105,8 @@ class Scheduler:
         self._sem = asyncio.Semaphore(max_concurrent)
         self.chat_rules = chat_rules
         self.timeline = OnAirTimeline()
+        self.callbacks = CallbackStore()  # 방송에 나간 청취자 입력 — 다시 꺼내기·엔딩 돌아보기 소재
+        sources.talk_points = self._talk_point
         # 일반 방의 기본 기준은 화제 관련성 우선(U12). 실험용 방은 조건이 정한다
         experiment = config.experiment or {}
         self.pool = QuotePool(
@@ -125,12 +145,14 @@ class Scheduler:
         self._backend_report: tuple[float, float, int] | None = None
         self._backpressure = False
         self._run: CornerRun | None = None
+        self._entered: dict[str, int] = {}  # 코너별 진입 횟수 — 두 번째부터 단계의 again을 쓴다
         self._skip_logged: set[tuple[str, str | None]] = set()  # 기다리는 동안 skip 로그를 반복하지 않는다
         self._last_quote_at = float("-inf")
         # 순서 보장 제출 — 순번 발급, 다음에 낼 순번, 끝났지만 앞 순번을 기다리는 결과
         self._seq = 0
         self._next_pub = 0
         self._ready: dict[int, tuple[SegmentSubmission | None, int, Anchor | None]] = {}
+        self._seq_run: dict[int, CornerRun] = {}  # 순번 → 그것을 편성한 코너 (코너 예산 — #220)
         self._pub_lock = asyncio.Lock()
 
     @property
@@ -225,6 +247,7 @@ class Scheduler:
         req, job = quoted
         req.state = RequestState.REFLECTED
         self.telemetry.log_request_state(req.request_id, req.state)
+        self.callbacks.add(req, started_at)
         # 곡 재생 중에 도착한 반응은 곡 위에서 말할 수 없어 기다린다 — 그 구조적 대기를 뺀다
         song_end = self.timeline.track_end(req.anchor_id)
         waited = max(0.0, song_end - req.received_at) if song_end else 0.0
@@ -326,7 +349,8 @@ class Scheduler:
                     action="generate", corner_type=job.corner_type, step=job.step,
                     quotes=[q.request_id for q in job.material.quotes],
                     situation=selection.situation if selection else None,
-                    criterion=selection.criterion if selection else None))
+                    criterion=selection.criterion if selection else None,
+                    material=job.material.extra.get("material")))
                 seq = self._reserve()
                 asyncio.create_task(self._generate(job, seq))
             await asyncio.sleep(0)  # 생성 태스크에 실행 양보
@@ -359,12 +383,14 @@ class Scheduler:
                     self._previewed = False
                 topic = entry.label or self.topic
                 self._run_anchor = None
+                corner_type = entry.corner.corner_type
                 self._run = CornerRun(entry, sources=self.sources, intensity=self.intensity,
                                       thread=Thread(topic=topic, keywords=sorted(keywords(topic))),
-                                      started_ms=self._produced_ms)
+                                      again=self._entered.get(corner_type, 0) > 0)
+                self._entered[corner_type] = self._entered.get(corner_type, 0) + 1
                 self.telemetry.log_corner(entry.corner.corner_type, entry.label, "enter",
                                           self._produced_ms, entry.corner.title)
-            planned = self._run.next_step(self._produced_ms)
+            planned = self._run.next_step()
             if planned is not None:
                 if planned.step.kind == "glue" and self.glue.get(
                         planned.corner.corner_type, planned.step.glue) is None:
@@ -372,6 +398,9 @@ class Scheduler:
                 return planned
             self.telemetry.log_corner(self._run.spec.corner_type, self._run.label, "exit",
                                       self._produced_ms, self._run.spec.title)
+            self._run.closed = True
+            if self._run.pending == 0:  # 생성 중인 것이 남았으면 마지막 것이 끝날 때 기록한다
+                self._log_corner_length(self._run)
             self._run = None
             empty += 1
             if empty >= _MAX_EMPTY_CORNERS:
@@ -411,14 +440,25 @@ class Scheduler:
             material.extra["first_song"] = self.config.first_song
         elif step.kind == "corner_preview":
             material.extra.update(guide=self.fmt.guide, corners=self.clock.main_titles())
-        elif step.kind == "talk_open":
-            material.extra["question"] = self.intensity.question
+        elif step.kind in _OPENERS:
+            self._open_thread(material)
+        elif step.kind == "closing_lookback":
+            material.extra["lookback"] = self.callbacks.lookback()
+            if self.topic_plan is not None and self.topic_plan.used:
+                material.extra["covered_angles"] = [a.title for a in self.topic_plan.used]
         elif step.kind == "news_recap":
             material.extra["covered"] = list(self.sources.covered_news)
             self.sources.covered_news.clear()  # 다음 순환은 새로 센다
+        point = planned.items[0] if step.items == "talk_point" else None
+        if point is not None:
+            material.items = []
         anchor = self._anchor_for(planned)
         await self._expire_inputs(time.time())
         material.quotes = self._take_quotes(corner.mode("chat"), step.kind, anchor, material)
+        if point is not None:
+            if point["source"] == "chat" and not material.quotes:  # 선별기가 고르지 않았다 — 다른 소재로
+                point = self._quiet_point(self._run) or {"source": "topic"}
+            self._use_point(point, material)
         if corner.mode("chat") == Mode.STEER:
             self._mark_steer(material)
         self._mark_aggregate(corner.mode("chat"), step.kind, material)
@@ -426,6 +466,58 @@ class Scheduler:
             job_id=new_id("job"), corner_type=corner.corner_type, step=step.kind,
             material=material, plain=corner.subjectivity == "none", anchor=anchor, feature=feature,
         )
+
+    def _open_thread(self, material: Material) -> None:
+        """화제를 꺼내는 단계 — 이번 진입의 갈래를 정하고 질문·다룬 갈래·시간 맥락을 붙인다 (CORNER_DESIGN 5.1.1절)."""
+        material.extra["question"] = self.intensity.question
+        now = time.time()
+        material.extra["now"] = time_context(now, self._started_at or now)
+        if self.topic_plan is None or self._run is None:
+            return
+        covered = [a.title for a in self.topic_plan.used]
+        angle = self.topic_plan.next_angle()
+        thread = self._run.thread
+        thread.angle = angle
+        if angle is not None:  # 꺼내기는 첫 말할 거리로 — 나머지는 이야기 단계가 하나씩 쓴다
+            material.extra["angle"] = Angle(angle.title, angle.points[:1])
+            thread.points_used = min(1, len(angle.points))
+        if covered:
+            material.extra["covered_angles"] = covered
+
+    def _talk_point(self, run: CornerRun) -> dict | None:
+        """이야기 단계의 소재 하나 — 인용할 채팅 → 다시 꺼낼 청취자 이야기 → 갈래의 말할 거리 (CORNER_DESIGN 7.7절).
+
+        None이면 할 말이 떨어졌다 — 이야기 단계를 끝내고 다음 코너(곡)로 간다. 억지로 채우지 않는다.
+        """
+        if self._quote_ready(run.spec.mode("chat"), "talk"):
+            return {"source": "chat"}
+        return self._quiet_point(run)
+
+    def _quiet_point(self, run: CornerRun | None) -> dict | None:
+        """채팅 없이 말할 거리."""
+        if run is None:
+            return None
+        if not run.called_back and (aired := self.callbacks.take(time.time())) is not None:
+            run.called_back = True
+            return {"source": "callback", "callback": aired}
+        thread = run.thread
+        if thread.angle is not None:
+            if thread.points_used < len(thread.angle.points):
+                thread.points_used += 1
+                return {"source": "angle", "point": thread.angle.points[thread.points_used - 1]}
+            return None
+        if thread.free_points > 0:  # 갈래가 없다(계획 실패·다 씀·화제 전환) — 주제만으로 정해진 횟수
+            thread.free_points -= 1
+            return {"source": "topic"}
+        return None
+
+    def _use_point(self, point: dict, material: Material) -> None:
+        material.extra["material"] = point["source"]
+        if point["source"] == "callback":
+            material.extra["callback"] = point["callback"]
+            self.telemetry.log_callback(point["callback"])
+        elif point["source"] == "angle" and self._run is not None and self._run.thread.angle:
+            material.extra["angle"] = Angle(self._run.thread.angle.title, (point["point"],))
 
     def _next_anchor_id(self, kind: str) -> str:
         self._anchor_no += 1
@@ -459,17 +551,20 @@ class Scheduler:
         for req in requests:
             await self._transition(req, RequestState.EXPIRED)
 
+    def _quote_ready(self, chat_mode, step_kind: str) -> bool:
+        """지금 이 단계에 채팅을 인용할 수 있다 — 풀에 채팅이 있고 계약·참여 강도·인용 간격이 허용한다."""
+        return (bool(len(self.pool)) and chat_mode in QUOTABLE and STEP_KINDS[step_kind].quotable
+                and min(self.intensity.quote_limit, _V1_QUOTES_PER_SEGMENT) > 0
+                and time.time() - self._last_quote_at >= self.intensity.quote_gap_sec)
+
     def _take_quotes(self, chat_mode, step_kind: str, anchor: Anchor,
                      material: Material) -> list[ListenerRequest]:
         """코너 계약과 참여 강도가 허용하면 선별기가 고른다 (CORNER_DESIGN 5.1, 5.7절)."""
-        if not len(self.pool) or chat_mode not in QUOTABLE or not STEP_KINDS[step_kind].quotable:
-            return []
-        if material.feature_ref:  # 계약 v1의 request_ref는 하나뿐이다 — input_refs 전까지 함께 싣지 못한다
+        # 계약 v1의 request_ref는 하나뿐이다 — input_refs 전까지 주 소재와 함께 싣지 못한다
+        if material.feature_ref or not self._quote_ready(chat_mode, step_kind):
             return []
         limit = min(self.intensity.quote_limit, _V1_QUOTES_PER_SEGMENT)
         now = time.time()
-        if limit <= 0 or now - self._last_quote_at < self.intensity.quote_gap_sec:
-            return []
         topic_words = anchor.keywords | keywords(material.topic)
         selection = self.selector.select(
             self.pool.items, limit=limit, arrivals=self.pool.recent_arrivals(now),
@@ -489,7 +584,7 @@ class Scheduler:
         if not material.quotes or self._run is None:
             return
         rule = steer_rule(material.quotes[0].body, self.chat_rules, self.config.profile.dj_name)
-        if rule and self._run.can_steer(self.intensity.steer_limit, self._produced_ms):
+        if rule and self._run.can_steer(self.intensity.steer_limit):
             material.extra["steer"] = rule
             self._steer_pending = True
 
@@ -538,7 +633,8 @@ class Scheduler:
         """다음 단계부터 이 채팅이 화제다 (CORNER_DESIGN 5.2절). 앵커도 새 화제로 새로 만든다."""
         run = self._run
         old_topic = run.thread.topic
-        run.thread = Thread(topic=req.body, keywords=sorted(keywords(req.body)))
+        # 바뀐 화제에는 갈래가 없다 — 그 화제로 두 번까지 이야기한다
+        run.thread = Thread(topic=req.body, keywords=sorted(keywords(req.body)), free_points=2)
         run.steers += 1
         self._run_anchor = None
         self.telemetry.log_steer(request_id=req.request_id, segment_id=segment_id,
@@ -660,11 +756,30 @@ class Scheduler:
     def _reserve(self) -> int:
         seq = self._seq
         self._seq += 1
+        if self._run is not None:  # 이 순번을 편성한 코너 — 끝나면 그 코너의 예산에 더한다
+            self._seq_run[seq] = self._run
+            self._run.pending += 1
         return seq
+
+    def _spend(self, seq: int, sub: SegmentSubmission | None) -> None:
+        """순번 seq의 멘트 길이를 그것을 편성한 코너에 더한다. 곡 길이는 넣지 않는다 (#220)."""
+        run = self._seq_run.pop(seq, None)
+        if run is None:
+            return
+        run.pending -= 1
+        if sub is not None:
+            run.spent_ms += sub.duration_ms
+        if run.closed and run.pending == 0:
+            self._log_corner_length(run)
+
+    def _log_corner_length(self, run: CornerRun) -> None:
+        self.telemetry.log_corner(run.spec.corner_type, run.label, "length", run.spent_ms,
+                                  run.spec.title)
 
     async def _complete(self, seq: int, sub: SegmentSubmission | None, track_ms: int = 0,
                         anchor: Anchor | None = None) -> None:
         """순번 seq의 결과를 받아, 앞 순번이 다 나갔으면 차례대로 제출한다."""
+        self._spend(seq, sub)
         self._ready[seq] = (sub, track_ms, anchor)
         async with self._pub_lock:
             while self._next_pub in self._ready:

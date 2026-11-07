@@ -117,6 +117,17 @@ def test_report_has_script_section(broadcast):
     assert "## 멘트" in render(report)
 
 
+def test_corner_length_prefers_the_corners_own_speech(tmp_path):
+    # exit − enter에는 앞 코너에서 소개한 곡이 섞인다 — 코너가 낸 멘트 길이(length)가 있으면 그것을 쓴다 (#220)
+    telemetry = Telemetry(tmp_path / "m.sqlite", "st_x")
+    for event, ms in (("enter", 0), ("exit", 250_000), ("length", 45_000)):
+        telemetry.log_corner("topic_talk", None, event, ms)
+    telemetry.close()
+    corner = station_report(tmp_path / "m.sqlite", "st_x")["corners"]["topic_talk"]
+    assert corner["produced_sec"]["p50"] == 45.0
+    assert "length" not in corner, "진입·종료 횟수에 섞지 않는다"
+
+
 def test_reused_station_id_is_split_into_runs(tmp_path):
     # 백엔드는 고정 채널 ID를 다시 쓴다 — 회차를 섞으면 지표가 의미 없다
     telemetry = Telemetry(tmp_path / "m.sqlite", "st_ch")

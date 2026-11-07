@@ -12,6 +12,10 @@ from __future__ import annotations
 STORY = "청취자 사연"
 CHAT = "청취자 채팅"  # 인용할 채팅 — 편성 관리자가 고른 것만 들어간다 (CORNER_DESIGN 5.1절)
 TOPIC = "지금 화제"
+ANGLE = "이번 갈래"  # 갈래 계획에서 꺼낸 것 — LLM이 만든 글이라 데이터로 넣는다 (inputs/topic_plan.py)
+COVERED_ANGLES = "다룬 갈래"
+NOW = "지금 시각"
+CALLBACK = "앞서 나온 청취자 이야기"  # 이미 방송된 청취자 글 — 다시 꺼내기·엔딩 돌아보기 (inputs/callbacks.py)
 TREND = "채팅창 화제"  # 채팅에서 뽑은 키워드 — 외부 텍스트다 (CORNER_DESIGN 9.2절)
 CORNERS = "오늘의 코너"
 SOURCES = "수집 소재"

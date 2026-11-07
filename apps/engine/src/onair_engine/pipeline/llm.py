@@ -75,6 +75,9 @@ _TEMPLATES: dict[str, list[str]] = {
     "talk_open": [
         "오늘 이야기 하나 꺼내 볼게요. {topic}. 여러분은 어떠세요?",
     ],
+    "talk_resume": [
+        "{topic}, 이번엔 조금 다른 쪽에서 생각해 볼게요. 여러분은 어떠세요?",
+    ],
     "talk": [
         "이 이야기 조금 더 해 볼게요. 생각해 보면 정답이 있는 문제는 아닌 것 같아요.",
         "저는 요즘 이런 생각을 자주 해요. 너무 잘하려고 애쓰지 않아도 괜찮다는 거요.",
@@ -183,9 +186,11 @@ class DummyLlmClient:
 
     async def complete(self, prompt: Prompt, *, max_tokens: int) -> str:
         await asyncio.sleep(self.delay_sec)
-        from ..inputs.story_judge import MARKER, dummy_judgement_json
-        if MARKER in prompt.user:
-            return dummy_judgement_json(prompt)
+        from ..inputs import story_judge, topic_plan
+        if story_judge.MARKER in prompt.user:
+            return story_judge.dummy_judgement_json(prompt)
+        if topic_plan.MARKER in prompt.user:
+            return topic_plan.dummy_plan_json(prompt)
         # 나머지 구조화 출력은 persona 초안이다 — API 키 없이 방 생성 화면을 개발할 수 있게 한다
         from ..personas import dummy_drafts_json  # 순환 import 회피 (personas가 llm을 쓴다)
         return dummy_drafts_json(prompt)

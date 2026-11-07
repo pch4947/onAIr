@@ -25,7 +25,9 @@ class Mode(StrEnum):
 
 InputKind = Literal["chat", "message", "board_story", "song_request", "vote"]
 # 단계가 소비하는 항목의 출처 — corners/run.py MaterialSources가 공급한다
-ItemSource = Literal["track", "next_track", "news", "covered_news", "board_story", "message", "vote"]
+# talk_point는 이야기 단계의 말할 거리 하나 — 채팅, 다시 꺼낼 청취자 이야기, 갈래의 말할 거리 순 (scheduler가 공급)
+ItemSource = Literal["track", "next_track", "news", "covered_news", "board_story", "message", "vote",
+                     "talk_point"]
 
 # 채팅을 인용할 수 있는 모드
 QUOTABLE = (Mode.QUOTE, Mode.STEER)
@@ -38,17 +40,28 @@ class StepSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     kind: str  # corners/steps.py의 단계 유형, 또는 "glue"(사전 렌더 문구)
-    glue: Literal["call", "close"] | None = None
+    glue: Literal["call", "close", "resume"] | None = None
     # 최대 반복 횟수. 문자열이면 참여 강도 프리셋의 값을 쓴다 (예: text_count)
     repeat: int | str = 1
     items: ItemSource | None = None
     take: int = Field(default=1, ge=1, le=5)
+    # 같은 방송에서 이 코너에 두 번째 들어올 때부터 대신 쓸 단계 유형(glue면 문구) — 주제를
+    # 매번 처음부터 소개하지 않게 한다 (CORNER_DESIGN 7.7절)
+    again: str | None = None
 
     @model_validator(mode="after")
     def _glue_has_key(self) -> StepSpec:
         if (self.kind == "glue") != (self.glue is not None):
-            raise ValueError("glue 단계는 kind: glue와 glue: call|close를 함께 쓴다")
+            raise ValueError("glue 단계는 kind: glue와 glue: call|close|resume을 함께 쓴다")
+        if self.kind == "glue" and self.again not in (None, "call", "close", "resume"):
+            raise ValueError(f"glue 단계의 again은 call|close|resume이다: {self.again}")
         return self
+
+    def on_reentry(self) -> StepSpec:
+        """다시 들어온 코너에서 쓸 단계. again이 없으면 그대로다."""
+        if self.again is None:
+            return self
+        return self.model_copy(update={"glue" if self.kind == "glue" else "kind": self.again})
 
 
 class CornerSpec(BaseModel):
@@ -62,6 +75,7 @@ class CornerSpec(BaseModel):
     # 접착 요소 문구 — {title}, {dj} 슬롯. 방송 시작 시 한 번 합성해 재사용한다 (GlueBank)
     call: str | None = None
     close: str | None = None
+    resume: str | None = None  # 다시 들어올 때의 콜 (단계의 again: resume)
     # 진입 조건 — 항목 출처별 최소 개수. 못 채우면 fallback 코너로 가거나 이번 차례를 건너뛴다
     requires: dict[ItemSource, int] = Field(default_factory=dict)
     fallback: str | None = None
@@ -72,7 +86,7 @@ class CornerSpec(BaseModel):
         return self.contract.get(kind, Mode.DEFER)
 
     def glue_text(self, which: str) -> str | None:
-        return self.call if which == "call" else self.close
+        return {"call": self.call, "close": self.close, "resume": self.resume}.get(which)
 
 
 class Intensity(BaseModel):

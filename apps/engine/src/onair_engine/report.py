@@ -14,6 +14,7 @@ from pathlib import Path
 from .telemetry import _read
 
 Q_MAX_SEC = 120.0  # 제때 반영 기준 — telemetry.reflection_summary와 같은 값 (CORNER_DESIGN 9.5절)
+_MATERIALS = {"chat": "채팅", "callback": "다시 꺼내기", "angle": "갈래", "topic": "주제만"}
 OPENING_CHARS = 5  # 첫머리 — 공백·문장부호를 뺀 앞 글자 수. "겨울 간식은 …"으로 계속 시작하는지 본다
 SIMILAR_WINDOW = 8  # 유사도를 견줄 직전 멘트 수 — 파이프라인이 LLM에 주는 직전 대본 수와 같다
 _NOT_WORD = re.compile(r"[\s\W_]+")
@@ -156,9 +157,13 @@ def station_report(sqlite_path: str | Path, station_id: str, run: int = -1) -> d
 
     corners: dict[str, dict] = {}
     open_runs: dict[str, int] = {}
-    durations: dict[str, list[float]] = {}
+    durations: dict[str, list[float]] = {}  # exit − enter — length가 없는 예전 DB용. 앞 곡이 섞인다
+    lengths: dict[str, list[float]] = {}  # 코너가 낸 멘트 길이 (#220)
     for corner, event, produced_ms in q("SELECT corner_type, event, produced_ms FROM corner_log "
                                         "WHERE station_id = ? {w} ORDER BY rowid"):
+        if event == "length":
+            lengths.setdefault(corner, []).append(produced_ms / 1000)
+            continue
         counts = corners.setdefault(corner, {"enter": 0, "exit": 0, "skip": 0, "fallback": 0})
         counts[event] = counts.get(event, 0) + 1
         if event == "enter":
@@ -166,7 +171,7 @@ def station_report(sqlite_path: str | Path, station_id: str, run: int = -1) -> d
         elif event == "exit" and corner in open_runs:
             durations.setdefault(corner, []).append((produced_ms - open_runs.pop(corner)) / 1000)
     for corner, counts in corners.items():
-        counts["produced_sec"] = _spread(durations.get(corner, []))
+        counts["produced_sec"] = _spread(lengths.get(corner) or durations.get(corner, []))
     turns = sum(c["enter"] + c["skip"] for c in corners.values())
     corner_rates = {
         # 대체는 원래 코너의 차례가 대체 코너 진입으로 이어진 것이다 — 진입 수에 이미 들어 있다
@@ -202,6 +207,11 @@ def station_report(sqlite_path: str | Path, station_id: str, run: int = -1) -> d
         "fallback_rate": _ratio(outcomes["fallback"], len(jobs)),
         "stage_sec": {s: _spread(v) for s, v in sorted(stages.items())},
         "job_sec": _spread([j["total"] for j in jobs.values() if j["outcome"] == "ok"]),
+        # 이야기 단계가 무엇을 소재로 말했는지 — chat·callback·angle·topic (CORNER_DESIGN 7.7절, #226)
+        "talk_material": dict(q(
+            "SELECT json_extract(decision_json, '$.material') AS m, COUNT(*) FROM decision_log "
+            "WHERE station_id = ? {w} AND json_extract(decision_json, '$.action') = 'generate' "
+            "AND m IS NOT NULL GROUP BY m")),
     }
 
     stories = {f"{method}_{'relevant' if rel else 'dropped'}": n for method, rel, n in q(
@@ -286,6 +296,8 @@ def render(report: dict) -> str:
               "| 단계 | 건수 | 중앙값 (초) | P95 (초) |", "|---|---|---|---|"]
     rows = [*gen["stage_sec"].items(), ("세그먼트 합계", gen["job_sec"])]
     lines += [f"| {name} | {s['count']} | {_fmt(s['p50'])} | {_fmt(s['p95'])} |" for name, s in rows]
+    material = ", ".join(f"{_MATERIALS.get(k, k)} {n}" for k, n in sorted(gen["talk_material"].items())) or "-"
+    lines += ["", f"이야기 단계 소재: {material}"]
 
     sc = r["scripts"]
     lines += ["", "## 멘트", "", "| 지표 | 값 |", "|---|---|",

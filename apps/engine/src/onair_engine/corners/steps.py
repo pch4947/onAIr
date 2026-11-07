@@ -10,7 +10,20 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from ..domain import Material, Prompt, StationProfile
-from ..prompt_data import CHAT, CORNERS, SOURCES, STORY, TOPIC, TRACK, TREND, data_block
+from ..prompt_data import (
+    ANGLE,
+    CALLBACK,
+    CHAT,
+    CORNERS,
+    COVERED_ANGLES,
+    NOW,
+    SOURCES,
+    STORY,
+    TOPIC,
+    TRACK,
+    TREND,
+    data_block,
+)
 from .base import system_prompt
 
 # 채팅 인용 지시 — 인용할지 말지를 LLM에 맡기지 않는다. 넣었으면 반드시 인용한다 (CORNER_DESIGN 5.1절)
@@ -23,6 +36,11 @@ AGGREGATE_RULE = ("멘트 첫머리에 지금 채팅창에서 아래 화제 얘�
                   "특정 채팅을 인용하거나 숫자를 말하지 않는다.")
 PREVIEW_RULE = ("멘트 끝에 사연 문자가 많이 와 있으니 이따 '{title}' 시간에 읽겠다고 "
                 "한 문장으로 알린다. 숫자를 말하지 않는다.")
+# 다시 꺼내기 — 이미 방송에 나간 청취자 글이다. 닉네임은 블록에 있는 것만 쓴다(채팅은 넣지 않는다)
+CALLBACK_RULE = ("아래 앞서 방송에서 소개한 청취자 이야기를 '아까 ~라고 해 주셨죠'처럼 짧게 다시 꺼내 지금 화제와 잇는다. "
+                 "내용을 지어내거나 뜻을 바꾸지 않고, 닉네임은 블록에 있을 때만 부른다.")
+# 시간 맥락은 화제를 꺼내는 단계에만 붙인다 — 매 멘트에 붙이면 "벌써 자정이네요"가 되풀이된다
+TIME_RULE = "아래 지금 시각은 이야기와 어울릴 때만 짧게 쓰고, 꼭 말하지 않아도 된다."
 
 
 def track_line(track: dict) -> str:
@@ -60,16 +78,51 @@ def _corner_preview(m: Material) -> str:
     return text + ("\n" + data_block(CORNERS, titles) if titles else "")
 
 
-def _talk_open(m: Material) -> str:
-    text = "오늘의 주제로 이야기를 꺼내는 멘트를 3문장 이내로 작성하라."
+def _angle(m: Material) -> str:
+    """이번 갈래(inputs/topic_plan.py) 블록. 갈래 계획이 없거나 채팅이 화제를 바꿨으면 비어 있다."""
+    angle = m.extra.get("angle")
+    return "\n" + data_block(ANGLE, angle.text()) if angle else ""
+
+
+def _opener_context(m: Material) -> str:
+    """화제를 꺼내는 단계의 덧붙임 — 질문, 이미 다룬 갈래, 지금 시각."""
+    text = ""
     if m.extra.get("question"):
         text += " 끝에 청취자에게 가볍게 질문을 하나 던진다."
-    return _with_topic(text, m)
+    if covered := m.extra.get("covered_angles"):
+        text += (" 아래 이미 다룬 갈래는 되풀이하지 않는다.\n"
+                 + data_block(COVERED_ANGLES, "\n".join(f"- {t}" for t in covered)))
+    if now := m.extra.get("now"):
+        text += f"\n{TIME_RULE}\n" + data_block(NOW, now)
+    return text
+
+
+def _talk_open(m: Material) -> str:
+    text = "오늘의 주제로 이야기를 꺼내는 멘트를 3문장 이내로 작성하라."
+    if m.extra.get("angle"):
+        # 오프닝(topic_intro)이 주제를 이미 소개했다 — 2026-11-07 실행에서 바로 뒤에 한 번 더 소개했다
+        text += " 주제는 오프닝에서 이미 소개했으니 다시 소개하지 않고, 아래 이번 갈래로 바로 시작한다."
+    return _with_topic(text + _opener_context(m), m) + _angle(m)
+
+
+def _talk_resume(m: Material) -> str:
+    # 직전에 접착 문구(resume)가 "다시 … 돌아왔어요"를 이미 말했다
+    text = ("다른 순서를 지나 다시 오늘의 이야기로 돌아온 멘트를 3문장 이내로 작성하라. "
+            "주제를 처음 소개하듯 말하지 않고, 돌아왔다는 말도 하지 않는다.")
+    text += (" 아래 이번 갈래로 화제를 옮긴다." if m.extra.get("angle")
+             else " 앞에서 한 말과 다른 면을 꺼낸다.")
+    return _with_topic(text + _opener_context(m), m) + _angle(m)
 
 
 def _talk(m: Material) -> str:
-    return _with_topic("지금 화제로 이야기를 이어가는 멘트를 3문장 이내로 작성하라. "
-                       "직전 멘트와 같은 말을 되풀이하지 않는다.", m)
+    # 소재 하나로 한 멘트 — 편성 관리자가 채팅·다시 꺼낼 이야기·갈래의 말할 거리 중 하나를 골라 넣는다 (7.7절)
+    text = ("지금 화제로 이야기를 이어가는 멘트를 3문장 이내로 작성하라. 직전 멘트와 같은 말을 되풀이하지 않고, "
+            "질문으로 끝내지 않아도 된다.")
+    if callback := m.extra.get("callback"):
+        return _with_topic(f"{text} {CALLBACK_RULE}", m) + "\n" + data_block(CALLBACK, callback.text())
+    if m.extra.get("angle"):
+        text += " 아래 이번 갈래의 말할 거리로 이야기한다."
+    return _with_topic(text, m) + _angle(m)
 
 
 def _artist_talk(m: Material) -> str:
@@ -131,7 +184,15 @@ def _news_recap(m: Material) -> str:
 
 
 def _closing_lookback(m: Material) -> str:
-    return "방송을 마무리하며 오늘 방송을 짧게 돌아보는 멘트를 3문장 이내로 작성하라."
+    text = "방송을 마무리하며 오늘 방송을 짧게 돌아보는 멘트를 3문장 이내로 작성하라."
+    if aired := m.extra.get("lookback"):
+        text += (" 아래 오늘 방송에 나온 청취자 이야기 중 한두 가지를 짧게 짚는다. 내용을 지어내거나 뜻을 바꾸지 않고, "
+                 "닉네임은 블록에 있을 때만 부른다.\n"
+                 + "\n".join(data_block(CALLBACK, a.text()) for a in aired))
+    if covered := m.extra.get("covered_angles"):
+        text += "\n아래는 오늘 나눈 이야기 갈래다. 돌아볼 때 참고만 하고 목록처럼 읽지 않는다.\n" + data_block(
+            COVERED_ANGLES, "\n".join(f"- {t}" for t in covered))
+    return text
 
 
 def _closing_farewell(m: Material) -> str:
@@ -156,6 +217,7 @@ STEP_KINDS: dict[str, StepKind] = {
     "topic_intro": StepKind("오늘의 주제를 소개", _topic_intro, (8, 25)),
     "corner_preview": StepKind("코너를 예고", _corner_preview, (10, 30), quotable=True),
     "talk_open": StepKind("이야기를 꺼내는", _talk_open, (10, 30), quotable=True),
+    "talk_resume": StepKind("다시 오늘의 이야기로 돌아온", _talk_resume, (10, 30), quotable=True),
     "talk": StepKind("이야기를 이어가는", _talk, (15, 45), quotable=True),
     "artist_talk": StepKind("아티스트나 장르", _artist_talk, (10, 30), quotable=True),
     "music_intro": StepKind("다음 곡을 소개", _music_intro, (10, 25), quotable=True),

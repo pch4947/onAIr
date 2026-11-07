@@ -52,6 +52,9 @@ CREATE TABLE IF NOT EXISTS aggregate_log (
 CREATE TABLE IF NOT EXISTS story_judge_log (
     story_id TEXT, station_id TEXT, at REAL, relevant INTEGER, method TEXT
 );
+CREATE TABLE IF NOT EXISTS topic_plan_log (
+    station_id TEXT, at REAL, method TEXT, dropped INTEGER, angles_json TEXT
+);
 CREATE TABLE IF NOT EXISTS aired_log (
     station_id TEXT, segment_id TEXT, at REAL, script TEXT
 );
@@ -68,7 +71,7 @@ _KINDS = {"chat": "채팅", "story": "채팅", "mood": "채팅", "message": "문
 _ROUTES = {"pool": "채팅 후보", "inbox": "문자 받은편지함", "song_request": "곡 대기",
            "story_pool": "사연 후보", "not_on_air": "방송 미반영"}
 _CORNER_EVENTS = {"enter": "코너 진입", "exit": "코너 종료", "skip": "코너 건너뜀",
-                  "fallback": "코너 대체"}
+                  "fallback": "코너 대체", "length": "코너 멘트 길이"}
 _CRITERIA = {"recency": "최신순", "relevance": "주제 관련", "diversity": "다양성"}
 _EXCERPT = 40
 
@@ -235,9 +238,10 @@ class Telemetry:
 
     def log_corner(self, corner_type: str, label: str | None, event: str, produced_ms: int,
                    title: str | None = None) -> None:
-        """코너 진입(enter)·종료(exit)·건너뜀(skip)·대체(fallback) — 클락 수치 보정과 Q-03의 원천.
+        """코너 진입(enter)·종료(exit)·건너뜀(skip)·대체(fallback)·멘트 길이(length) — 클락 수치 보정과 Q-03의 원천.
 
-        produced_ms는 그 시점까지 제출한 오디오 누적 길이다. 코너의 실제 길이 = exit − enter.
+        produced_ms는 그 시점까지 제출한 오디오 누적 길이다. length만은 그 코너가 낸 멘트 길이다 —
+        코너의 생성이 다 끝났을 때 남긴다. exit − enter에는 앞 코너에서 소개한 곡이 섞인다 (#220).
         """
         self._db.execute(
             "INSERT INTO corner_log VALUES (?,?,?,?,?,?)",
@@ -245,6 +249,8 @@ class Telemetry:
         )
         name = " · ".join(p for p in (title or corner_type, label) if p)
         reason = " (소재 없음)" if event in ("skip", "fallback") else ""
+        if event == "length":
+            reason = f" ({produced_ms / 1000:.0f}초)"
         self._event("corner", f"{_CORNER_EVENTS.get(event, event)} · {name}{reason}",
                     corner_type=corner_type, label=label, event=event, title=title)
         self._db.commit()
@@ -337,6 +343,30 @@ class Telemetry:
         verdict = "관련 있음" if relevant else "관련 없음 → 후보 제외"
         self._event("story_judge", f"사연 판정 · {verdict} ({method})", story_id=story_id,
                     relevant=relevant, method=method)
+        self._db.commit()
+
+    def log_topic_plan(self, angles: list, method: str, dropped: int = 0) -> None:
+        """이야기 갈래 계획 — method는 llm 또는 failed(주제 한 줄로 진행). dropped는 L2에 걸려 뺀 갈래 수."""
+        self._db.execute("INSERT INTO topic_plan_log VALUES (?,?,?,?,?)",
+                         (self.station_id, time.time(), method, dropped,
+                          json.dumps([dataclasses.asdict(a) for a in angles], ensure_ascii=False)))
+        if method == "llm":
+            summary = f"이야기 갈래 {len(angles)}개 준비" + (f" (안전 검사로 {dropped}개 제외)" if dropped else "")
+        else:
+            summary = "이야기 갈래 생성 실패 → 주제만으로 진행"
+        self._event("topic_plan", summary, method=method, angles=[a.title for a in angles],
+                    dropped=dropped)
+        self._db.commit()
+
+    def log_angle(self, angle, index: int, total: int) -> None:
+        """주제 토크가 이번 진입에 쓸 갈래를 꺼냈다 — 패널에만 남긴다. 계획 전체는 topic_plan_log에 있다."""
+        self._event("topic_plan", f"이야기 갈래 {index}/{total} · {angle.title}", title=angle.title,
+                    index=index, total=total)
+        self._db.commit()
+
+    def log_callback(self, aired) -> None:
+        """청취자 이야기 다시 꺼내기 — 패널에만 남긴다. 소재 출처는 decision_log의 material에 있다."""
+        self._event("callback", f"다시 꺼내기 · \"{_excerpt(aired.body)}\"", kind=aired.kind)
         self._db.commit()
 
     def log_track(self, track: dict) -> None:

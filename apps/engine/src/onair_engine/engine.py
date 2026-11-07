@@ -18,6 +18,7 @@ from .inputs.router import BOARD_STORY
 from .inputs.rules import load_chat_rules
 from .inputs.stories import StoryPool
 from .inputs.story_judge import StoryJudge
+from .inputs.topic_plan import TopicPlan, angle_count
 from .pipeline.llm import make_llm
 from .pipeline.pipeline import GenerationPipeline
 from .pipeline.safety import SafetyChecker
@@ -134,6 +135,13 @@ class StationEngine:
             stories=StoryPool(topic_words=keywords(self.topic), violates=safety.check_l2, judged=True),
         )
         self.story_judge = StoryJudge(llm, self.topic, self.sources.stories, telemetry=self.telemetry)
+        # 호스트가 정한 주제가 있고 이 형식에 주제 토크가 있을 때만 — 컨셉을 갈래로 펼치지는 않는다
+        talks = any({s.kind, s.again} & {"talk_open", "talk_resume"}
+                    for c in fmt.corners.values() for s in c.steps)
+        self.topic_plan = TopicPlan(
+            llm, config.topic, count=angle_count(config.broadcast_minutes), violates=safety.check_l2,
+            forbidden=config.profile.forbidden, telemetry=self.telemetry,
+        ) if config.topic and talks else None
         self.glue = GlueBank(tts=tts, audio_root=audio_root, station_id=config.station_id,
                              profile=config.profile, fmt=fmt, safety=safety)
         self.scheduler = Scheduler(
@@ -143,7 +151,7 @@ class StationEngine:
             chat_rules=chat_rules, violates=safety.check_l2,
             target_buffer_sec=settings.target_buffer_sec,
             max_concurrent=settings.max_concurrent_generations,
-            emit_corner_changed=settings.emit_corner_changed,
+            emit_corner_changed=settings.emit_corner_changed, topic_plan=self.topic_plan,
         )
         self._safety = safety
         self._stop = asyncio.Event()
@@ -159,6 +167,8 @@ class StationEngine:
     async def run(self, max_segments: int | None = None) -> None:
         # 수집은 사전 렌더링과 동시에 시작한다 — 방송 시작을 피드 시간만큼 더 늦추지 않는다
         poller = asyncio.create_task(self.rss.run()) if self.rss.feeds else None
+        # 갈래 계획도 기다리지 않는다 — 오프닝과 첫 곡이 나가는 동안 끝나면 첫 주제 토크부터 쓴다
+        plan = asyncio.create_task(self.topic_plan.run()) if self.topic_plan else None
         judge: asyncio.Task | None = None
         try:
             # 접착 요소는 방송 시작 전에 이 스테이션의 보이스로 사전 렌더링한다 (설계 문서 4.5)
@@ -179,7 +189,7 @@ class StationEngine:
             self.telemetry.log_station("station.started", {"topic": self.topic})
             await self.scheduler.run(self._stop, max_segments=max_segments)
         finally:
-            tasks = [t for t in (poller, judge) if t is not None]
+            tasks = [t for t in (poller, plan, judge) if t is not None]
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)

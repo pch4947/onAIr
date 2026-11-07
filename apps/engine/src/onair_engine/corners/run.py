@@ -5,7 +5,9 @@ CornerRun은 "다음에 할 단계와 그 소재"만 정한다. 어떤 청취자
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from ..catalog import Catalog
 from ..format.clock import ClockEntry
@@ -15,16 +17,25 @@ from ..inputs.stories import StoryPool
 from ..sources.rss import RssCollector, source_name
 from .steps import STEP_KINDS
 
+if TYPE_CHECKING:  # topic_plan → pipeline.llm → corners.steps 순환을 피한다
+    from ..inputs.topic_plan import Angle
+
 
 @dataclass
 class Thread:
     """화제 상태 — 코너 안에서 단계 사이에 넘긴다 (CORNER_DESIGN 5.1.1절).
 
     keywords는 화제 관련성 계산(M4 QuoteSelector, 키워드 겹침 — U1)에 쓴다.
+    angle은 이번 진입에 쓰는 이야기 갈래다(inputs/topic_plan.py). 채팅이 화제를 바꾸면 사라진다.
+    꺼내기 단계가 갈래의 첫 말할 거리를 쓰고, 이야기 단계가 나머지를 하나씩 쓴다(points_used).
+    갈래가 없으면 주제만으로 free_points번 이야기한다 — 소재가 떨어지면 단계를 끝낸다 (CORNER_DESIGN 7.7절).
     """
 
     topic: str | None = None
     keywords: list[str] = field(default_factory=list)
+    angle: Angle | None = None
+    points_used: int = 0
+    free_points: int = 1
 
 
 class TrackSource:
@@ -94,6 +105,8 @@ class MaterialSources:
         self.inbox = MessageInbox() if inbox is None else inbox
         self.stories = StoryPool() if stories is None else stories
         self.votes: list[dict] = []
+        # 이야기 단계의 말할 거리 — 채팅 풀·다시 꺼낼 이야기·갈래를 아는 편성 관리자가 채운다. 없으면 이야기 단계는 건너뛴다
+        self.talk_points: Callable[[CornerRun], dict | None] | None = None
 
     def count(self, source: str, section: str | None = None) -> int:
         if source in ("track", "next_track"):
@@ -106,6 +119,8 @@ class MaterialSources:
             return self.inbox.count()
         if source == "board_story":
             return self.stories.count()
+        if source == "talk_point":  # 진입 조건으로 쓰지 않는다 — 코너 안에서 단계마다 정한다
+            return 0
         return len(self.votes)
 
     def take(self, source: str, n: int, section: str | None = None) -> list[dict]:
@@ -149,21 +164,27 @@ class CornerRun:
     """코너 1회. 단계를 차례로 내놓고, 항목이 떨어지거나 예산을 넘으면 그 단계를 끝낸다."""
 
     def __init__(self, entry: ClockEntry, *, sources: MaterialSources, intensity: Intensity,
-                 thread: Thread, started_ms: int):
+                 thread: Thread, again: bool = False):
         self.spec = entry.corner
         self.label = entry.label
         self.thread = thread
-        self.started_ms = started_ms  # 진입 시점의 누적 제출 오디오 — 예산 계산 기준
+        self.again = again  # 같은 방송에서 이 코너에 이미 들어온 적이 있다 — 단계의 again을 쓴다
+        # 이 코너가 낸 멘트 길이 — 예산 기준 (#220). 방송 누적량으로 재면 앞 코너에서 소개한 곡이
+        # 이 코너가 편성된 뒤에 제출되면서 곡 길이가 이 코너 몫으로 잡힌다
+        self.spent_ms = 0
+        self.pending = 0  # 생성 중인 세그먼트 — 0이 되고 closed면 코너 길이가 확정된다
+        self.closed = False  # 남은 단계가 없다 (corner_log exit)
         self.step_index = 0
         self.steers = 0  # 코너당 화제 전환 횟수 (참여 강도 steer_limit)
         self.aggregated = False  # 집계 언급은 코너당 1회 (CORNER_DESIGN 9.2절)
+        self.called_back = False  # 청취자 이야기 다시 꺼내기도 코너당 1회 (CORNER_DESIGN 7.7절)
         self._sources = sources
         self._intensity = intensity
         self._done_in_step = 0
 
-    def next_step(self, produced_ms: int) -> PlannedStep | None:
+    def next_step(self) -> PlannedStep | None:
         """다음 단계. None이면 코너 종료."""
-        over_budget = (produced_ms - self.started_ms) / 1000 >= self.spec.budget_sec[1]
+        over_budget = self.spent_ms / 1000 >= self.spec.budget_sec[1]
         while self.step_index < len(self.spec.steps):
             step = self.spec.steps[self.step_index]
             # 예산을 넘었으면 남은 단계는 건너뛰되, 마무리 문구(glue close)와 곡 소개는 남긴다
@@ -175,29 +196,38 @@ class CornerRun:
                 continue
             items: list[dict] = []
             if step.items is not None:
-                items = self._sources.take(step.items, step.take, self.label)
+                items = self._take(step)
                 if not items:
                     self._advance()
                     continue
             self._done_in_step += 1
-            return PlannedStep(self.spec, step, items, self.label)
+            return PlannedStep(self.spec, step.on_reentry() if self.again else step, items, self.label)
         return None
 
-    def can_steer(self, limit: int, produced_ms: int) -> bool:
+    def _take(self, step: StepSpec) -> list[dict]:
+        if step.items != "talk_point":
+            return self._sources.take(step.items, step.take, self.label)
+        point = self._sources.talk_points(self) if self._sources.talk_points else None
+        return [point] if point else []
+
+    def can_steer(self, limit: int) -> bool:
         """횟수 상한 미만이고, 바뀐 화제로 이야기할 단계와 그 시간이 남았다 (CORNER_DESIGN 5.2절)."""
         if self.steers >= limit:
             return False
         step = self._next_topic_step()
         if step is None:
             return False
-        left_sec = self.spec.budget_sec[1] - (produced_ms - self.started_ms) / 1000
+        left_sec = self.spec.budget_sec[1] - self.spent_ms / 1000
         return left_sec >= STEP_KINDS[step.kind].seconds[0]
 
     def _next_topic_step(self) -> StepSpec | None:
-        """남은 단계 중 화제로 이야기하는 첫 단계 — 항목이 소재인 단계는 화제를 쓰지 않는다."""
+        """남은 단계 중 화제로 이야기하는 첫 단계 — 항목이 소재인 단계는 화제를 쓰지 않는다.
+
+        이야기 단계(talk_point)는 화제를 쓴다. 화제가 바뀌면 그 화제로 말할 거리를 새로 받는다(Thread.free_points).
+        """
         for i, step in enumerate(self.spec.steps[self.step_index:]):
             left = self._repeat(step) - (self._done_in_step if i == 0 else 0)
-            if left > 0 and step.items is None and step.kind != "glue":
+            if left > 0 and step.items in (None, "talk_point") and step.kind != "glue":
                 return step
         return None
 
