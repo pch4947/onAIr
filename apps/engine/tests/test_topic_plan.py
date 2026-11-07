@@ -125,8 +125,9 @@ def _steps(again: bool) -> list[str]:
 
 
 def test_reentered_topic_talk_resumes_instead_of_reintroducing():
-    assert _steps(again=False) == ["call", "talk_open", "talk", "talk", "talk"]
-    assert _steps(again=True) == ["resume", "talk_resume", "talk", "talk", "talk"]
+    # 편성 관리자가 말할 거리를 주지 않으면 이야기 단계는 없다 (#226)
+    assert _steps(again=False) == ["call", "talk_open"]
+    assert _steps(again=True) == ["resume", "talk_resume"]
 
 
 def test_glue_again_must_name_a_glue_text():
@@ -153,7 +154,7 @@ def test_opener_prompts_carry_angle_covered_list_and_time():
     assert detect_step(first) == "talk_open" and ANGLE in first and COVERED_ANGLES not in first
 
     talk = build_prompt("talk", Material(topic="겨울 간식", extra={"angle": ANGLES[0]}), PROFILE).user
-    assert detect_step(talk) == "talk" and "아직 하지 않은 것" in talk and NOW not in talk, \
+    assert detect_step(talk) == "talk" and "말할 거리로" in talk and NOW not in talk, \
         "시간 맥락은 꺼내는 단계에만 — 매 멘트에 붙이면 되풀이된다"
 
 
@@ -196,14 +197,17 @@ def test_broadcast_moves_to_the_next_angle_on_each_topic_talk(tmp_path):
     engine.topic_plan._llm.delay_sec = 0  # 첫 주제 토크 전에 계획이 끝난다 — 실제 방송은 오프닝과 첫 곡이 가려 준다
     asyncio.run(engine.run(max_segments=16))
     openers = [j for j in pipeline.jobs if j.step in ("talk_open", "talk_resume")]
-    assert [j.step for j in openers] == ["talk_open", "talk_resume"]
-    assert [j.material.extra["angle"].title for j in openers] == ["1번째 이야기", "2번째 이야기"]
+    assert [j.step for j in openers[:2]] == ["talk_open", "talk_resume"]
+    assert [j.material.extra["angle"].title for j in openers[:2]] == ["1번째 이야기", "2번째 이야기"]
     assert "covered_angles" not in openers[0].material.extra
     assert openers[1].material.extra["covered_angles"] == ["1번째 이야기"]
     assert all("now" in j.material.extra for j in openers)
+    # 더미 갈래는 말할 거리가 2개 — 꺼내기가 첫째, 이야기 단계가 둘째를 쓰고 곡으로 간다 (#226)
+    assert openers[0].material.extra["angle"].points == ("떠오르는 장면 하나",)
     talks = [j for j in pipeline.jobs if j.step == "talk"]
-    assert talks and all(j.material.extra["angle"].title == "1번째 이야기" for j in talks[:3])
-    assert [s.audio_ref.rsplit("/", 1)[1].rsplit("_", 1)[0] for s in transport.segments if _glue(s)] \
+    assert talks[0].material.extra["angle"].points == ("청취자에게 던질 질문 하나",)
+    assert talks[0].material.extra["material"] == "angle"
+    assert [s.audio_ref.rsplit("/", 1)[1].rsplit("_", 1)[0] for s in transport.segments if _glue(s)][:2] \
         == ["topic_talk_call", "topic_talk_resume"]
 
 

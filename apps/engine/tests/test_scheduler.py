@@ -201,6 +201,7 @@ def test_corner_budget_excludes_song_introduced_before_it(tmp_path):
     # 곡 길이가 다음 코너 몫으로 잡히면 주제 토크가 '꺼내기 + 한 줄'만 하고 끝난다 (#220)
     engine, transport = _engine(tmp_path, dummy_tracks=False, corners=["topic_talk"])
     engine.scheduler.pipeline = SlowIntro()
+    engine.sources.talk_points = lambda run: {"source": "topic"}  # 말할 거리는 떨어지지 않는다 — 예산만 본다
     # 동시 생성 2개 — 곡 뒤 코너의 나머지 단계는 곡 소개가 제출된 뒤에 편성된다 (실제 방송처럼)
     engine.scheduler.max_concurrent = 2
     engine.on_track_queued({"track": {"track_ref": "yt:abc", "title": "밤편지", "artist": "아이유",
@@ -208,7 +209,7 @@ def test_corner_budget_excludes_song_introduced_before_it(tmp_path):
     asyncio.run(engine.run(max_segments=16))
     intro = next(i for i, s in enumerate(transport.segments) if s.music_ref)
     after = [s.id for s in transport.segments[intro + 1:] if not _glue(s)]
-    assert after[:4] == ["talk_resume", "talk", "talk", "talk"], "곡 뒤 주제 토크가 단계를 다 한다"
+    assert after[:5] == ["talk_resume", "talk", "talk", "talk", "talk"], "곡 뒤 주제 토크가 단계를 다 한다"
     db = sqlite3.connect(tmp_path / "metrics.sqlite")
     lengths = db.execute("SELECT produced_ms FROM corner_log WHERE corner_type = 'topic_talk' "
                          "AND event = 'length'").fetchall()
