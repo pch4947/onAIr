@@ -60,6 +60,14 @@ class TrackSource:
         self._peeked = None
         return track
 
+    def put_back(self, track: dict) -> None:
+        """소개 멘트가 나가지 못한 곡을 되돌린다 (#216). 그 사이 알려 온 새 곡이 있으면 그것을 쓴다.
+
+        되돌리지 않으면 곡이 시작되지 않아 백엔드도 다음 곡을 보내지 않는다 — 방송 끝까지 음악이 끊긴다.
+        """
+        if self._queued is None:
+            self._queued = dict(track)
+
     def _dummy(self) -> dict | None:
         if not self._dummy_enabled:
             return None

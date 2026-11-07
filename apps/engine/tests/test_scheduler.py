@@ -152,6 +152,42 @@ def test_queued_track_is_introduced_and_fills_buffer(tmp_path):
     assert engine.scheduler._buffer_sec(engine.scheduler._started_at)[0] > 200
 
 
+class RejectsFirstIntro(FakePipeline):
+    """첫 곡 소개 멘트만 L1/L2 REJECT — 악성 채팅을 인용한 경우."""
+
+    rejected = 0
+
+    async def run(self, job):
+        if job.step == "music_intro" and not self.rejected:
+            self.rejected += 1
+            return None
+        return await super().run(job)
+
+
+def test_rejected_intro_puts_track_back(tmp_path):
+    # 곡이 사라지면 곡이 시작되지 않아 백엔드도 다음 곡을 보내지 않는다 — 방송 끝까지 음악이 끊긴다 (#216)
+    engine, transport = _engine(tmp_path, dummy_tracks=False)
+    engine.scheduler.pipeline = pipeline = RejectsFirstIntro()
+    engine.on_track_queued({"track": {"track_ref": "yt:abc", "title": "밤편지", "artist": "아이유",
+                                      "duration_ms": 200_000}, "source": "playlist"})
+    asyncio.run(engine.run(max_segments=12))
+    assert pipeline.rejected == 1
+    assert [s.music_ref for s in transport.segments if s.music_ref] == ["yt:abc"]
+
+
+def test_put_back_keeps_newer_queued_track():
+    from onair_engine.corners.run import TrackSource
+
+    tracks = TrackSource(dummy=False)
+    tracks.queue({"track_ref": "a", "title": "곡 A"})
+    taken = tracks.take()
+    tracks.queue({"track_ref": "b", "title": "곡 B"})  # 그 사이 백엔드가 새 곡을 알렸다
+    tracks.put_back(taken)
+    assert tracks.take()["track_ref"] == "b"
+    tracks.put_back(taken)
+    assert tracks.take()["track_ref"] == "a"
+
+
 def test_first_song_counts_for_ending_but_not_for_buffer(tmp_path):
     engine, _ = _engine(tmp_path, first_song={"track_ref": "yt:first", "title": "밤편지",
                                               "artist": "아이유", "duration_ms": 240_000})
