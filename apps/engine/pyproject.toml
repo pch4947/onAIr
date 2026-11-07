@@ -16,6 +16,7 @@ onair-engine = "onair_engine.main:cli"
 onair-eval = "onair_engine.eval.runner:cli"
 onair-report = "onair_engine.report:cli"
 onair-scenario = "onair_engine.scenario.runner:cli"
+onair-review = "onair_engine.scenario.review:cli"
 
 [build-system]
 requires = ["setuptools>=69"]
@@ -23,6 +24,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+onair_engine = ["scenario/review.html"]  # 대본 검토 페이지 템플릿
 
 [tool.ruff]
 line-length = 100
