@@ -6,6 +6,7 @@ CornerRun은 "다음에 할 단계와 그 소재"만 정한다. 어떤 청취자
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from ..catalog import Catalog
 from ..format.clock import ClockEntry
@@ -15,16 +16,21 @@ from ..inputs.stories import StoryPool
 from ..sources.rss import RssCollector, source_name
 from .steps import STEP_KINDS
 
+if TYPE_CHECKING:  # topic_plan → pipeline.llm → corners.steps 순환을 피한다
+    from ..inputs.topic_plan import Angle
+
 
 @dataclass
 class Thread:
     """화제 상태 — 코너 안에서 단계 사이에 넘긴다 (CORNER_DESIGN 5.1.1절).
 
     keywords는 화제 관련성 계산(M4 QuoteSelector, 키워드 겹침 — U1)에 쓴다.
+    angle은 이번 진입에 쓰는 이야기 갈래다(inputs/topic_plan.py). 채팅이 화제를 바꾸면 사라진다.
     """
 
     topic: str | None = None
     keywords: list[str] = field(default_factory=list)
+    angle: Angle | None = None
 
 
 class TrackSource:
@@ -149,10 +155,11 @@ class CornerRun:
     """코너 1회. 단계를 차례로 내놓고, 항목이 떨어지거나 예산을 넘으면 그 단계를 끝낸다."""
 
     def __init__(self, entry: ClockEntry, *, sources: MaterialSources, intensity: Intensity,
-                 thread: Thread):
+                 thread: Thread, again: bool = False):
         self.spec = entry.corner
         self.label = entry.label
         self.thread = thread
+        self.again = again  # 같은 방송에서 이 코너에 이미 들어온 적이 있다 — 단계의 again을 쓴다
         # 이 코너가 낸 멘트 길이 — 예산 기준 (#220). 방송 누적량으로 재면 앞 코너에서 소개한 곡이
         # 이 코너가 편성된 뒤에 제출되면서 곡 길이가 이 코너 몫으로 잡힌다
         self.spent_ms = 0
@@ -184,7 +191,7 @@ class CornerRun:
                     self._advance()
                     continue
             self._done_in_step += 1
-            return PlannedStep(self.spec, step, items, self.label)
+            return PlannedStep(self.spec, step.on_reentry() if self.again else step, items, self.label)
         return None
 
     def can_steer(self, limit: int) -> bool:

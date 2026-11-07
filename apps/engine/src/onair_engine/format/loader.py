@@ -36,8 +36,9 @@ def _load(name: str, formats_dir: str) -> FormatSpec:
     # 공통 코너 중 이 형식이 쓰지 않는 것은 뺀다 — 접착 문구를 합성하지 않고, 계약 검사에도 안 걸리게
     corners = {k: v for k, v in corners.items() if k in _reachable(own, corners)}
     fmt = FormatSpec.model_validate({**own, "corners": corners, "intensity": intensity})
-    unknown = sorted({f"{c.corner_type}.{s.kind}" for c in fmt.corners.values() for s in c.steps
-                      if s.kind != "glue" and s.kind not in STEP_KINDS})
+    unknown = sorted({f"{c.corner_type}.{kind}" for c in fmt.corners.values() for s in c.steps
+                      if s.kind != "glue" for kind in (s.kind, s.again)
+                      if kind is not None and kind not in STEP_KINDS})
     if unknown:
         raise ValueError(f"{name}: 알 수 없는 단계 유형 {unknown} (corners/steps.py STEP_KINDS)")
     return fmt

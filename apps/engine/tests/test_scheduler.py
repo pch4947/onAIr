@@ -208,7 +208,7 @@ def test_corner_budget_excludes_song_introduced_before_it(tmp_path):
     asyncio.run(engine.run(max_segments=16))
     intro = next(i for i, s in enumerate(transport.segments) if s.music_ref)
     after = [s.id for s in transport.segments[intro + 1:] if not _glue(s)]
-    assert after[:4] == ["talk_open", "talk", "talk", "talk"], "곡 뒤 주제 토크가 단계를 다 한다"
+    assert after[:4] == ["talk_resume", "talk", "talk", "talk"], "곡 뒤 주제 토크가 단계를 다 한다"
     db = sqlite3.connect(tmp_path / "metrics.sqlite")
     lengths = db.execute("SELECT produced_ms FROM corner_log WHERE corner_type = 'topic_talk' "
                          "AND event = 'length'").fetchall()

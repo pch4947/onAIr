@@ -30,13 +30,13 @@ class GlueBank:
         self._profile = profile
         self._fmt = fmt
         self._safety = safety
-        self._entries: dict[tuple[str, str], tuple[str, int]] = {}  # (코너, call|close) -> (audio_ref, ms)
+        self._entries: dict[tuple[str, str], tuple[str, int]] = {}  # (코너, call|close|resume) -> (audio_ref, ms)
 
     def texts(self) -> dict[tuple[str, str], str]:
         """이 형식에서 쓸 문구 전부. 문구가 없는 코너는 접착 요소 없이 바로 단계로 들어간다."""
         out = {}
         for name, corner in self._fmt.corners.items():
-            for which in ("call", "close"):
+            for which in ("call", "close", "resume"):
                 template = corner.glue_text(which)
                 if template:
                     out[(name, which)] = template.format(title=corner.title,

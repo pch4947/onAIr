@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 
 from ..corners.run import CornerRun, MaterialSources, PlannedStep, Thread
 from ..corners.steps import STEP_KINDS
@@ -44,6 +45,7 @@ from ..inputs.pool import QuotePool
 from ..inputs.router import BOARD_STORY, CHAT, MESSAGE, SONG_REQUEST, normalize_kind
 from ..inputs.rules import ChatRules
 from ..inputs.selector import RELEVANCE, QuoteSelector
+from ..inputs.topic_plan import TopicPlan
 from ..pipeline.pipeline import GenerationPipeline
 from ..telemetry import Telemetry
 from ..transport import Transport
@@ -61,8 +63,22 @@ _WAIT = object()  # _next_planned: 낼 수 있는 단계가 지금은 없다
 # v1 계약은 세그먼트당 요청 하나(request_ref)만 싣는다 — 참여 강도가 2여도 1건 (계약 v2 input_refs 전까지)
 _V1_QUOTES_PER_SEGMENT = 1
 _TEXT_CORNER = "text_corner"  # 예고가 가리키는 코너
+_OPENERS = ("talk_open", "talk_resume")  # 코너의 화제를 꺼내는 단계 — 갈래와 시간 맥락은 여기에만 붙인다
+_KST = timezone(timedelta(hours=9))  # 방송 시각은 한국 시간이다 (서머타임 없음)
+_WEEKDAYS = "월화수목금토일"
 
 logger = logging.getLogger(__name__)
+
+
+def time_context(now: float, started_at: float) -> str:
+    """'금요일 밤 11시 40분, 방송 18분째' — 화제를 꺼낼 때 DJ가 쓸 수 있는 시간 맥락."""
+    t = datetime.fromtimestamp(now, _KST)
+    part = ("밤" if t.hour in (0, 21, 22, 23) else "새벽" if t.hour < 5 else "아침" if t.hour < 9
+            else "오전" if t.hour < 12 else "오후" if t.hour < 18 else "저녁")
+    clock = f"{t.hour % 12 or 12}시" + (f" {t.minute}분" if t.minute else "")
+    minutes = int(max(0.0, now - started_at) // 60)
+    elapsed = f"방송 {minutes}분째" if minutes else "방송 시작 직후"
+    return f"{_WEEKDAYS[t.weekday()]}요일 {part} {clock}, {elapsed}"
 
 
 class Scheduler:
@@ -71,13 +87,14 @@ class Scheduler:
                  pipeline: GenerationPipeline, glue: GlueBank, transport: Transport,
                  telemetry: Telemetry, chat_rules: ChatRules, violates,
                  target_buffer_sec: float = 30.0, max_concurrent: int = 2,
-                 emit_corner_changed: bool = False):
+                 emit_corner_changed: bool = False, topic_plan: TopicPlan | None = None):
         self.config = config
         self.fmt = fmt
         self.clock = clock
         self.sources = sources
         self.intensity = intensity
         self.topic = topic
+        self.topic_plan = topic_plan  # 이야기 갈래 — 없으면 주제 한 줄로 말한다
         self.pipeline = pipeline
         self.glue = glue
         self.transport = transport
@@ -125,6 +142,7 @@ class Scheduler:
         self._backend_report: tuple[float, float, int] | None = None
         self._backpressure = False
         self._run: CornerRun | None = None
+        self._entered: dict[str, int] = {}  # 코너별 진입 횟수 — 두 번째부터 단계의 again을 쓴다
         self._skip_logged: set[tuple[str, str | None]] = set()  # 기다리는 동안 skip 로그를 반복하지 않는다
         self._last_quote_at = float("-inf")
         # 순서 보장 제출 — 순번 발급, 다음에 낼 순번, 끝났지만 앞 순번을 기다리는 결과
@@ -360,8 +378,11 @@ class Scheduler:
                     self._previewed = False
                 topic = entry.label or self.topic
                 self._run_anchor = None
+                corner_type = entry.corner.corner_type
                 self._run = CornerRun(entry, sources=self.sources, intensity=self.intensity,
-                                      thread=Thread(topic=topic, keywords=sorted(keywords(topic))))
+                                      thread=Thread(topic=topic, keywords=sorted(keywords(topic))),
+                                      again=self._entered.get(corner_type, 0) > 0)
+                self._entered[corner_type] = self._entered.get(corner_type, 0) + 1
                 self.telemetry.log_corner(entry.corner.corner_type, entry.label, "enter",
                                           self._produced_ms, entry.corner.title)
             planned = self._run.next_step()
@@ -414,8 +435,10 @@ class Scheduler:
             material.extra["first_song"] = self.config.first_song
         elif step.kind == "corner_preview":
             material.extra.update(guide=self.fmt.guide, corners=self.clock.main_titles())
-        elif step.kind == "talk_open":
-            material.extra["question"] = self.intensity.question
+        elif step.kind in _OPENERS:
+            self._open_thread(material)
+        elif step.kind == "talk" and self._run is not None and self._run.thread.angle:
+            material.extra["angle"] = self._run.thread.angle
         elif step.kind == "news_recap":
             material.extra["covered"] = list(self.sources.covered_news)
             self.sources.covered_news.clear()  # 다음 순환은 새로 센다
@@ -429,6 +452,21 @@ class Scheduler:
             job_id=new_id("job"), corner_type=corner.corner_type, step=step.kind,
             material=material, plain=corner.subjectivity == "none", anchor=anchor, feature=feature,
         )
+
+    def _open_thread(self, material: Material) -> None:
+        """화제를 꺼내는 단계 — 이번 진입의 갈래를 정하고 질문·다룬 갈래·시간 맥락을 붙인다 (CORNER_DESIGN 5.1.1절)."""
+        material.extra["question"] = self.intensity.question
+        now = time.time()
+        material.extra["now"] = time_context(now, self._started_at or now)
+        if self.topic_plan is None or self._run is None:
+            return
+        covered = [a.title for a in self.topic_plan.used]
+        angle = self.topic_plan.next_angle()
+        self._run.thread.angle = angle
+        if angle is not None:
+            material.extra["angle"] = angle
+        if covered:
+            material.extra["covered_angles"] = covered
 
     def _next_anchor_id(self, kind: str) -> str:
         self._anchor_no += 1
