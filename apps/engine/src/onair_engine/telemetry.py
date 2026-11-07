@@ -52,6 +52,9 @@ CREATE TABLE IF NOT EXISTS aggregate_log (
 CREATE TABLE IF NOT EXISTS story_judge_log (
     story_id TEXT, station_id TEXT, at REAL, relevant INTEGER, method TEXT
 );
+CREATE TABLE IF NOT EXISTS topic_plan_log (
+    station_id TEXT, at REAL, method TEXT, dropped INTEGER, angles_json TEXT
+);
 CREATE TABLE IF NOT EXISTS aired_log (
     station_id TEXT, segment_id TEXT, at REAL, script TEXT
 );
@@ -340,6 +343,25 @@ class Telemetry:
         verdict = "관련 있음" if relevant else "관련 없음 → 후보 제외"
         self._event("story_judge", f"사연 판정 · {verdict} ({method})", story_id=story_id,
                     relevant=relevant, method=method)
+        self._db.commit()
+
+    def log_topic_plan(self, angles: list, method: str, dropped: int = 0) -> None:
+        """이야기 갈래 계획 — method는 llm 또는 failed(주제 한 줄로 진행). dropped는 L2에 걸려 뺀 갈래 수."""
+        self._db.execute("INSERT INTO topic_plan_log VALUES (?,?,?,?,?)",
+                         (self.station_id, time.time(), method, dropped,
+                          json.dumps([dataclasses.asdict(a) for a in angles], ensure_ascii=False)))
+        if method == "llm":
+            summary = f"이야기 갈래 {len(angles)}개 준비" + (f" (안전 검사로 {dropped}개 제외)" if dropped else "")
+        else:
+            summary = "이야기 갈래 생성 실패 → 주제만으로 진행"
+        self._event("topic_plan", summary, method=method, angles=[a.title for a in angles],
+                    dropped=dropped)
+        self._db.commit()
+
+    def log_angle(self, angle, index: int, total: int) -> None:
+        """주제 토크가 이번 진입에 쓸 갈래를 꺼냈다 — 패널에만 남긴다. 계획 전체는 topic_plan_log에 있다."""
+        self._event("topic_plan", f"이야기 갈래 {index}/{total} · {angle.title}", title=angle.title,
+                    index=index, total=total)
         self._db.commit()
 
     def log_track(self, track: dict) -> None:
