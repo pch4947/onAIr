@@ -119,14 +119,14 @@ def _sources(news: int = 0) -> MaterialSources:
 
 def _run(fmt: FormatSpec, corner: str, sources: MaterialSources, intensity="mid") -> CornerRun:
     return CornerRun(ClockEntry(fmt.corner(corner)), sources=sources,
-                     intensity=fmt.intensity[intensity], thread=Thread(), started_ms=0)
+                     intensity=fmt.intensity[intensity], thread=Thread())
 
 
 def test_corner_runs_steps_in_order_with_repeats():
     fmt = _fmt("talk")
     run = _run(fmt, "topic_talk", _sources())
     kinds = []
-    while (step := run.next_step(produced_ms=0)) is not None:
+    while (step := run.next_step()) is not None:
         kinds.append(step.step.glue or step.step.kind)
     assert kinds == ["call", "talk_open", "talk", "talk", "talk"]
 
@@ -137,11 +137,11 @@ def test_corner_over_budget_skips_to_close_glue():
     sources.stories.add(_input("s1", "board_story", "사연 1"))
     sources.stories.add(_input("s2", "board_story", "사연 2"))
     run = _run(fmt, "story_corner", sources)
-    assert run.next_step(0).step.glue == "call"
-    assert run.next_step(0).step.kind == "story"
-    over = (fmt.corner("story_corner").budget_sec[1] + 1) * 1000
-    assert run.next_step(over).step.glue == "close"  # 두 번째 사연은 건너뛰고 마무리 문구
-    assert run.next_step(over) is None
+    assert run.next_step().step.glue == "call"
+    assert run.next_step().step.kind == "story"
+    run.spent_ms = (fmt.corner("story_corner").budget_sec[1] + 1) * 1000
+    assert run.next_step().step.glue == "close"  # 두 번째 사연은 건너뛰고 마무리 문구
+    assert run.next_step() is None
     assert len(sources.stories) == 1  # 꺼내지 않은 사연은 다음 차례에 남는다
 
 
@@ -153,7 +153,7 @@ def test_repeat_follows_intensity_preset():
     for level, count in (("low", 3), ("high", 5)):
         run = _run(fmt, "text_corner", sources, intensity=level)
         steps = []
-        while (s := run.next_step(0)) is not None:
+        while (s := run.next_step()) is not None:
             steps.append(s.step.kind)
         assert steps.count("text_read") == count
 
@@ -165,7 +165,7 @@ def test_text_corner_opens_with_one_message():
     assert sources.satisfies(fmt.corner("text_corner"))
     run = _run(fmt, "text_corner", sources)
     steps = []
-    while (s := run.next_step(0)) is not None:
+    while (s := run.next_step()) is not None:
         steps.append(s.step.glue or s.step.kind)
     assert steps == ["call", "text_read", "close"]
 
@@ -173,10 +173,10 @@ def test_text_corner_opens_with_one_message():
 def test_news_items_are_not_repeated_and_feed_recap():
     fmt = _fmt("news")
     sources = _sources(news=4)
-    headline = _run(fmt, "headline", sources).next_step(0)
+    headline = _run(fmt, "headline", sources).next_step()
     assert len(headline.items) == 3
     section = _run(fmt, "section", sources)
-    titles = [s.items[0]["title"] for s in iter(lambda: section.next_step(0), None)]
+    titles = [s.items[0]["title"] for s in iter(lambda: section.next_step(), None)]
     assert titles == ["기사 3"]  # 헤드라인에서 전한 기사는 다시 꺼내지 않는다
     assert sources.covered_news == ["기사 0", "기사 1", "기사 2", "기사 3"]
     assert sources.satisfies(fmt.corner("recap"))

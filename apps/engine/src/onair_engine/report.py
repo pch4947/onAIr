@@ -113,9 +113,13 @@ def station_report(sqlite_path: str | Path, station_id: str, run: int = -1) -> d
 
     corners: dict[str, dict] = {}
     open_runs: dict[str, int] = {}
-    durations: dict[str, list[float]] = {}
+    durations: dict[str, list[float]] = {}  # exit − enter — length가 없는 예전 DB용. 앞 곡이 섞인다
+    lengths: dict[str, list[float]] = {}  # 코너가 낸 멘트 길이 (#220)
     for corner, event, produced_ms in q("SELECT corner_type, event, produced_ms FROM corner_log "
                                         "WHERE station_id = ? {w} ORDER BY rowid"):
+        if event == "length":
+            lengths.setdefault(corner, []).append(produced_ms / 1000)
+            continue
         counts = corners.setdefault(corner, {"enter": 0, "exit": 0, "skip": 0, "fallback": 0})
         counts[event] = counts.get(event, 0) + 1
         if event == "enter":
@@ -123,7 +127,7 @@ def station_report(sqlite_path: str | Path, station_id: str, run: int = -1) -> d
         elif event == "exit" and corner in open_runs:
             durations.setdefault(corner, []).append((produced_ms - open_runs.pop(corner)) / 1000)
     for corner, counts in corners.items():
-        counts["produced_sec"] = _spread(durations.get(corner, []))
+        counts["produced_sec"] = _spread(lengths.get(corner) or durations.get(corner, []))
     turns = sum(c["enter"] + c["skip"] for c in corners.values())
     corner_rates = {
         # 대체는 원래 코너의 차례가 대체 코너 진입으로 이어진 것이다 — 진입 수에 이미 들어 있다

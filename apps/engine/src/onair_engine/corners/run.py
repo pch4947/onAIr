@@ -149,11 +149,15 @@ class CornerRun:
     """코너 1회. 단계를 차례로 내놓고, 항목이 떨어지거나 예산을 넘으면 그 단계를 끝낸다."""
 
     def __init__(self, entry: ClockEntry, *, sources: MaterialSources, intensity: Intensity,
-                 thread: Thread, started_ms: int):
+                 thread: Thread):
         self.spec = entry.corner
         self.label = entry.label
         self.thread = thread
-        self.started_ms = started_ms  # 진입 시점의 누적 제출 오디오 — 예산 계산 기준
+        # 이 코너가 낸 멘트 길이 — 예산 기준 (#220). 방송 누적량으로 재면 앞 코너에서 소개한 곡이
+        # 이 코너가 편성된 뒤에 제출되면서 곡 길이가 이 코너 몫으로 잡힌다
+        self.spent_ms = 0
+        self.pending = 0  # 생성 중인 세그먼트 — 0이 되고 closed면 코너 길이가 확정된다
+        self.closed = False  # 남은 단계가 없다 (corner_log exit)
         self.step_index = 0
         self.steers = 0  # 코너당 화제 전환 횟수 (참여 강도 steer_limit)
         self.aggregated = False  # 집계 언급은 코너당 1회 (CORNER_DESIGN 9.2절)
@@ -161,9 +165,9 @@ class CornerRun:
         self._intensity = intensity
         self._done_in_step = 0
 
-    def next_step(self, produced_ms: int) -> PlannedStep | None:
+    def next_step(self) -> PlannedStep | None:
         """다음 단계. None이면 코너 종료."""
-        over_budget = (produced_ms - self.started_ms) / 1000 >= self.spec.budget_sec[1]
+        over_budget = self.spent_ms / 1000 >= self.spec.budget_sec[1]
         while self.step_index < len(self.spec.steps):
             step = self.spec.steps[self.step_index]
             # 예산을 넘었으면 남은 단계는 건너뛰되, 마무리 문구(glue close)와 곡 소개는 남긴다
@@ -183,14 +187,14 @@ class CornerRun:
             return PlannedStep(self.spec, step, items, self.label)
         return None
 
-    def can_steer(self, limit: int, produced_ms: int) -> bool:
+    def can_steer(self, limit: int) -> bool:
         """횟수 상한 미만이고, 바뀐 화제로 이야기할 단계와 그 시간이 남았다 (CORNER_DESIGN 5.2절)."""
         if self.steers >= limit:
             return False
         step = self._next_topic_step()
         if step is None:
             return False
-        left_sec = self.spec.budget_sec[1] - (produced_ms - self.started_ms) / 1000
+        left_sec = self.spec.budget_sec[1] - self.spent_ms / 1000
         return left_sec >= STEP_KINDS[step.kind].seconds[0]
 
     def _next_topic_step(self) -> StepSpec | None:

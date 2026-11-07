@@ -131,6 +131,7 @@ class Scheduler:
         self._seq = 0
         self._next_pub = 0
         self._ready: dict[int, tuple[SegmentSubmission | None, int, Anchor | None]] = {}
+        self._seq_run: dict[int, CornerRun] = {}  # 순번 → 그것을 편성한 코너 (코너 예산 — #220)
         self._pub_lock = asyncio.Lock()
 
     @property
@@ -360,11 +361,10 @@ class Scheduler:
                 topic = entry.label or self.topic
                 self._run_anchor = None
                 self._run = CornerRun(entry, sources=self.sources, intensity=self.intensity,
-                                      thread=Thread(topic=topic, keywords=sorted(keywords(topic))),
-                                      started_ms=self._produced_ms)
+                                      thread=Thread(topic=topic, keywords=sorted(keywords(topic))))
                 self.telemetry.log_corner(entry.corner.corner_type, entry.label, "enter",
                                           self._produced_ms, entry.corner.title)
-            planned = self._run.next_step(self._produced_ms)
+            planned = self._run.next_step()
             if planned is not None:
                 if planned.step.kind == "glue" and self.glue.get(
                         planned.corner.corner_type, planned.step.glue) is None:
@@ -372,6 +372,9 @@ class Scheduler:
                 return planned
             self.telemetry.log_corner(self._run.spec.corner_type, self._run.label, "exit",
                                       self._produced_ms, self._run.spec.title)
+            self._run.closed = True
+            if self._run.pending == 0:  # 생성 중인 것이 남았으면 마지막 것이 끝날 때 기록한다
+                self._log_corner_length(self._run)
             self._run = None
             empty += 1
             if empty >= _MAX_EMPTY_CORNERS:
@@ -489,7 +492,7 @@ class Scheduler:
         if not material.quotes or self._run is None:
             return
         rule = steer_rule(material.quotes[0].body, self.chat_rules, self.config.profile.dj_name)
-        if rule and self._run.can_steer(self.intensity.steer_limit, self._produced_ms):
+        if rule and self._run.can_steer(self.intensity.steer_limit):
             material.extra["steer"] = rule
             self._steer_pending = True
 
@@ -660,11 +663,30 @@ class Scheduler:
     def _reserve(self) -> int:
         seq = self._seq
         self._seq += 1
+        if self._run is not None:  # 이 순번을 편성한 코너 — 끝나면 그 코너의 예산에 더한다
+            self._seq_run[seq] = self._run
+            self._run.pending += 1
         return seq
+
+    def _spend(self, seq: int, sub: SegmentSubmission | None) -> None:
+        """순번 seq의 멘트 길이를 그것을 편성한 코너에 더한다. 곡 길이는 넣지 않는다 (#220)."""
+        run = self._seq_run.pop(seq, None)
+        if run is None:
+            return
+        run.pending -= 1
+        if sub is not None:
+            run.spent_ms += sub.duration_ms
+        if run.closed and run.pending == 0:
+            self._log_corner_length(run)
+
+    def _log_corner_length(self, run: CornerRun) -> None:
+        self.telemetry.log_corner(run.spec.corner_type, run.label, "length", run.spent_ms,
+                                  run.spec.title)
 
     async def _complete(self, seq: int, sub: SegmentSubmission | None, track_ms: int = 0,
                         anchor: Anchor | None = None) -> None:
         """순번 seq의 결과를 받아, 앞 순번이 다 나갔으면 차례대로 제출한다."""
+        self._spend(seq, sub)
         self._ready[seq] = (sub, track_ms, anchor)
         async with self._pub_lock:
             while self._next_pub in self._ready:

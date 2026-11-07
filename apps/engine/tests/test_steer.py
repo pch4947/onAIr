@@ -38,23 +38,24 @@ def _run(corner="topic_talk") -> CornerRun:
     fmt = load_format("talk", ROOT / "config" / "formats")
     sources = MaterialSources(tracks=TrackSource(), rss=RssCollector())
     return CornerRun(ClockEntry(fmt.corner(corner)), sources=sources, intensity=fmt.intensity["mid"],
-                     thread=Thread(), started_ms=0)
+                     thread=Thread())
 
 
 def test_can_steer_needs_count_budget_and_a_remaining_talk_step():
     run = _run()
-    while run.next_step(0).step.kind != "talk_open":  # call → talk_open
+    while run.next_step().step.kind != "talk_open":  # call → talk_open
         pass
-    assert run.can_steer(1, 0)
-    assert not run.can_steer(0, 0)  # 참여 강도 low
+    assert run.can_steer(1)
+    assert not run.can_steer(0)  # 참여 강도 low
     run.steers = 1
-    assert not run.can_steer(1, 0)  # 상한
+    assert not run.can_steer(1)  # 상한
     run.steers = 0
-    budget_ms = run.spec.budget_sec[1] * 1000
-    assert not run.can_steer(1, budget_ms - 1000)  # 한 단계 시간이 안 남았다
+    run.spent_ms = run.spec.budget_sec[1] * 1000 - 1000
+    assert not run.can_steer(1)  # 한 단계 시간이 안 남았다
+    run.spent_ms = 0
     for _ in range(3):
-        assert run.next_step(0).step.kind == "talk"
-    assert not run.can_steer(1, 0)  # 마지막 이야기 — 바뀐 화제로 말할 단계가 없다
+        assert run.next_step().step.kind == "talk"
+    assert not run.can_steer(1)  # 마지막 이야기 — 바뀐 화제로 말할 단계가 없다
 
 
 def test_prompt_announces_steer_only_when_marked():
