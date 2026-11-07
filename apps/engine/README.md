@@ -205,6 +205,36 @@ python -m onair_engine.report st_local_dev --json      # 원자료
 - **코너 길이**: 엔진이 그 코너를 편성하는 동안 제출한 오디오 길이입니다. 엔진은 송출보다 앞서 동시에 생성하므로 실제로 들린 길이와 다를 수 있습니다.
 - **건너뜀 횟수**: 소재를 기다리는 동안 같은 코너의 건너뜀은 한 번만 기록됩니다.
 
+### 시나리오 반복 실행 (`onair-scenario`)
+
+같은 조건의 방송을 여러 번 돌려 문제를 찾고, 고친 뒤 전후를 비교합니다. 엔진은 실제 LLM으로 **실시간** 실행하고, 백엔드 송출과 TTS는 흉내 냅니다. 엔진의 인용 간격·후보 창·방송 종료가 실제 시계로 돌기 때문에 시간을 압축하지 않습니다.
+
+```powershell
+# 1차 시나리오 5개 × 5회, 동시 10회 (기본값: 방송 30분, LLM gpt-6-luna)
+python -m onair_engine.scenario config/scenarios/quiet.yaml config/scenarios/sparse.yaml `
+  config/scenarios/demo.yaml config/scenarios/flood.yaml config/scenarios/adversarial.yaml
+python -m onair_engine.scenario config/scenarios/demo.yaml --llm dummy --minutes 8 --repeat 1  # 도구 점검, 무료
+python -m onair_engine.scenario config/scenarios/sparse.yaml --persona config/personas/dodo.yaml  # 페르소나 비교
+python -m onair_engine.scenario config/scenarios/demo.yaml --tts gemini --repeat 1 --yes  # 실제 TTS
+```
+
+- **흉내 내는 것**
+  - 백엔드: 실제 길이만큼 재생하고 PUBLISHED·`segment.started`(방송 지연 포함)를 보낸다. 남은 분량을 보고하고, 다음 곡과 신청곡을 알린다
+  - TTS: 글자 수에 비례하는 무음. 지연은 2026-11-02 Gemini 실측(오디오 4초 → 약 7초, 25초 → 약 14초)을 잇는 식이다
+  - Redis, HLS 플레이어 지연, 실제 발음은 흉내 내지 않습니다
+- **시나리오 파일** (`config/scenarios/*.yaml`)
+  - 방송 설정, 흉내 값(`sim`), 시각별 입력(`inputs`), 배경 채팅(`chatter`), 게시판 사연을 적습니다
+  - 기대 결과(`expect`)를 적으면 회차마다 통과 여부를 판정합니다: `reflected`, `aired_contains`, `not_aired`, `max_silence_sec`, `max_fallback`
+- **출력** (`var/scenario/<실행 시각>/<시나리오>/`)
+  - `run-N/transcript.md`: 송출 시각 순 대본. 코너, 들어온 입력, 반영된 입력, 무음, 곡을 함께 보여 줍니다
+  - `run-N/report.md`: `onair-report` 지표, 무음, 기대 결과
+  - `run-N/run.json`: 재현 정보 — 시나리오, seed, git 커밋, LLM
+  - `summary.md`: 회차별 핵심 지표, 기대 결과 통과 회차
+  - `issues.csv`: 빈 문제 기록표
+  - `--tts gemini`: 회차마다 멘트 오디오 재생 목록 `broadcast.m3u` (곡은 없습니다)
+- **비용**: 실제 LLM을 쓰면 시작 전에 예상 호출 수를 보여 주고 확인을 받습니다(`--yes`로 생략). 30분 방송 1회의 LLM 비용은 약 1~2센트로 추정합니다(2026-11-07 실측: 호출당 입력 약 630~930, 출력 약 130토큰)
+- **한계**: 회차가 실시간으로 돌기 때문에 30분 방송은 30분 걸립니다. 동시 실행 수(`--parallel`)를 늘리면 전체 시간이 줄어듭니다. 엔진이 끝난 뒤 대기열에 남은 송출은 기다리지 않고 기록만 합니다
+
 ### 오디오 파일 관리
 
 - 모든 TTS 출력은 `audio.CachedTts`를 거칩니다.
