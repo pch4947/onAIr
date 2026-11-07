@@ -96,7 +96,8 @@ def _opener_context(m: Material) -> str:
 def _talk_open(m: Material) -> str:
     text = "오늘의 주제로 이야기를 꺼내는 멘트를 3문장 이내로 작성하라."
     if m.extra.get("angle"):
-        text += " 주제를 한 번 소개하고, 아래 이번 갈래로 이야기를 시작한다."
+        # 오프닝(topic_intro)이 주제를 이미 소개했다 — 2026-11-07 실행에서 바로 뒤에 한 번 더 소개했다
+        text += " 주제는 오프닝에서 이미 소개했으니 다시 소개하지 않고, 아래 이번 갈래로 바로 시작한다."
     return _with_topic(text + _opener_context(m), m) + _angle(m)
 
 
