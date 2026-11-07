@@ -11,6 +11,7 @@ class SongRequestTests(unittest.TestCase):
     def test_requester_name_is_filtered_before_track_is_used(self):
         engine = StationEngine.__new__(StationEngine)
         engine.tracks = Mock()
+        engine.telemetry = Mock()
         engine._safety = Mock()
         engine._safety.check_l0.side_effect = lambda text: 'unsafe' if 'https://' in text else None
         track = {'track_ref': 'yt:test', 'title': '곡', 'artist': '가수'}

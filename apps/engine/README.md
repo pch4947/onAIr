@@ -236,6 +236,7 @@ onair-engine --api --llm openai --llm-model gpt-6-luna   # 실제 LLM으로 초�
 | `GET /v1/voices` | 폼의 보이스 선택지 — Gemini 보이스 중 한국어로 표시된 것. `?native_only=false`면 전체 |
 | `GET /v1/engine/status` | 떠 있는 방, 진행 중 생성 수, 최근 10분 생성 지연 P95 |
 | `GET /v1/stations/{id}/decisions?after=&limit=` | 결정 로그 페이지 (`next`를 다음 `after`로) |
+| `GET /v1/stations/{id}/events?after=&limit=` | 엔진 패널 이벤트 — 화면에 쓸 `summary`와 구조화 `data` (`event_log`) |
 | `GET /health` | 프로세스 생존 (인증 없음) |
 
 - **더미 LLM(`pipeline.llm: dummy`)도 초안을 돌려줍니다.** API 키 없이 프론트·백엔드가 방 생성 흐름을 개발할 수 있습니다.

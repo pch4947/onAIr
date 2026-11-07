@@ -55,7 +55,22 @@ CREATE TABLE IF NOT EXISTS story_judge_log (
 CREATE TABLE IF NOT EXISTS aired_log (
     station_id TEXT, segment_id TEXT, at REAL, script TEXT
 );
+CREATE TABLE IF NOT EXISTS event_log (
+    station_id TEXT, at REAL, kind TEXT, summary TEXT, data_json TEXT
+);
 """
+
+# 이벤트 요약 문구 — 엔진 패널에 그대로 보인다 (계약 6.1절 events)
+_STAGES = {"llm": "LLM", "l1": "LLM 거부", "quote": "인용", "l2": "안전 검사", "tts": "TTS",
+           "fallback": "대체 멘트로 전환"}
+_KINDS = {"chat": "채팅", "story": "채팅", "mood": "채팅", "message": "문자", "song_request": "신청곡",
+          "board_story": "게시판 사연"}
+_ROUTES = {"pool": "채팅 후보", "inbox": "문자 받은편지함", "song_request": "곡 대기",
+           "story_pool": "사연 후보", "not_on_air": "방송 미반영"}
+_CORNER_EVENTS = {"enter": "코너 진입", "exit": "코너 종료", "skip": "코너 건너뜀",
+                  "fallback": "코너 대체"}
+_CRITERIA = {"recency": "최신순", "relevance": "주제 관련", "diversity": "다양성"}
+_EXCERPT = 40
 
 
 def _dump(obj) -> str:
@@ -89,6 +104,37 @@ def read_decisions(sqlite_path: str | Path, station_id: str, after: int = 0,
                  (station_id, after, limit))
     return [{"id": rowid, "at": at, "context": json.loads(ctx), "decision": json.loads(dec)}
             for rowid, at, ctx, dec in rows]
+
+
+def read_events(sqlite_path: str | Path, station_id: str, after: int = 0,
+                limit: int = 100) -> list[dict]:
+    """엔진 이벤트 페이지 — 엔진 패널용. rowid가 커서다 (계약 6.1절)."""
+    path = Path(sqlite_path)
+    if not path.exists():
+        return []
+    rows = _read(path, "SELECT rowid, at, kind, summary, data_json FROM event_log "
+                       "WHERE station_id = ? AND rowid > ? ORDER BY rowid LIMIT ?",
+                 (station_id, after, limit))
+    return [{"id": rowid, "at": at, "kind": kind, "summary": summary, "data": json.loads(data)}
+            for rowid, at, kind, summary, data in rows]
+
+
+def _stage_text(s: dict) -> str:
+    name = _STAGES.get(s["stage"], s["stage"])
+    if s["result"] == "error":
+        return f"{name} 실패"
+    if s["stage"] == "l2":
+        return "안전 검사 통과" if s["result"] == "ok" else "안전 검사 차단"
+    if s["stage"] in ("l1", "fallback"):
+        return name
+    if s["stage"] == "quote":
+        return "인용 확인" if s["result"] == "ok" else "인용 누락"
+    return f"{name} {s['elapsed_sec']:.1f}초"
+
+
+def _excerpt(text: str) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= _EXCERPT else text[:_EXCERPT] + "…"
 
 
 def recent_latency_p95_ms(sqlite_path: str | Path, window_sec: float = 600.0) -> int | None:
@@ -145,6 +191,14 @@ class Telemetry:
                 self._db.execute(f"ALTER TABLE input_log ADD COLUMN {column} TEXT")
         self._db.commit()
         self.station_id = station_id
+        self.corner_titles: dict[str, str] = {}  # 패널 요약에 쓸 코너 이름 — 엔진이 형식에서 채운다
+        self._jobs: dict[str, list[dict]] = {}  # 끝나지 않은 생성 작업의 단계 기록
+
+    def _event(self, kind: str, summary: str, /, **data) -> None:
+        """엔진 패널용 이벤트 — 다른 기록과 같은 트랜잭션으로 넣는다. 내부 ID(requester_ref)는 넣지 않는다."""
+        self._db.execute("INSERT INTO event_log VALUES (?,?,?,?,?)",
+                         (self.station_id, time.time(), kind, summary,
+                          json.dumps(data, ensure_ascii=False, default=str)))
 
     def log_stage(self, *, job_id: str, corner_type: str, request_ref: str | None,
                   stage: str, started_at: float, finished_at: float, result: str) -> None:
@@ -153,6 +207,15 @@ class Telemetry:
             (job_id, self.station_id, corner_type, request_ref,
              stage, started_at, finished_at, result),
         )
+        # 패널에는 세그먼트 하나를 한 줄로 — 동시 생성의 단계들이 섞이지 않게 끝날 때 모아서 남긴다
+        stages = self._jobs.setdefault(job_id, [])
+        stages.append({"stage": stage, "result": result, "elapsed_sec": round(finished_at - started_at, 3)})
+        if (stage in ("tts", "fallback") and result != "error") or result == "reject":
+            del self._jobs[job_id]
+            parts = [_stage_text(s) for s in stages]
+            title = self.corner_titles.get(corner_type, corner_type)
+            self._event("generation", f"생성 · {title} · " + " · ".join(parts),
+                        job_id=job_id, corner_type=corner_type, request_ref=request_ref, stages=stages)
         self._db.commit()
 
     def log_request_state(self, request_id: str, state) -> None:
@@ -170,7 +233,8 @@ class Telemetry:
         )
         self._db.commit()
 
-    def log_corner(self, corner_type: str, label: str | None, event: str, produced_ms: int) -> None:
+    def log_corner(self, corner_type: str, label: str | None, event: str, produced_ms: int,
+                   title: str | None = None) -> None:
         """코너 진입(enter)·종료(exit)·건너뜀(skip)·대체(fallback) — 클락 수치 보정과 Q-03의 원천.
 
         produced_ms는 그 시점까지 제출한 오디오 누적 길이다. 코너의 실제 길이 = exit − enter.
@@ -179,6 +243,10 @@ class Telemetry:
             "INSERT INTO corner_log VALUES (?,?,?,?,?,?)",
             (self.station_id, time.time(), corner_type, label, event, produced_ms),
         )
+        name = " · ".join(p for p in (title or corner_type, label) if p)
+        reason = " (소재 없음)" if event in ("skip", "fallback") else ""
+        self._event("corner", f"{_CORNER_EVENTS.get(event, event)} · {name}{reason}",
+                    corner_type=corner_type, label=label, event=event, title=title)
         self._db.commit()
 
     def log_station(self, event: str, payload: dict) -> None:
@@ -187,6 +255,11 @@ class Telemetry:
             "INSERT INTO station_log VALUES (?,?,?,?)",
             (self.station_id, time.time(), event, json.dumps(payload, ensure_ascii=False)),
         )
+        if event == "station.started":
+            self._event("station", f"방송 시작 · 주제 {payload.get('topic')}", event=event,
+                        topic=payload.get("topic"))
+        elif event != "station.created":  # 생성 원문은 persona 전체라 패널에 싣지 않는다
+            self._event("station", event, event=event)
         self._db.commit()
 
     def log_input(self, req, anchor_kind: str | None, route: str = "pool") -> None:
@@ -197,6 +270,10 @@ class Telemetry:
             (req.request_id, self.station_id, req.received_at, str(req.chat_type or req.kind), req.rule,
              req.anchor_id, anchor_kind, req.kind, route),
         )
+        self._event("input", f"입력 라우팅 · {_KINDS.get(req.kind, req.kind)} → {_ROUTES.get(route, route)}",
+                    request_id=req.request_id, kind=req.kind, route=route,
+                    chat_type=str(req.chat_type) if req.chat_type else None, rule=req.rule,
+                    body=_excerpt(req.body or ""))
         self._db.commit()
 
     def log_selection(self, selection, anchor_id: str | None) -> None:
@@ -206,6 +283,14 @@ class Telemetry:
              selection.arrivals, anchor_id, json.dumps(selection.candidates, ensure_ascii=False),
              json.dumps([r.request_id for r in selection.picked])),
         )
+        if selection.candidates:  # 후보가 없을 때마다 남기면 패널이 빈 선별로 덮인다
+            picked = ", ".join(f'"{_excerpt(r.body)}"' for r in selection.picked) or "없음"
+            criterion = _CRITERIA.get(selection.criterion, selection.criterion)
+            self._event("selection",
+                        f"채팅 선별 · 후보 {len(selection.candidates)}건 중 {picked} 선택 ({criterion})",
+                        situation=selection.situation, criterion=selection.criterion,
+                        candidates=len(selection.candidates),
+                        picked=[r.request_id for r in selection.picked])
         self._db.commit()
 
     def log_reflection(self, *, req, segment_id: str, started_at: float, quote_age_net: float,
@@ -226,6 +311,8 @@ class Telemetry:
             (request_id, self.station_id, segment_id, time.time(), corner_type, rule,
              old_topic, new_topic),
         )
+        self._event("steer", f"화제 전환 · {old_topic} → {new_topic}", request_id=request_id,
+                    segment_id=segment_id, rule=rule)
         self._db.commit()
 
     def log_aggregate(self, *, segment_id: str, kind: str, corner_type: str, keyword: str | None,
@@ -235,17 +322,43 @@ class Telemetry:
             "INSERT INTO aggregate_log VALUES (?,?,?,?,?,?,?,?)",
             (self.station_id, segment_id, time.time(), kind, corner_type, keyword, count, total),
         )
+        if kind == "aggregate":
+            summary = f"집계 언급 · \"{keyword}\" {count}명 / 전체 {total}명"
+        else:
+            summary = f"문자 코너 예고 · 받은편지함 {count}건"
+        self._event("aggregate", summary, kind=kind, segment_id=segment_id, keyword=keyword,
+                    count=count, total=total)
         self._db.commit()
 
     def log_story_judgement(self, story_id: str, relevant: bool, method: str) -> None:
         """게시판 사연 주제 관련도 — method는 llm 또는 keyword(LLM 실패 시 대체) (CORNER_DESIGN 5.4절)."""
         self._db.execute("INSERT INTO story_judge_log VALUES (?,?,?,?,?)",
                          (story_id, self.station_id, time.time(), int(relevant), method))
+        verdict = "관련 있음" if relevant else "관련 없음 → 후보 제외"
+        self._event("story_judge", f"사연 판정 · {verdict} ({method})", story_id=story_id,
+                    relevant=relevant, method=method)
+        self._db.commit()
+
+    def log_track(self, track: dict) -> None:
+        """다음 곡(track.queued) — 패널에만 남긴다. 곡 기록의 원본은 백엔드에 있다."""
+        title = " - ".join(str(track[k]) for k in ("title", "artist") if track.get(k))
+        requested = bool(track.get("request_id"))
+        self._event("track", f"{'신청곡 도착' if requested else '다음 곡'} · {title}",
+                    track_ref=track.get("track_ref"), request_id=track.get("request_id"),
+                    with_comment=bool(track.get("requester_comment")))
+        self._db.commit()
+
+    def log_rss(self, counts: dict[str, int], failed: int) -> None:
+        """기사 수집 결과 — 분야별 캐시 기사 수. 실패한 피드는 직전 결과를 유지한다."""
+        parts = ", ".join(f"{section} {n}건" for section, n in counts.items()) or "기사 없음"
+        self._event("rss", f"기사 수집 · {parts}" + (f" (피드 {failed}개 실패)" if failed else ""),
+                    counts=counts, failed=failed)
         self._db.commit()
 
     def log_aired(self, segment_id: str, at: float, script: str) -> None:
         self._db.execute("INSERT INTO aired_log VALUES (?,?,?,?)",
                          (self.station_id, segment_id, at, script))
+        self._event("aired", f"송출 · {_excerpt(script)}", segment_id=segment_id)
         self._db.commit()
 
     def close(self) -> None:

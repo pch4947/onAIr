@@ -102,6 +102,8 @@ class StationEngine:
             raise StationRejected("llm_unavailable", str(exc)) from exc
 
         self.telemetry = Telemetry(settings.sqlite_path, config.station_id)
+        self.telemetry.corner_titles = {"filler": "대체 멘트",
+                                        **{name: spec.title for name, spec in fmt.corners.items()}}
         if config.snapshot is not None:
             self.telemetry.log_station("station.created", config.snapshot)
         # 제출 페이로드의 audio_ref는 이 루트 기준 상대 경로로 나간다 (설계 문서 5.1)
@@ -124,7 +126,7 @@ class StationEngine:
                        for code in config.news_sections or fmt.default_sections
                        for entry in news_feeds.feeds.get(code, [])],
                 poll_sec=news_feeds.poll_sec, max_age_sec=news_feeds.max_age_hours * 3600,
-                violates=safety.check_l0,
+                violates=safety.check_l0, on_refresh=self.telemetry.log_rss,
             )
         self.sources = MaterialSources(
             tracks=self.tracks, rss=self.rss,
@@ -207,6 +209,7 @@ class StationEngine:
         if payload.get("source") == "request" and payload.get("request_id"):
             self.scheduler.attach_song_request(track, payload["request_id"])
         self.tracks.queue(track)
+        self.telemetry.log_track(track)
 
     def on_board_story(self, payload: dict) -> None:
         """게시판 사연 후보 (계약 3.5절). L0를 통과한 것만 풀에 넣는다. 내부 ID는 프롬프트에 넣지 않는다."""

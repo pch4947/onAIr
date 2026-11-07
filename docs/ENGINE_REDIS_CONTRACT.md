@@ -349,6 +349,7 @@ DJ가 실제 곡의 끝부분·인트로 위에 겹쳐 말하고 그동안 곡 �
 | `GET /v1/engine/status` | 전역 상태 — 기동 스테이션 수, 동시 생성 여유, 지연 P95 | 하트비트는 스테이션 단위라 전역 합계가 없음 | 구현 — 스테이션별 진행 중 생성·대기 요청 수, 최근 10분 생성 지연(LLM+L2+TTS) P95. **전역** 동시 생성 상한은 아직 없어 방당 상한(`max_concurrent_per_station`)을 보낸다 |
 | `GET /v1/voices?native_only=true` | 방 생성 폼의 보이스 선택지 — `{"provider", "voices": [{"id", "name", "gender", "description", "native"}]}`. 기본은 한국어 원어민 보이스만, `false`면 한국어를 말하는 다국어 보이스도 | 보이스 목록은 TTS 제공자에 달려 있고 엔진만 키를 가진다 | 구현 (#64) — 10분 캐시, 더미 TTS면 개발용 보이스 2개 |
 | `GET /v1/stations/{stationId}/decisions` | 결정 로그 (생략 결정 포함) | 초당 1.5건 규모라 스트림에 실을 수 없음. 정책 비교 실험의 핵심 데이터 | 구현 — `?after={id}&limit={1~500}` → `{"decisions": [{"id", "at", "context", "decision"}], "next"}`. `next`가 `null`이면 끝. 끝난 방송도 조회된다 |
+| `GET /v1/stations/{stationId}/events` | 엔진 패널(데모 테스트 화면)용 이벤트 — 방송 시작, 코너 진입·종료·건너뜀·대체, 입력 라우팅, 채팅 선별, 생성 단계별 시간, 사연 판정, 화제 전환, 집계 언급, 다음 곡, 기사 수집, 송출 | 엔진 안에서만 보이는 판단 과정이라 백엔드가 알 수 없음. 결정 로그와 같은 이유로 스트림에 싣지 않는다 | 구현 (#208) — `?after={id}&limit={1~500}` → `{"events": [{"id", "at", "kind", "summary", "data"}], "next"}`. `summary`는 화면에 그대로 쓸 한국어 문장, `data`는 구조화 값. 폴링은 마지막 `id`를 `after`로 넘긴다. 청취자 내부 ID(`requester_ref`)는 싣지 않고, 입력 본문은 40자까지 싣는다 |
 
 ### 6.2 persona 초안 생성 (POST — 결정 2026-10-08로 추가)
 

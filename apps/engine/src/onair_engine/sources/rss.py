@@ -168,8 +168,10 @@ class RssCollector:
     def __init__(self, items: list[FeedItem] | None = None, *, feeds: Iterable[Feed] = (),
                  poll_sec: float = 600.0, max_age_sec: float = 86400.0,
                  violates: Callable[[str], object] | None = None,
-                 fetch: Callable[[str], bytes] | None = None):
+                 fetch: Callable[[str], bytes] | None = None,
+                 on_refresh: Callable[[dict[str, int], int], None] | None = None):
         self.feeds = list(feeds)
+        self._on_refresh = on_refresh  # (분야별 기사 수, 실패한 피드 수) — 엔진 패널 이벤트
         self.ready = asyncio.Event()  # 첫 수집이 끝났다 (성공 여부와 무관)
         self._cache: list[FeedItem] = list(items or [])
         self._fixed = list(items or [])
@@ -197,12 +199,19 @@ class RssCollector:
         """모든 피드를 한 번 읽어 캐시를 바꾼다. 캐시의 기사 수를 돌려준다."""
         results = await asyncio.gather(*(self._read(f) for f in self.feeds),
                                        return_exceptions=True)
+        failed = 0
         for feed, result in zip(self.feeds, results):
             if isinstance(result, BaseException):
+                failed += 1
                 logger.warning("RSS 수집 실패 %s: %r", feed.url, result)
             else:
                 self._by_url[feed.url] = result
         self._cache = self._fixed + self._rebuild()
+        if self._on_refresh is not None:
+            counts: dict[str, int] = {}
+            for it in self._cache:
+                counts[it.section or "기타"] = counts.get(it.section or "기타", 0) + 1
+            self._on_refresh(counts, failed)
         return len(self._cache)
 
     async def run(self) -> None:
