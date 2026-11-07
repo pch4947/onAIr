@@ -15,6 +15,7 @@ api = ["fastapi>=0.115", "uvicorn>=0.30"]  # 엔진 REST (--serve, --api) — �
 onair-engine = "onair_engine.main:cli"
 onair-eval = "onair_engine.eval.runner:cli"
 onair-report = "onair_engine.report:cli"
+onair-scenario = "onair_engine.scenario.runner:cli"
 
 [build-system]
 requires = ["setuptools>=69"]

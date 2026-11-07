@@ -1,0 +1,28 @@
+# 청취자 2~3명이 가끔 보내는 방송 — 적은 입력을 자연스럽게 살리는지, 흐름이 끊기는지 (회의 4번)
+name: sparse
+description: 청취자 3명. 채팅 몇 개, 문자 2개, 신청곡 1개, 게시판 사연 4개(1개는 주제와 무관).
+station:
+  format: talk
+  corners: [topic_talk, text_corner, story_corner]
+  intensity: mid
+  topic: 겨울 간식
+board_stories:
+  - {body: "퇴근길에 붕어빵 세 개 사서 집까지 걸으면서 다 먹었어요. 손이 따뜻해서 좋았어요.", nickname: 밤샘러}
+  - {body: "엄마가 군고구마를 구워 주셨는데 어릴 때 할머니 댁 생각이 났어요.", nickname: 고구마}
+  - {body: "호빵 데우다가 전자레인지에서 터져서 한참 닦았어요.", nickname: null}
+  - {body: "강아지가 산책을 너무 좋아해서 하루에 세 번 나가요.", nickname: 산책러}
+inputs:
+  - {at: "1:30", kind: chat, who: a, body: "오늘 너무 피곤해요", id: tired}
+  - {at: "3:00", kind: message, who: b, nickname: 퇴근길, body: "회사 앞에 호떡 노점이 새로 생겼어요. 내일도 가 보려고요.", id: hotteok}
+  - {at: "4:30", kind: chat, who: c, body: "붕어빵은 팥이죠"}
+  - {at: "6:00", kind: song_request, who: a, nickname: 피곤한직장인, title: 첫눈, artist: 가상의 가수, body: "눈 오는 날 생각나서요", id: song}
+  - {at: "9:00", kind: chat, who: b, body: "저도 퇴근 중이에요"}
+  - {at: "12:00", kind: message, who: c, nickname: 겨울좋아, body: "어묵 국물 한 컵이면 겨울도 괜찮은 것 같아요.", id: eomuk}
+  - {at: "15:00", kind: chat, who: a, body: "DJ님은 겨울 간식 뭐 좋아하세요?"}
+  - {at: "22:00", kind: chat, who: c, body: "노래 좋다"}
+expect:
+  - {type: reflected, input: hotteok, note: 문자가 읽힌다}
+  - {type: reflected, input: eomuk, note: 두 번째 문자가 읽힌다}
+  - {type: not_aired, text: 강아지, note: 주제와 무관한 사연은 나가지 않는다}
+  - {type: max_fallback, value: 0, note: 대체 멘트 없음}
+  - {type: max_silence_sec, value: 5, note: 긴 무음 없음}
