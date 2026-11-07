@@ -184,6 +184,27 @@ python -m onair_engine.eval --persona config/personas/dodo.yaml --llm claude --j
 - `--judge`: 캐릭터(설정·예시와 같은 사람인가)·자연스러움·과제 수행을 1~5점으로 매기고, 캐릭터 2점 이하 비율을 **캐릭터 이탈률**(persona.md 7절)로 냅니다.
 - 자동 지표는 의심 신호입니다. 경고가 붙은 멘트와 전체 대본을 직접 읽고 판단하세요. 청취자 입력단 L0는 거치지 않습니다(L1·L2를 직접 시험하기 위해).
 
+### 방송 지표 리포트 (`onair-report`)
+
+방송이 끝난 뒤 계측 DB(`telemetry.sqlite_path`)에서 방송 1회의 지표를 뽑습니다. 읽기 전용입니다.
+
+```powershell
+python -m onair_engine.report                          # 방송 ID와 회차 수
+python -m onair_engine.report st_local_dev             # 마지막 회차 요약 (마크다운 표)
+python -m onair_engine.report st_local_dev --run 1     # 첫 회차. 음수는 뒤에서부터
+python -m onair_engine.report st_local_dev --json      # 원자료
+```
+
+- 지표
+  - 입력: 종류·경로별 건수, 요청 최종 상태
+  - 반영: 유형별 반영률, 제때 반영·화제 일치 비율, 반영까지 걸린 시간 중앙값·P95
+  - 코너: 진입·건너뜀·대체 횟수, 길이
+  - 생성: 단계별·세그먼트별 지연, 대체 멘트·거부·미완료
+  - 그 밖: 사연 판정, 화제 전환, 집계 언급·예고
+- **회차**: 백엔드는 같은 방송 ID를 다시 쓰므로 `station.created`(없으면 `station.started`)마다 회차를 나눕니다. 그 기록이 없는 예전 DB는 전체가 한 회차입니다.
+- **코너 길이**: 엔진이 그 코너를 편성하는 동안 제출한 오디오 길이입니다. 엔진은 송출보다 앞서 동시에 생성하므로 실제로 들린 길이와 다를 수 있습니다.
+- **건너뜀 횟수**: 소재를 기다리는 동안 같은 코너의 건너뜀은 한 번만 기록됩니다.
+
 ### 오디오 파일 관리
 
 - 모든 TTS 출력은 `audio.CachedTts`를 거칩니다.
