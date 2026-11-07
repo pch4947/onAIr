@@ -572,9 +572,13 @@ class Scheduler:
                 sub = await self.pipeline.run(job)
                 if any(req.request_id in self._discard for req in inputs):
                     sub = None  # 취소·철회됐다 — 만든 결과를 내보내지 않는다
+                    # 취소된 신청곡이 아니면 곡은 잘못이 없다 — 다음 곡 소개에 쓴다
+                    if not (job.feature and job.feature.request_id in self._discard):
+                        self._put_back_track(job)
                     await self._settle_discarded(inputs, job)
                     return
                 if sub is None:  # L1/L2 REJECT — 인용한 입력 때문일 수 있다
+                    self._put_back_track(job)
                     for req in inputs:
                         await self._transition(req, RequestState.REJECTED)  # F-15
                     return
@@ -593,6 +597,7 @@ class Scheduler:
             # 파이프라인이 재시도·filler 대체까지 했는데도 실패한 경우다 (TTS 전면 장애 등)
             logger.exception("GENERATION_FAILED %s %s/%s", job.job_id, job.corner_type, job.step)
             sub = None
+            self._put_back_track(job)
             for req in inputs:
                 if req.state == RequestState.GENERATING:
                     await self._requeue_or_reject(req, job)
@@ -605,6 +610,11 @@ class Scheduler:
             # 실패해도 순번은 비워야 뒤 순번이 나간다. 곡 길이는 백엔드가 실제로 틀 곡(music_ref)만 센다
             track_ms = int((job.material.track or {}).get("duration_ms") or 0)
             await self._complete(seq, sub, track_ms if sub and sub.music_ref else 0, job.anchor)
+
+    def _put_back_track(self, job: GenerationJob) -> None:
+        """곡 소개 멘트가 나가지 못했다 — 소개하려던 곡을 다음 곡 소개 차례로 돌린다 (#216)."""
+        if job.material.track:
+            self.sources.tracks.put_back(job.material.track)
 
     async def _settle_discarded(self, inputs: list[ListenerRequest], job: GenerationJob) -> None:
         for req in inputs:
