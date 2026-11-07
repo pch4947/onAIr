@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -14,6 +15,48 @@ from .telemetry import _read
 
 Q_MAX_SEC = 120.0  # 제때 반영 기준 — telemetry.reflection_summary와 같은 값 (CORNER_DESIGN 9.5절)
 _MATERIALS = {"chat": "채팅", "callback": "다시 꺼내기", "angle": "갈래", "topic": "주제만"}
+OPENING_CHARS = 5  # 첫머리 — 공백·문장부호를 뺀 앞 글자 수. "겨울 간식은 …"으로 계속 시작하는지 본다
+SIMILAR_WINDOW = 8  # 유사도를 견줄 직전 멘트 수 — 파이프라인이 LLM에 주는 직전 대본 수와 같다
+_NOT_WORD = re.compile(r"[\s\W_]+")
+
+
+def _normalize(text: str) -> str:
+    return _NOT_WORD.sub("", text)
+
+
+def _trigrams(text: str) -> set[str]:
+    t = _normalize(text)
+    return {t[i:i + 3] for i in range(len(t) - 2)}
+
+
+def script_stats(scripts: list[str], topic: str | None) -> dict:
+    """송출된 대본의 반복 지표 (#222) — 같은 말을 되풀이하는지, 주제를 처음부터 다시 꺼내는지.
+
+    - same_opening_rate: 첫머리(OPENING_CHARS)가 앞선 멘트와 같은 멘트의 비율
+    - similarity_mean: 멘트마다 직전 SIMILAR_WINDOW개 중 가장 비슷한 것과의 글자 3-gram 자카드 유사도 평균
+    - topic_intros: "오늘은 ○○ 이야기를 …"처럼 주제를 소개하는 멘트 수. 오프닝의 1번이 정상이다
+    """
+    if not scripts:
+        return {"segments": 0, "same_opening_rate": None, "similarity_mean": None, "topic_intros": None}
+    openings: set[str] = set()
+    same = 0
+    similarities: list[float] = []
+    grams = [_trigrams(s) for s in scripts]
+    for i, script in enumerate(scripts):
+        head = _normalize(script)[:OPENING_CHARS]
+        same += head in openings
+        openings.add(head)
+        previous = grams[max(0, i - SIMILAR_WINDOW):i]
+        if previous and grams[i]:
+            similarities.append(max(len(grams[i] & p) / len(grams[i] | p) for p in previous))
+    intros = None
+    if topic and _normalize(topic):
+        name = r"\s*".join(map(re.escape, _normalize(topic)))  # 띄어쓰기가 달라도 같은 주제다
+        intro = re.compile(rf"(오늘|이번)[^.?!]{{0,15}}{name}[^.?!]{{0,15}}(이야기|얘기)")
+        intros = sum(1 for s in scripts if intro.search(s))
+    return {"segments": len(scripts), "same_opening_rate": _ratio(same, len(scripts)),
+            "similarity_mean": round(sum(similarities) / len(similarities), 3) if similarities else None,
+            "topic_intros": intros}
 
 
 def _percentile(values: list[float], pct: int) -> float | None:
@@ -176,11 +219,14 @@ def station_report(sqlite_path: str | Path, station_id: str, run: int = -1) -> d
         "GROUP BY method, relevant")}
     steer = one("SELECT COUNT(*) FROM steer_log WHERE station_id = ? {w}", (0,))[0]
     aggregate = dict(q("SELECT kind, COUNT(*) FROM aggregate_log WHERE station_id = ? {w} GROUP BY kind"))
+    topic_name = json.loads(topic[0][0]).get("topic") if topic else None
+    # 접착 문구(고정 문구)는 대본 기록이 없다 — 일부러 같은 말을 하는 것이라 반복 지표에서 빠지는 게 맞다
+    scripts = [s for (s,) in q("SELECT script FROM aired_log WHERE station_id = ? {w} ORDER BY at")]
 
     return {
         "station_id": station_id,
         "run": {"index": run % len(runs), "count": len(runs)},
-        "topic": json.loads(topic[0][0]).get("topic") if topic else None,
+        "topic": topic_name,
         "started_at": started,
         "aired": {"segments": aired[2], "first_at": aired[0], "last_at": aired[1],
                   "span_sec": round(aired[1] - aired[0], 1) if aired[2] else None},
@@ -193,6 +239,7 @@ def station_report(sqlite_path: str | Path, station_id: str, run: int = -1) -> d
         "stories": stories,
         "steer": steer,
         "aggregate": aggregate,
+        "scripts": script_stats(scripts, topic_name),
     }
 
 
@@ -251,6 +298,13 @@ def render(report: dict) -> str:
     lines += [f"| {name} | {s['count']} | {_fmt(s['p50'])} | {_fmt(s['p95'])} |" for name, s in rows]
     material = ", ".join(f"{_MATERIALS.get(k, k)} {n}" for k, n in sorted(gen["talk_material"].items())) or "-"
     lines += ["", f"이야기 단계 소재: {material}"]
+
+    sc = r["scripts"]
+    lines += ["", "## 멘트", "", "| 지표 | 값 |", "|---|---|",
+              f"| 송출된 멘트 (고정 문구 제외) | {sc['segments']} |",
+              f"| 같은 첫머리로 시작한 멘트 | {_pct(sc['same_opening_rate'])} |",
+              f"| 직전 멘트와의 유사도 평균 (0~1) | {_fmt(sc['similarity_mean'])} |",
+              f"| 주제 소개 횟수 (1이 정상) | {_fmt(sc['topic_intros'])} |"]
 
     stories = ", ".join(f"{k} {n}" for k, n in sorted(r["stories"].items())) or "-"
     aggregate = ", ".join(f"{k} {n}" for k, n in sorted(r["aggregate"].items())) or "-"
