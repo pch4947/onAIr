@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from redis.exceptions import RedisError
 
 from .auth import get_current_user
+from .station_runtime import station_runtime
 from .stations import engine_call
 
 router = APIRouter(prefix='/api')
@@ -22,11 +23,10 @@ class CornerSkipInput(BaseModel):
     corner: str = Field(pattern=r'^[a-z][a-z0-9_]{0,39}$')
 
 
-def require_admin(user, station_id, state):
+def admin_station(user, request, station_id):
     if user.get('kind') != 'admin':
         raise HTTPException(403, 'Admin only')
-    if station_id != state.settings.station_id:
-        raise HTTPException(404, 'Station not found')
+    return station_runtime(request, station_id)
 
 
 def discardable_segments(publisher, ids, records):
@@ -52,8 +52,7 @@ def event_fields(kind, station_id, payload):
 @router.post('/stations/{station_id}/corner-skip', status_code=202)
 async def skip_corner(station_id: str, body: CornerSkipInput, request: Request, user: Admin):
     """지금 코너를 끝내고 고른 코너로 넘어가게 엔진에 요청한다. 202는 요청 접수이지 전환 완료가 아니다."""
-    state = request.app.state
-    require_admin(user, station_id, state)
+    state = admin_station(user, request, station_id)
     if not state.settings.hls_enabled:
         raise HTTPException(503, 'HLS is disabled')
     prefix = f'backend:{station_id}'
@@ -108,8 +107,7 @@ def public_decision(entry):
 async def list_decisions(station_id: str, request: Request, user: Admin,
                          after: Annotated[int | None, Query(ge=0)] = None):
     """지금 방송의 편성 결정. after 없이 부르면 이 방송 시작부터, next를 after로 넘기면 그 뒤부터."""
-    state = request.app.state
-    require_admin(user, station_id, state)
+    state = admin_station(user, request, station_id)
     try:
         async with asyncio.timeout(3):
             raw = await state.redis.get(f'backend:{station_id}:station')

@@ -10,6 +10,7 @@ from fastapi import Response
 from app.api import BroadcastState, stream_state
 from app.config import Settings
 from app.streaming.hls import HlsPublisher
+from test_presence import station_request
 
 
 class PlaybackMetadataTests(unittest.IsolatedAsyncioTestCase):
@@ -26,11 +27,11 @@ class PlaybackMetadataTests(unittest.IsolatedAsyncioTestCase):
             publisher.publish(first, 4, True)
             publisher.current = dict(id='next', corner_type='briefing', kind='speech', duration_ms=9000)
             publisher.publish(second, 4, True)
-            request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-                broadcast=BroadcastState(), hls=publisher, settings=settings,
-                redis=SimpleNamespace(get=AsyncMock(return_value=None)),
+            request = station_request(SimpleNamespace(
+                broadcast=BroadcastState(), settings=settings,
+                redis=SimpleNamespace(get=AsyncMock(return_value=None))), hls=publisher,
                 requests=SimpleNamespace(metrics=AsyncMock(return_value={})),
-                presence=SimpleNamespace(count=AsyncMock(return_value=0)))))
+                presence=SimpleNamespace(count=AsyncMock(return_value=0)))
             response = Response()
             result = await stream_state(request, response, first)
             self.assertEqual(result['stream']['currentSegment']['id'], 'opening')

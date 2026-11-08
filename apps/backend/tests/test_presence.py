@@ -11,6 +11,15 @@ from redis.exceptions import ConnectionError
 from app.api import BroadcastState, PresenceStore, stream_state
 from app.config import Settings
 from app.main import create_app
+from app.station_runtime import default_runtime
+
+
+def station_request(state, **objects):
+    """stream_state를 직접 부르는 가짜 요청. 방송별 객체는 기본 방송 런타임에 둔다."""
+    station = default_runtime(SimpleNamespace(state=state))
+    for name, value in objects.items():
+        setattr(station, name, value)
+    return SimpleNamespace(app=SimpleNamespace(state=state))
 
 
 class FakePresenceRedis:
@@ -72,7 +81,7 @@ class PresenceApiTests(unittest.IsolatedAsyncioTestCase):
         app = create_app(Settings("127.0.0.1", 3000))
         redis = FakePresenceRedis()
         app.state.redis = redis
-        app.state.presence = PresenceStore(redis, app.state.settings.station_id)
+        default_runtime(app).presence = PresenceStore(redis, app.state.settings.station_id)
         return app
 
     async def test_heartbeat_accepts_valid_client_id(self):
@@ -105,27 +114,27 @@ class PresenceApiTests(unittest.IsolatedAsyncioTestCase):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
             await client.post("/api/stations/st_local_dev/presence", json={"clientId": "u1"})
             await client.post("/api/stations/st_local_dev/presence", json={"clientId": "u2"})
-        count = await app.state.presence.count(time.time())
+        count = await default_runtime(app).presence.count(time.time())
         self.assertEqual(count, 2)
 
 
 class StreamStateViewerCountTests(unittest.IsolatedAsyncioTestCase):
     async def test_viewer_count_included_in_stream_state(self):
         settings = Settings('127.0.0.1', 3000)
-        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-            broadcast=BroadcastState(), settings=settings, hls=None,
-            redis=SimpleNamespace(get=AsyncMock(return_value=None)),
+        request = station_request(SimpleNamespace(
+            broadcast=BroadcastState(), settings=settings,
+            redis=SimpleNamespace(get=AsyncMock(return_value=None))), hls=None,
             requests=SimpleNamespace(metrics=AsyncMock(return_value={})),
-            presence=SimpleNamespace(count=AsyncMock(return_value=7)))))
+            presence=SimpleNamespace(count=AsyncMock(return_value=7)))
         result = await stream_state(request, Response())
         self.assertEqual(result['viewerCount'], 7)
 
     async def test_viewer_count_is_none_not_zero_on_redis_failure(self):
         settings = Settings('127.0.0.1', 3000)
-        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-            broadcast=BroadcastState(), settings=settings, hls=None,
-            redis=SimpleNamespace(get=AsyncMock(side_effect=ConnectionError('offline'))),
+        request = station_request(SimpleNamespace(
+            broadcast=BroadcastState(), settings=settings,
+            redis=SimpleNamespace(get=AsyncMock(side_effect=ConnectionError('offline')))), hls=None,
             requests=SimpleNamespace(metrics=AsyncMock(return_value={})),
-            presence=SimpleNamespace(count=AsyncMock(side_effect=ConnectionError('offline'))))))
+            presence=SimpleNamespace(count=AsyncMock(side_effect=ConnectionError('offline'))))
         result = await stream_state(request, Response())
         self.assertIsNone(result['viewerCount'])

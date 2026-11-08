@@ -9,6 +9,7 @@ from app.auth import get_current_user
 from app.config import Settings
 from app.main import create_app
 from app.music import search_candidates, TrackSearchInput
+from app.station_runtime import default_runtime
 
 
 def track(id='abcdefghijk', **changes):
@@ -39,7 +40,7 @@ class SearchApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_authenticated_listener_search_never_enqueues_and_uses_internal_auth(self):
         app = create_app(Settings('127.0.0.1', 3000, lavalink_password='internal-test'))
         app.state.redis = SimpleNamespace(get=AsyncMock(return_value=json.dumps(dict(owner_id='owner', status='started'))))
-        app.state.music = SimpleNamespace(enqueue=AsyncMock())
+        default_runtime(app).music = SimpleNamespace(enqueue=AsyncMock())
         path = '/api/stations/st_local_dev/tracks/search'
         upstream = AsyncMock()
         upstream.__aenter__.return_value = upstream
@@ -57,7 +58,7 @@ class SearchApiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(upstream.get.call_args.kwargs['headers'], {'Authorization': 'internal-test'})
                 self.assertFalse(factory.call_args.kwargs['follow_redirects'])
                 self.assertNotIn('internal-test', response.text)
-                app.state.music.enqueue.assert_not_awaited()
+                default_runtime(app).music.enqueue.assert_not_awaited()
                 upstream.get.side_effect = httpx.ReadTimeout('private')
                 self.assertEqual((await client.post(path, json={'query': 'song'})).status_code, 504)
                 upstream.get.side_effect = None

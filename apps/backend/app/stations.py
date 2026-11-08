@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from redis.exceptions import RedisError
 
 from .auth import get_broadcast_host, get_current_user
+from .station_runtime import default_runtime, station_runtime
 
 router = APIRouter(prefix='/api')
 User = Annotated[dict, Depends(get_current_user)]
@@ -185,7 +186,7 @@ class StationStore:
 
 def public_station(record, request):
     # Engine started does not imply HLS ready, and fallback readiness does not imply engine started.
-    hls = request.app.state.hls
+    hls = request.app.state.runtimes[record['station_id']].hls
     return {k: v for k, v in record.items() if k not in ('retry_key', 'fingerprint', 'owner_id', 'control_id')} | {
         'hls_ready': bool(request.app.state.settings.hls_enabled and hls.ready
                           and record['status'] not in ('stopping', 'cleaning', 'ended', 'rejected')),
@@ -198,29 +199,29 @@ async def create_station(body: StationInput, request: Request, user: Host,
     """Create the configured station once. 202 means queued, not live. Retry with the same key."""
     if body.persona.persona_id is not None:
         raise HTTPException(422, 'Submit a persona draft without persona_id; the backend assigns it')
+    # 채널 선택은 다중 방송 3단계. 지금은 기본 방송 하나에 만든다
+    station = default_runtime(request.app)
     try:
         async with asyncio.timeout(3):
-            lifecycle = getattr(request.app.state, 'lifecycle', None)
-            if lifecycle:
-                async with lifecycle.lock:
-                    record = await request.app.state.stations.create(body, user['id'], idempotency_key)
+            if station.lifecycle:
+                async with station.lifecycle.lock:
+                    record = await station.stations.create(body, user['id'], idempotency_key)
             else:
-                record = await request.app.state.stations.create(body, user['id'], idempotency_key)
+                record = await station.stations.create(body, user['id'], idempotency_key)
     except (RedisError, TimeoutError):
         raise HTTPException(503, 'Redis unavailable; retry with the same Idempotency-Key') from None
     from .first_song import ensure_first_song_task  # first_song imports this module
-    ensure_first_song_task(request.app.state, record)
+    ensure_first_song_task(station, record)
     return {'station': public_station(record, request)}
 
 
 @router.get('/stations/{station_id}')
 async def get_station(station_id: str, request: Request, response: Response, user: User):
     response.headers['Cache-Control'] = 'no-store'
-    if station_id != request.app.state.settings.station_id:
-        raise HTTPException(404, 'Station not found')
+    station = station_runtime(request, station_id)
     try:
         async with asyncio.timeout(3):
-            raw = await request.app.state.redis.get(request.app.state.stations.key)
+            raw = await request.app.state.redis.get(station.stations.key)
     except (RedisError, TimeoutError):
         raise HTTPException(503, 'Redis unavailable') from None
     if not raw or json.loads(raw)['owner_id'] != user['id']:
@@ -239,11 +240,10 @@ async def stop_station(station_id: str, body: StopInput, request: Request, user:
 
     Send the created_at from the owner lookup to avoid stopping a replacement broadcast.
     """
-    if station_id != request.app.state.settings.station_id:
-        raise HTTPException(404, 'Station not found')
+    station = station_runtime(request, station_id)
     try:
         async with asyncio.timeout(5):
-            record = await request.app.state.lifecycle.request_stop(user['id'], body.created_at)
+            record = await station.lifecycle.request_stop(user['id'], body.created_at)
     except (RedisError, TimeoutError):
         raise HTTPException(503, 'Cleanup unavailable; safely retry the same request') from None
     return {'station': public_station(record, request)}

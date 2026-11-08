@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from redis.exceptions import RedisError
 
 from .messaging.contracts import Segment, validate_audio
+from .station_runtime import station_runtime
 from .stations import User
 from .streaming.tracks import MUSIC_SEGMENT_PREFIX, REGISTER
 
@@ -88,9 +89,7 @@ async def track_queue(station_id: str, request: Request):
     from the shared queue by the time the HLS publisher consumes them, so this is
     naturally "what's left to play," not full history.
     """
-    settings = request.app.state.settings
-    if station_id != settings.station_id:
-        raise HTTPException(404, 'Station not found')
+    station_runtime(request, station_id)
     prefix = f'backend:{station_id}'
     try:
         async with asyncio.timeout(3):
@@ -106,8 +105,7 @@ async def track_queue(station_id: str, request: Request):
 @router.get('/{station_id}/tracks/access')
 async def track_access(station_id: str, request: Request, user: User):
     """Expose request readiness without exposing the host's private station record."""
-    if station_id != request.app.state.settings.station_id:
-        raise HTTPException(404, 'Station not found')
+    station_runtime(request, station_id)
     try:
         async with asyncio.timeout(3):
             raw = await request.app.state.redis.get(f'backend:{station_id}:station')
@@ -124,8 +122,7 @@ async def track_access(station_id: str, request: Request, user: User):
 async def search_tracks(station_id: str, body: TrackSearchInput, request: Request, user: User):
     """Search YouTube only; return up to three finite videos without downloading or enqueueing."""
     settings = request.app.state.settings
-    if station_id != settings.station_id:
-        raise HTTPException(404, 'Station not found')
+    station_runtime(request, station_id)
     try:
         async with asyncio.timeout(3):
             raw = await request.app.state.redis.get(f'backend:{station_id}:station')
@@ -414,8 +411,7 @@ async def enqueue_track(station_id: str, body: TrackInput, request: Request, use
     idempotency_key: Annotated[str, Header(min_length=1, max_length=128, pattern=r'^[A-Za-z0-9._:-]+$')]):
     """Prepare a single YouTube video and append it to the live queue; 202 is not playback confirmation."""
     settings = request.app.state.settings
-    if station_id != settings.station_id:
-        raise HTTPException(404, 'Station not found')
+    runtime = station_runtime(request, station_id)
     if not settings.hls_enabled:
         raise HTTPException(503, 'HLS is disabled')
     try:
@@ -427,10 +423,10 @@ async def enqueue_track(station_id: str, body: TrackInput, request: Request, use
         if station['status'] != 'started':
             raise HTTPException(409, 'Station must be started')
         if body.source == 'playlist' and body.request_id is None:
-            return await request.app.state.music.enqueue(youtube_id(body.url), user['id'], idempotency_key)
+            return await runtime.music.enqueue(youtube_id(body.url), user['id'], idempotency_key)
         nickname = None if body.anonymous else user.get('name')
-        return await request.app.state.music.enqueue(youtube_id(body.url), user['id'], idempotency_key,
-                                                     body.source, body.request_id, nickname, body.comment)
+        return await runtime.music.enqueue(youtube_id(body.url), user['id'], idempotency_key,
+                                          body.source, body.request_id, nickname, body.comment)
     except RedisError:
         raise HTTPException(503, 'Redis unavailable; retry with the same Idempotency-Key') from None
     except TimeoutError:

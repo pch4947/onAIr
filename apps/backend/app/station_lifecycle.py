@@ -66,11 +66,11 @@ return 1
 
 
 class StationLifecycle:
-    def __init__(self, app):
-        self.app = app
-        self.state = app.state
-        self.redis = app.state.redis
-        self.sid = app.state.settings.station_id
+    def __init__(self, station):
+        """station: StationRuntime (hls, replay_sessions, settings, engine_http를 쓴다)."""
+        self.state = station
+        self.redis = station.redis
+        self.sid = station.settings.station_id
         self.key = f'backend:{self.sid}:station'
         self.lock = asyncio.Lock()
         self.absences = 0
