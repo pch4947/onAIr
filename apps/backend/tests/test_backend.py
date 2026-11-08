@@ -112,7 +112,12 @@ class BackendTests(unittest.TestCase):
                           "/api/replays/{session_id}", "/api/stations/{station_id}/presence",
                           "/api/stations/{station_id}/tracks", "/api/stations/{station_id}/tracks/search",
                           "/api/notifications", "/api/notifications/{notification_id}/read",
-                          "/api/notifications/read-all", "/api/notifications/{notification_id}"})
+                          "/api/notifications/read-all", "/api/notifications/{notification_id}",
+                          "/api/stations/{station_id}/stream/state", "/api/stations/{station_id}/requests",
+                          "/api/stations/{station_id}/requests/{request_id}/state",
+                          "/api/stations/{station_id}/requests/{request_id}/history",
+                          "/api/stations/{station_id}/broadcast/queue",
+                          "/api/stations/{station_id}/broadcast/segments/{segment_id}/state"})
 
     def test_urgent_request_and_unsafe_buffer(self):
         args = dict(buffer_seconds=40, estimated_generation_seconds=30,

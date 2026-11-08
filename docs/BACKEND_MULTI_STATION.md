@@ -197,7 +197,7 @@ StationRuntime
 1. `StationRuntime` 도입 — 동작 변화 없이 `app.state`의 방송별 객체를 런타임 하나로 묶는다 (채널 1개) — 완료
 2. 채널 목록 설정과 채널별 런타임·task 시작·종료, 방송별 경로 검증을 채널 목록 기준으로, 엔진 상태 조회 공용 캐시 — 완료
 3. 생성 Lua(사용자당 1개·빈 채널 선택)와 `GET /api/stations`, `/api/stations/mine` — 완료
-4. 방송별 경로(6.1) 추가, 기존 경로는 기본 채널로
+4. 방송별 경로(6.1) 추가, 기존 경로는 기본 채널로 — 완료
 5. 게시판 사연을 모든 talk 채널로 보내고 읽히면 다른 채널에서 회수 (4.1절)
 6. 다시듣기 색인과 `GET /api/replays/mine`
 7. 프론트 전환 뒤 방송 ID 없는 경로 삭제, 문서([BACKEND_STATION_CREATION.md](BACKEND_STATION_CREATION.md) 등) 갱신

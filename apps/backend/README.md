@@ -144,6 +144,8 @@ macOS/Linux에서는 가상환경 실행 파일이 `.venv/bin/python`입니다.
 | POST /api/requests | 로그인 필수. prompt를 받아 202 반환. 청취자는 토큰으로 정하며 응답은 목록과 같은 형식 |
 | POST /api/scheduler/tick | 버퍼 기준 정책 판단 및 방송 상태 갱신 |
 
+다중 방송: 위의 `/api/stream/state`, `/api/requests`, `/api/requests/{id}/state`·`/history`, `/api/broadcast/queue`, `/api/broadcast/segments/{id}/state`는 `/api/stations/{station_id}/...` 아래에도 있습니다 (예: `/api/stations/st_ch02/requests`). 응답 형식은 같고, 방송 ID가 없는 경로는 첫 채널(기본 채널)을 씁니다. 없는 채널은 404입니다. 방송 ID 없는 경로는 프론트가 방송별 경로로 옮긴 뒤 지웁니다. `/api/scheduler/tick`은 디버그용이라 기본 채널만 있습니다.
+
 Node 서버와 package.json은 제거했습니다. 실행은 `python -m app`입니다.
 `app/api.py`는 입력 모델과 HTTP 경로, 앱별 메모리 상태를 관리합니다.
 `app/scheduler.py`는 기존 버퍼 정책의 순수 계산 함수입니다.
