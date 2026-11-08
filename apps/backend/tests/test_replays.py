@@ -32,8 +32,8 @@ class FakeReplayPipeline:
     async def __aexit__(self, *exc):
         return False
 
-    def zrevrange(self, key, start, stop):
-        self.calls.append(("zrevrange", key, start, stop))
+    def zrevrange(self, key, start, stop, withscores=False):
+        self.calls.append(("zrevrange", key, start, stop, withscores))
 
     def zcard(self, key):
         self.calls.append(("zcard", key))
@@ -60,11 +60,11 @@ class FakeReplayPipeline:
         results = []
         for call in self.calls:
             if call[0] == "zrevrange":
-                _, key, start, stop = call
+                _, key, start, stop, withscores = call
                 members = sorted(self.redis.zsets.get(key, {}).items(), key=lambda kv: (kv[1], kv[0]), reverse=True)
-                ids = [member for member, _ in members]
-                stop = len(ids) - 1 if stop == -1 else stop
-                results.append(ids[start:stop + 1])
+                stop = len(members) - 1 if stop == -1 else stop
+                picked = members[start:stop + 1]
+                results.append([(m, float(score)) for m, score in picked] if withscores else [m for m, _ in picked])
             elif call[0] == "zcard":
                 results.append(len(self.redis.zsets.get(call[1], {})))
             elif call[0] == "hset":
@@ -404,3 +404,81 @@ class ReplayApiTests(unittest.IsolatedAsyncioTestCase):
                     res = await client.get("/api/replays/bookmarked")
                     body = res.json()
                     self.assertEqual(body, {"replays": [], "total": 0})  # total도 0이어야 함, 고아로 안 남아야
+
+
+def make_channel_app(hls_root):
+    """Step 6: two channels sharing one fake Redis, like the real app."""
+    from dataclasses import replace as replace_settings
+    from app.station_runtime import ensure_runtimes
+    app = create_app(replace_settings(Settings("127.0.0.1", 3000), station_id="st_a", station_ids=("st_a", "st_b")))
+    redis = FakeReplayRedis()
+    app.state.redis = redis
+    for sid, station in ensure_runtimes(app.state).items():
+        station.stations = StationStore(redis, sid)
+        station.replay_sessions = ReplaySessionStore(redis, sid)
+        station.replay_bookmarks = LikeStore(redis, f"backend:{sid}:replay-bookmarks",
+                                             f"backend:{sid}:user-bookmarked-replays")
+        station.hls = SimpleNamespace(directory=Path(hls_root) / sid)
+    return app, redis
+
+
+class ReplayChannelTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.app, self.redis = make_channel_app(self.tmp.name)
+        self.a, self.b = (self.app.state.runtimes[sid] for sid in ("st_a", "st_b"))
+        self.app.dependency_overrides[get_current_user] = lambda: {"id": "u1", "name": "x"}
+        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(self.app), base_url="http://test")
+        self.addAsyncCleanup(self.client.aclose)
+
+    async def session(self, station, session_id, started, owner="u1"):
+        await station.replay_sessions.start(session_id, started)
+        await station.replay_sessions.end(session_id, started + 60)
+        key = station.replay_sessions.prefix + ":replay-sessions"
+        record = json.loads(self.redis.hashes[key][session_id])
+        self.redis.hashes[key][session_id] = json.dumps(record | {"ownerId": owner})
+
+    async def test_my_replays_come_from_every_channel_newest_first(self):
+        await self.session(self.a, "old_a", 1000.0)
+        await self.session(self.b, "new_b", 2000.0)
+        await self.session(self.b, "theirs", 3000.0, owner="u2")
+        res = (await self.client.get("/api/replays/mine")).json()
+        self.assertEqual(res["total"], 2)
+        self.assertEqual([(r["id"], r["stationId"]) for r in res["replays"]], [("new_b", "st_b"), ("old_a", "st_a")])
+        self.assertEqual(res["replays"][0]["vodUrl"], "/hls/st_b/vod/new_b/index.m3u8")
+        page = (await self.client.get("/api/replays/mine?offset=1&limit=1")).json()
+        self.assertEqual([r["id"] for r in page["replays"]], ["old_a"])
+
+    async def test_bookmarks_are_kept_by_the_session_channel_and_listed_together(self):
+        await self.session(self.a, "sess_a", 1000.0)
+        await self.session(self.b, "sess_b", 2000.0)
+        await self.client.post("/api/replays/sess_b/bookmark")
+        await self.client.post("/api/replays/sess_a/bookmark")
+        self.assertEqual((await self.b.replay_bookmarks.status("sess_b", "u1")), (1, True))
+        self.assertEqual((await self.a.replay_bookmarks.status("sess_b", "u1")), (0, False))
+        # 북마크 시각을 정해 순서를 확인한다: sess_a를 나중에 눌렀다
+        self.redis.zsets["backend:st_b:user-bookmarked-replays:u1"]["sess_b"] = 10
+        self.redis.zsets["backend:st_a:user-bookmarked-replays:u1"]["sess_a"] = 20
+        res = (await self.client.get("/api/replays/bookmarked")).json()
+        self.assertEqual(res["total"], 2)
+        self.assertEqual([(r["id"], r["bookmarked"]) for r in res["replays"]], [("sess_a", True), ("sess_b", True)])
+        second = (await self.client.get("/api/replays/bookmarked?offset=1&limit=1")).json()
+        self.assertEqual([r["id"] for r in second["replays"]], ["sess_b"])
+
+    async def test_delete_finds_the_channel_and_clears_the_index(self):
+        await self.session(self.b, "sess_b", 1000.0)
+        vod = Path(self.tmp.name) / "st_b" / "vod" / "sess_b"
+        vod.mkdir(parents=True)
+        res = await self.client.delete("/api/replays/sess_b")
+        self.assertEqual(res.status_code, 204)
+        self.assertFalse(vod.exists())
+        self.assertEqual(await self.b.replay_sessions.get_many(["sess_b"]), {})
+        self.assertNotIn("sess_b", self.redis.hashes.get("backend:replay-stations", {}))
+
+    async def test_sessions_recorded_before_the_index_are_still_found(self):
+        await self.session(self.b, "legacy", 1000.0)
+        self.redis.hashes["backend:replay-stations"].pop("legacy")
+        res = await self.client.post("/api/replays/legacy/bookmark")
+        self.assertEqual(res.json(), {"bookmarkCount": 1, "bookmarked": True})
+        self.assertEqual((await self.b.replay_bookmarks.status("legacy", "u1")), (1, True))

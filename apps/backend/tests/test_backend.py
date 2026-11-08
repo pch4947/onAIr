@@ -107,7 +107,7 @@ class BackendTests(unittest.TestCase):
                           "/api/board/posts/{post_id}/like",
                           "/api/board/comments/{comment_id}/like", "/api/board/posts/mine",
                           "/api/board/posts/liked", "/api/stations/{station_id}/replays",
-                          "/api/stations/{station_id}/replays/mine", "/api/replays/bookmarked",
+                          "/api/stations/{station_id}/replays/mine", "/api/replays/mine", "/api/replays/bookmarked",
                           "/api/replays/{session_id}/bookmark", "/hls/{station_id}/vod/{session_id}/{filename}",
                           "/api/replays/{session_id}", "/api/stations/{station_id}/presence",
                           "/api/stations/{station_id}/tracks", "/api/stations/{station_id}/tracks/search",
