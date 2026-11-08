@@ -1,4 +1,4 @@
-"""Multi-station step 2: channel list, one runtime per channel, shared engine status."""
+"""Multi-station: channel list and runtimes (step 2), channel choice and station list (step 3)."""
 import asyncio
 from dataclasses import replace
 import json
@@ -10,13 +10,18 @@ from unittest.mock import AsyncMock, patch
 import uuid
 
 import httpx
+from fastapi import HTTPException, Request
 from redis.asyncio import Redis
 
+from app.api import PresenceStore
+from app.auth import get_current_user
 from app.config import Settings, load_settings, parse_station_ids
 from app.main import create_app
 from app.redis_connection import redis_lifespan
 from app.station_lifecycle import EngineStatusCache
 from app.station_runtime import default_runtime, ensure_runtimes
+from app.stations import StationStore, choose_channel
+from test_stations import BODY
 
 
 def channel_settings(*ids, **extra):
@@ -117,6 +122,103 @@ class ChannelRedisTests(unittest.IsolatedAsyncioTestCase):
                 if keys:
                     await redis.delete(*keys)
             await redis.aclose()
+
+
+def record(sid, owner, status='started', retry_key='k', fingerprint='f'):
+    return dict(station_id=sid, owner_id=owner, status=status, retry_key=retry_key, fingerprint=fingerprint)
+
+
+class ChooseChannelTests(unittest.TestCase):
+    def setUp(self):
+        self.a, self.b = SimpleNamespace(station_id='st_a'), SimpleNamespace(station_id='st_b')
+
+    def test_retry_returns_the_same_channel_even_after_it_ended(self):
+        channels = [(self.a, record('st_a', 'u1', 'ended', 'retry', 'fp')), (self.b, None)]
+        self.assertIs(choose_channel(channels, 'u1', 'retry', 'fp'), self.a)
+
+    def test_one_live_broadcast_per_user(self):
+        channels = [(self.a, record('st_a', 'u1', 'preparing')), (self.b, None)]
+        with self.assertRaises(HTTPException) as caught:
+            choose_channel(channels, 'u1', 'other-key', 'fp')
+        self.assertEqual((caught.exception.status_code, caught.exception.detail['station_id']), (409, 'st_a'))
+
+    def test_first_free_or_ended_channel_then_busy(self):
+        self.assertIs(choose_channel([(self.a, record('st_a', 'u2')), (self.b, None)], 'u1', 'k1', 'fp'), self.b)
+        self.assertIs(choose_channel([(self.a, record('st_a', 'u2', 'ended')), (self.b, None)], 'u1', 'k1', 'fp'),
+                      self.a)
+        with self.assertRaises(HTTPException) as caught:
+            choose_channel([(self.a, record('st_a', 'u2')), (self.b, record('st_b', 'u3', 'rejected'))],
+                           'u1', 'k1', 'fp')
+        self.assertEqual(caught.exception.status_code, 503)
+        self.assertEqual(caught.exception.headers['Retry-After'], '30')
+
+
+@unittest.skipUnless(os.environ.get('ONAIR_INTEGRATION_TEST') == '1', 'Requires Redis')
+class ChannelCreationRedisTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.ids = ['st_pick_' + uuid.uuid4().hex[:10] for _ in range(2)]
+        self.redis = Redis.from_url('redis://127.0.0.1:6379/0', decode_responses=True)
+        self.app = create_app(channel_settings(*self.ids))
+        self.app.state.redis = self.redis
+        for sid, station in ensure_runtimes(self.app.state).items():
+            station.stations = StationStore(self.redis, sid)
+            station.presence = PresenceStore(self.redis, sid)
+            station.hls = SimpleNamespace(ready=False)
+
+        def user_from_header(request: Request):
+            return {'id': request.headers['x-user'], 'kind': 'member', 'name': request.headers['x-user']}
+        self.app.dependency_overrides[get_current_user] = user_from_header
+        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(self.app), base_url='http://test')
+
+    async def asyncTearDown(self):
+        await self.client.aclose()
+        for sid in self.ids:
+            keys = [k async for k in self.redis.scan_iter(f'backend:{sid}:*')]
+            if keys:
+                await self.redis.delete(*keys)
+        for entry_id, fields in await self.redis.xrange('engine:control'):
+            if fields.get('station_id') in self.ids:
+                await self.redis.xdel('engine:control', entry_id)
+        await self.redis.aclose()
+
+    async def create(self, user, key):
+        return await self.client.post('/api/stations', json=BODY, headers={'x-user': user, 'Idempotency-Key': key})
+
+    async def test_hosts_get_free_channels_one_each_until_full(self):
+        first, second = await asyncio.gather(self.create('host-a', 'a1'), self.create('host-b', 'b1'))
+        self.assertEqual((first.status_code, second.status_code), (202, 202))
+        self.assertEqual({first.json()['station']['station_id'], second.json()['station']['station_id']},
+                         set(self.ids))
+        again = await self.create('host-a', 'a1')
+        self.assertEqual(again.json()['station'], first.json()['station'])
+        other = await self.create('host-a', 'a2')
+        self.assertEqual(other.status_code, 409)
+        self.assertEqual(other.json()['detail']['station_id'], first.json()['station']['station_id'])
+        full = await self.create('host-c', 'c1')
+        self.assertEqual((full.status_code, full.headers['retry-after']), (503, '30'))
+        controls = [f for _, f in await self.redis.xrange('engine:control') if f.get('station_id') in self.ids]
+        self.assertEqual(sorted(f['station_id'] for f in controls), sorted(self.ids))
+
+    async def test_station_list_and_mine(self):
+        created = (await self.create('host-a', 'a1')).json()['station']
+        await self.redis.zadd(f"backend:{created['station_id']}:presence", {'listener': time.time()})
+        listed = await self.client.get('/api/stations', headers={'x-user': 'listener'})
+        self.assertEqual(listed.status_code, 200)
+        [card] = listed.json()['stations']
+        self.assertEqual({k: card[k] for k in ('station_id', 'status', 'dj_name', 'format', 'listeners', 'mine')},
+                         {'station_id': created['station_id'], 'status': 'preparing', 'dj_name': '새벽',
+                          'format': 'talk', 'listeners': 1, 'mine': False})
+        self.assertNotIn('owner_id', listed.text)
+        self.assertTrue((await self.client.get('/api/stations', headers={'x-user': 'host-a'})).json()
+                        ['stations'][0]['mine'])
+        mine = (await self.client.get('/api/stations/mine', headers={'x-user': 'host-a'})).json()
+        self.assertEqual(mine['station']['station_id'], created['station_id'])
+        self.assertIsNone((await self.client.get('/api/stations/mine', headers={'x-user': 'listener'})).json()
+                          ['station'])
+        raw = json.loads(await self.redis.get(f"backend:{created['station_id']}:station"))
+        await self.redis.set(f"backend:{created['station_id']}:station", json.dumps(raw | {'status': 'ended'}))
+        self.assertEqual((await self.client.get('/api/stations', headers={'x-user': 'host-a'})).json()['stations'],
+                         [])
 
 
 if __name__ == '__main__':

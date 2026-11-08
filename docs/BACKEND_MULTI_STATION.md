@@ -94,15 +94,17 @@ StationRuntime
 
 `POST /api/stations` (본문·`Idempotency-Key`는 지금과 같음, 게스트는 403)
 
-하나의 Lua 스크립트가 모든 채널의 `backend:{sid}:station` 키를 받아 원자적으로 처리한다.
+생성 전용 전역 잠금 안에서 모든 채널의 `backend:{sid}:station`을 한 번에 읽고 아래 순서로 채널을 고른 뒤,
+고른 채널에 지금의 단일 채널 생성 Lua를 그대로 쓴다 (3단계 구현).
 
 1. 어떤 채널에 같은 소유자·같은 `retry_key`·같은 fingerprint 레코드가 있으면 그 레코드를 돌려준다 (재시도)
 2. 이 사용자가 소유한 방송 중 `ended`가 아닌 것이 있으면 **409** `이미 진행 중인 방송이 있습니다` (응답에 그 `station_id`)
 3. 레코드가 없거나 `ended`인 첫 채널에 생성 (`engine:control`에 `station.created`, 지금 CREATE와 같음)
 4. 빈 채널이 없으면 **503** `모든 채널이 사용 중입니다` + `Retry-After`
 
-- 생성 직전 지금처럼 lifecycle 잠금을 잡는데, 채널을 고르기 전이라 어느 채널 잠금인지 모른다.
-  생성 전용 전역 `asyncio.Lock` 하나와 Lua의 원자성으로 충분하다(프로세스 하나 전제).
+- 채널을 고르기 전이라 채널별 lifecycle 잠금으로는 막을 수 없어, 생성 전용 전역 `asyncio.Lock`을 둔다.
+  고른 뒤에는 그 채널의 lifecycle 잠금도 잡는다. 백엔드 프로세스가 하나라는 전제다.
+- 고르는 동안 다른 채널 기록은 `ended`로만 바뀔 수 있어(채널이 비는 방향) 결과가 틀어지지 않는다.
 - `rejected`(엔진 거부) 방송도 종료 정리를 거쳐 `ended`가 되어야 채널이 빈다. 지금 동작과 같다.
 - 응답의 `station.station_id`로 프론트가 청취 화면에 들어간다.
 
@@ -194,7 +196,7 @@ StationRuntime
 
 1. `StationRuntime` 도입 — 동작 변화 없이 `app.state`의 방송별 객체를 런타임 하나로 묶는다 (채널 1개) — 완료
 2. 채널 목록 설정과 채널별 런타임·task 시작·종료, 방송별 경로 검증을 채널 목록 기준으로, 엔진 상태 조회 공용 캐시 — 완료
-3. 생성 Lua(사용자당 1개·빈 채널 선택)와 `GET /api/stations`, `/api/stations/mine`
+3. 생성 Lua(사용자당 1개·빈 채널 선택)와 `GET /api/stations`, `/api/stations/mine` — 완료
 4. 방송별 경로(6.1) 추가, 기존 경로는 기본 채널로
 5. 게시판 사연을 모든 talk 채널로 보내고 읽히면 다른 채널에서 회수 (4.1절)
 6. 다시듣기 색인과 `GET /api/replays/mine`

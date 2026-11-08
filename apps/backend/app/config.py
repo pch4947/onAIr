@@ -51,6 +51,8 @@ def parse_station_ids(raw: str) -> tuple[str, ...]:
     ids = tuple(filter(None, (part.strip() for part in raw.split(','))))
     if any(not re.fullmatch(STATION_ID_PATTERN, sid) for sid in ids):
         raise ValueError("ONAIR_STATION_IDS must be comma-separated station IDs")
+    if 'mine' in ids:  # GET /api/stations/mine
+        raise ValueError("ONAIR_STATION_IDS cannot use the reserved ID 'mine'")
     if len(set(ids)) != len(ids):
         raise ValueError("ONAIR_STATION_IDS has a duplicate station ID")
     return ids

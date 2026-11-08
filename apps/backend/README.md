@@ -101,6 +101,8 @@ FastAPI가 엔진의 Redis 이벤트를 받아 방송 큐에 저장하고, FFmpe
 - `POST /api/auth/guest {name}`: 닉네임(20자 이하)만으로 비밀번호 없는 게스트 계정을 만들고 토큰을 돌려줍니다. 참가 중인 닉네임과 겹치면 409입니다. 게스트 참가는 24시간 뒤 끝나며(토큰도 함께 만료), 로그아웃하거나 만료되면 그 닉네임을 다시 쓸 수 있습니다.
 - `POST /api/auth/admin {pin}`: `ONAIR_ADMIN_PINS`(`핀:닉네임` 쉼표 구분)에 있는 핀이면 그 어드민 계정으로 토큰을 돌려줍니다. 계정은 처음 들어올 때 만들고 이후에는 같은 계정을 씁니다. 설정이 비어 있으면 404, 틀린 핀이 같은 접속지에서 1분에 5번 넘으면 1분 동안 429입니다.
 - 게스트·어드민 계정은 `.invalid` 도메인 키로 저장해 일반 가입·이메일 로그인과 겹치지 않습니다. 어드민 닉네임은 다른 가입·게스트 참가에서 쓸 수 없습니다.
+- 방송 생성(`POST /api/stations`)은 설정한 채널 중 비어 있거나 끝난 첫 채널에 만듭니다. 진행 중인 방송이 있는 사용자는 409(`detail.station_id`에 그 방송), 모든 채널이 사용 중이면 503(`Retry-After: 30`)입니다. 같은 `Idempotency-Key`로 다시 보내면 같은 방송을 돌려줍니다.
+- `GET /api/stations`: 로그인 필수. 진행 중인 방송 목록(`station_id`, `status`, `dj_name`, `topic`, `format`, `hls_url`, `hls_ready`, `listeners`, `created_at`, 내 방송 여부 `mine`). 끝난 방송과 빈 채널은 뺍니다. `GET /api/stations/mine`: 내가 진행 중인 방송, 없으면 `{station: null}`.
 - 방송 생성(`POST /api/stations`)과 페르소나 초안·검사(`POST /api/personas/drafts`, `/check`)는 일반 회원과 어드민이 쓸 수 있고 게스트는 403입니다. 게스트는 청취, 요청 입력, 게시판을 씁니다.
 - `/api/auth/me`의 `isGuest`, `isAdmin`으로 구분합니다. 실제 핀은 `.env`나 서버 환경변수에만 둡니다.
 
