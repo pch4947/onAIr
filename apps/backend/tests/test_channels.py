@@ -1,4 +1,4 @@
-"""Multi-station: channel list and runtimes (step 2), channel choice and station list (step 3)."""
+"""Multi-station: channel runtimes (step 2), channel choice and station list (step 3), station paths (step 4)."""
 import asyncio
 from dataclasses import replace
 import json
@@ -18,6 +18,7 @@ from app.auth import get_current_user
 from app.config import Settings, load_settings, parse_station_ids
 from app.main import create_app
 from app.redis_connection import redis_lifespan
+from app.requests import RequestStore
 from app.station_lifecycle import EngineStatusCache
 from app.station_runtime import default_runtime, ensure_runtimes
 from app.stations import StationStore, choose_channel
@@ -219,6 +220,70 @@ class ChannelCreationRedisTests(unittest.IsolatedAsyncioTestCase):
         await self.redis.set(f"backend:{created['station_id']}:station", json.dumps(raw | {'status': 'ended'}))
         self.assertEqual((await self.client.get('/api/stations', headers={'x-user': 'host-a'})).json()['stations'],
                          [])
+
+
+@unittest.skipUnless(os.environ.get('ONAIR_INTEGRATION_TEST') == '1', 'Requires Redis')
+class StationRouteRedisTests(unittest.IsolatedAsyncioTestCase):
+    """Step 4: per-station request and state paths; station-less paths keep using the first channel."""
+
+    async def asyncSetUp(self):
+        self.ids = ['st_route_' + uuid.uuid4().hex[:10] for _ in range(2)]
+        self.redis = Redis.from_url('redis://127.0.0.1:6379/0', decode_responses=True)
+        self.app = create_app(channel_settings(*self.ids))
+        self.app.state.redis = self.redis
+        for sid, station in ensure_runtimes(self.app.state).items():
+            station.requests = RequestStore(self.redis, sid)
+            station.presence = PresenceStore(self.redis, sid)
+            station.engine_consumer = SimpleNamespace(prefix=f'backend:{sid}')
+            station.hls = SimpleNamespace(ready=False)
+        self.app.dependency_overrides[get_current_user] = lambda: {'id': 'u1', 'name': '청취자'}
+        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(self.app), base_url='http://test')
+
+    async def asyncTearDown(self):
+        await self.client.aclose()
+        for sid in self.ids:
+            keys = [k async for k in self.redis.scan_iter(f'backend:{sid}:*')]
+            keys += [k async for k in self.redis.scan_iter(f'engine:{sid}:*')]
+            if keys:
+                await self.redis.delete(*keys)
+        await self.redis.aclose()
+
+    async def inbox(self, sid):
+        return [json.loads(f['payload'])['body'] for _, f in await self.redis.xrange(f'engine:{sid}:in')]
+
+    async def test_requests_go_to_the_station_in_the_path(self):
+        first, second = self.ids
+        sent = await self.client.post(f'/api/stations/{second}/requests', json={'prompt': '둘째 채널', 'kind': 'chat'})
+        self.assertEqual(sent.status_code, 202)
+        legacy = await self.client.post('/api/requests', json={'prompt': '기본 채널', 'kind': 'chat'})
+        self.assertEqual(legacy.status_code, 202)
+        self.assertEqual((await self.inbox(first), await self.inbox(second)), (['기본 채널'], ['둘째 채널']))
+        listed = (await self.client.get(f'/api/stations/{second}/requests')).json()['requests']
+        self.assertEqual([(r['prompt'], r['mine']) for r in listed], [('둘째 채널', True)])
+        self.assertEqual([r['prompt'] for r in (await self.client.get('/api/requests')).json()['requests']],
+                         ['기본 채널'])
+        request_id = sent.json()['request']['id']
+        state = await self.client.get(f'/api/stations/{second}/requests/{request_id}/state')
+        self.assertEqual(state.json(), {'request_id': request_id, 'state': 'requested'})
+        self.assertEqual((await self.client.get(f'/api/requests/{request_id}/state')).status_code, 404)
+        history = await self.client.get(f'/api/stations/{second}/requests/{request_id}/history')
+        self.assertEqual([h['state'] for h in history.json()['history']], ['requested'])
+        for path in ('/requests', '/stream/state', '/broadcast/queue', '/requests/x/state'):
+            with self.subTest(path=path):
+                self.assertEqual((await self.client.get(f'/api/stations/st_unknown{path}')).status_code, 404)
+
+    async def test_stream_state_and_queue_describe_the_station_in_the_path(self):
+        second = self.ids[1]
+        await self.redis.set(f'backend:{second}:station', json.dumps(
+            {'station_id': second, 'status': 'started', 'config': {'format': 'news'}}))
+        await self.redis.zadd(f'backend:{second}:presence', {'listener': time.time()})
+        state = (await self.client.get(f'/api/stations/{second}/stream/state')).json()
+        self.assertEqual((state['stationId'], state['stationStatus'], state['stationFormat'], state['viewerCount']),
+                         (second, 'started', 'news', 1))
+        legacy = (await self.client.get('/api/stream/state')).json()
+        self.assertEqual((legacy['stationId'], legacy['stationStatus'], legacy['viewerCount']), (self.ids[0], 'idle', 0))
+        queue = (await self.client.get(f'/api/stations/{second}/broadcast/queue')).json()
+        self.assertEqual((queue['station_id'], queue['count']), (second, 0))
 
 
 if __name__ == '__main__':

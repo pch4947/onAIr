@@ -11,11 +11,17 @@ from redis.exceptions import RedisError
 from pydantic import BaseModel, Field, model_validator
 
 from .auth import get_current_user
-from .station_runtime import default_runtime, station_runtime
+from .station_runtime import StationRuntime, default_runtime, station_runtime
 from .scheduler import decide_next_segment
 from .requests import IdempotencyConflict
 
 router = APIRouter(prefix="/api")
+
+
+def current_station(request) -> StationRuntime:
+    """경로에 방송 ID가 있으면 그 채널(없으면 404), 없는 기존 경로면 기본 채널."""
+    station_id = getattr(request, 'path_params', {}).get('station_id')
+    return default_runtime(request.app) if station_id is None else station_runtime(request, station_id)
 
 PRESENCE_WINDOW_SECONDS = 30
 
@@ -40,13 +46,15 @@ class PresenceInput(BaseModel):
 
 
 @router.get('/requests/{request_id}/history')
+@router.get('/stations/{station_id}/requests/{request_id}/history')
 async def request_history(request_id: str, request: Request,
                           offset: Annotated[int, Query(ge=0)] = 0,
                           limit: Annotated[int, Query(ge=1, le=200)] = 100):
     """State transitions observed by the backend; missing engine stages are not invented."""
+    station = current_station(request)
     try:
         async with asyncio.timeout(3):
-            prefix = default_runtime(request.app).engine_consumer.prefix
+            prefix = station.engine_consumer.prefix
             entries = await request.app.state.redis.lrange(prefix + ':request-history:' + request_id,
                                                            offset, offset + limit - 1)
     except (RedisError, TimeoutError):
@@ -55,11 +63,13 @@ async def request_history(request_id: str, request: Request,
 
 
 @router.get('/broadcast/segments/{segment_id}/state')
+@router.get('/stations/{station_id}/broadcast/segments/{segment_id}/state')
 async def segment_state(segment_id: str, request: Request):
+    station = current_station(request)
     try:
         async with asyncio.timeout(3):
             raw = await request.app.state.redis.hget(
-                default_runtime(request.app).engine_consumer.prefix + ':segment-states', segment_id)
+                station.engine_consumer.prefix + ':segment-states', segment_id)
     except (RedisError, TimeoutError):
         raise HTTPException(503, 'Redis unavailable') from None
     if raw is None:
@@ -68,9 +78,11 @@ async def segment_state(segment_id: str, request: Request):
 
 
 @router.get("/broadcast/queue")
+@router.get("/stations/{station_id}/broadcast/queue")
 async def broadcast_queue(request: Request):
     """Development visibility: queued source audio, not published/playable HLS."""
-    prefix = default_runtime(request.app).engine_consumer.prefix
+    station = current_station(request)
+    prefix = station.engine_consumer.prefix
     try:
         async with asyncio.timeout(3):
             ids = await request.app.state.redis.lrange(prefix + ":queue", 0, 99)
@@ -78,18 +90,20 @@ async def broadcast_queue(request: Request):
             count = await request.app.state.redis.llen(prefix + ":queue")
     except (RedisError, TimeoutError):
         raise HTTPException(503, "Redis unavailable") from None
-    return {"station_id": default_runtime(request.app).station_id, "count": count,
+    return {"station_id": station.station_id, "count": count,
             "segments": [json.loads(item) for item in items if item]}
 
 
 @router.get("/requests/{request_id}/state")
+@router.get("/stations/{station_id}/requests/{request_id}/state")
 async def engine_request_state(request_id: str, request: Request):
+    station = current_station(request)
     try:
         async with asyncio.timeout(3):
-            entry = await default_runtime(request.app).requests.get(request_id)
+            entry = await station.requests.get(request_id)
             # Preserve lookup of legacy engine-only requests that have no registration record.
             raw = None if entry else await request.app.state.redis.hget(
-                default_runtime(request.app).engine_consumer.prefix + ":request-states", request_id)
+                station.engine_consumer.prefix + ":request-states", request_id)
     except (RedisError, TimeoutError):
         raise HTTPException(503, "Redis unavailable") from None
     if entry:
@@ -137,10 +151,10 @@ class BroadcastState:
         return {"stream": self.stream}
 
 
-async def request_metrics(request: Request, required=False):
+async def request_metrics(station, required=False):
     try:
         async with asyncio.timeout(3):
-            return await default_runtime(request.app).requests.metrics()
+            return await station.requests.metrics()
     except (RedisError, TimeoutError):
         if required:
             raise HTTPException(503, "Redis unavailable") from None
@@ -149,19 +163,19 @@ async def request_metrics(request: Request, required=False):
                 "requestStatsAvailable": False}
 
 
-async def viewer_count(request: Request):
+async def viewer_count(station):
     try:
         async with asyncio.timeout(3):
-            return await default_runtime(request.app).presence.count(time.time())
+            return await station.presence.count(time.time())
     except (RedisError, TimeoutError):
         # Unknown, not zero — same convention as request_metrics above.
         return None
 
 
-async def station_summary(request: Request) -> tuple[str, str | None]:
+async def station_summary(request: Request, station) -> tuple[str, str | None]:
     try:
         async with asyncio.timeout(3):
-            raw = await request.app.state.redis.get(f'backend:{default_runtime(request.app).station_id}:station')
+            raw = await request.app.state.redis.get(f'backend:{station.station_id}:station')
     except (RedisError, TimeoutError):
         return 'unknown', None
     if not raw:
@@ -171,10 +185,10 @@ async def station_summary(request: Request) -> tuple[str, str | None]:
     return record['status'], record.get('config', {}).get('format', 'talk')
 
 
-async def current_corner(request: Request) -> dict | None:
+async def current_corner(request: Request, station) -> dict | None:
     try:
         async with asyncio.timeout(3):
-            raw = await request.app.state.redis.get(f'backend:{default_runtime(request.app).station_id}:current-corner')
+            raw = await request.app.state.redis.get(f'backend:{station.station_id}:current-corner')
     except (RedisError, TimeoutError):
         return None
     return json.loads(raw) if raw else None
@@ -191,25 +205,28 @@ async def presence_heartbeat(station_id: str, body: PresenceInput, request: Requ
 
 
 @router.get("/stream/state")
+@router.get("/stations/{station_id}/stream/state")
 async def stream_state(request: Request, response: Response,
                        fragment: Annotated[str | None, Query(max_length=128,
                            pattern=r"^[a-f0-9]{32}_[a-f0-9]{32}_[0-9]+\.ts$")] = None):
+    station = current_station(request)
     response.headers["Cache-Control"] = "no-store"
     result = request.app.state.broadcast.snapshot()
-    result["stationId"] = default_runtime(request.app).station_id
+    result["stationId"] = station.station_id
     # 둘 다 Redis 호출이라 순차 await하면 각자의 연결 타임아웃이 합산돼 버림; 동시에 실행.
     viewers, metrics, (status, station_format), corner = await asyncio.gather(
-        viewer_count(request), request_metrics(request), station_summary(request), current_corner(request))
+        viewer_count(station), request_metrics(station), station_summary(request, station),
+        current_corner(request, station))
     result['stationStatus'] = status
     result['stationFormat'] = station_format
     result['currentCorner'] = corner if status in ('started', 'draining') else None
     result["viewerCount"] = viewers
     result.update(metrics)
-    hls = default_runtime(request.app).hls
+    hls = station.hls
     if request.app.state.settings.hls_enabled:
         result["stream"] = {**result["stream"], "status": "ready" if hls.ready else "bootstrapping",
                             "currentSegment": None, "updatedAt": timestamp(),
-                            "hlsUrl": f"/hls/{default_runtime(request.app).station_id}/index.m3u8",
+                            "hlsUrl": f"/hls/{station.station_id}/index.m3u8",
                             "sessionId": hls.session, "error": hls.error}
         result['stream'].update(hls.buffer_snapshot())
         result['stream']['error'] = hls.error or hls.redis_error
@@ -229,16 +246,19 @@ def public_request(entry: dict, user: dict) -> dict:
 
 
 @router.get("/requests")
+@router.get("/stations/{station_id}/requests")
 async def list_requests(request: Request, user: Annotated[dict, Depends(get_current_user)]):
+    station = current_station(request)
     try:
         async with asyncio.timeout(3):
-            entries = await default_runtime(request.app).requests.list()
+            entries = await station.requests.list()
     except (RedisError, TimeoutError):
         raise HTTPException(503, "Redis unavailable") from None
     return {"requests": [public_request(entry, user) for entry in entries]}
 
 
 @router.post("/requests", status_code=202)
+@router.post("/stations/{station_id}/requests", status_code=202)
 async def create_request(body: ListenerInput, request: Request,
                          user: Annotated[dict, Depends(get_current_user)],
                          idempotency_key: Annotated[str | None, Header(min_length=1, max_length=128,
@@ -247,9 +267,10 @@ async def create_request(body: ListenerInput, request: Request,
 
     The listener comes from the token, never the body. Omitting listenerName stays anonymous on air.
     """
+    station = current_station(request)
     try:
         async with asyncio.timeout(3):
-            entry = await default_runtime(request.app).requests.create(
+            entry = await station.requests.create(
                 body.prompt, user["id"], body.kind, idempotency_key,
                 listener_name=user["name"] if body.listenerName else None, track_title=body.trackTitle,
                 track_artist=body.trackArtist, track_thumbnail_url=body.trackThumbnailUrl)
@@ -262,10 +283,12 @@ async def create_request(body: ListenerInput, request: Request,
 
 @router.post("/scheduler/tick")
 async def tick(request: Request, body: TickInput = Body(default_factory=TickInput)):
+    # 디버그용. 기본 채널만 본다
     state = request.app.state.broadcast
     settings = request.app.state.settings
-    metrics = await request_metrics(request, required=True)
-    buffer = (default_runtime(request.app).hls.buffer_snapshot()['bufferSeconds'] if settings.hls_enabled
+    station = default_runtime(request.app)
+    metrics = await request_metrics(station, required=True)
+    buffer = (station.hls.buffer_snapshot()['bufferSeconds'] if settings.hls_enabled
               else state.stream['bufferSeconds']) if body.bufferSeconds is None else body.bufferSeconds
     decision = decide_next_segment(
         buffer_seconds=buffer, estimated_generation_seconds=body.estimatedGenerationSeconds,
