@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from redis.exceptions import RedisError
 
 from .auth import get_current_user
-from .station_runtime import default_runtime
+from .station_runtime import ensure_runtimes
 from .board_stories import POSTS_KEY
 
 log = logging.getLogger(__name__)
@@ -192,12 +192,19 @@ async def create_post(body: BoardPostInput, request: Request, current_user: User
                 current_user["id"], current_user["name"], body.title, body.body, body.songRequestUrl)
     except (RedisError, TimeoutError):
         raise HTTPException(503, "Redis unavailable") from None
-    # The post is saved; a retry would duplicate it, so a missed offer only costs this broadcast.
+    # The post is saved; a retry would duplicate it, so a missed offer only costs that broadcast.
+    # Every live talk channel gets it; StoryFeed skips channels that are not on air or have no story corner.
+    feeds = [station.story_feed for station in ensure_runtimes(request.app.state).values() if station.story_feed]
     try:
         async with asyncio.timeout(3):
-            await default_runtime(request.app).story_feed.offer(entry)
-    except (RedisError, TimeoutError):
-        log.warning("Board story offer skipped for %s", entry["id"])
+            results = await asyncio.gather(*(feed.offer(entry) for feed in feeds), return_exceptions=True)
+    except TimeoutError:
+        results = [TimeoutError()]
+    for result in results:
+        if isinstance(result, (RedisError, TimeoutError)):
+            log.warning("Board story offer skipped for %s", entry["id"])
+        elif isinstance(result, BaseException):
+            raise result
     return {"post": with_like_status(entry, 0, False)}
 
 
@@ -285,7 +292,9 @@ async def delete_post(post_id: str, request: Request, current_user: User):
                 await request.app.state.comment_likes.delete(comment_id)
             await request.app.state.post_likes.delete(post_id)
             await request.app.state.board.delete(post_id)
-            await default_runtime(request.app).story_feed.withdraw(post_id)
+            for station in ensure_runtimes(request.app.state).values():
+                if station.story_feed:
+                    await station.story_feed.withdraw(post_id)
     except (RedisError, TimeoutError):
         raise HTTPException(503, "Redis unavailable") from None
     return None

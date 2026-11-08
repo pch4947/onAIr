@@ -14,6 +14,8 @@ READ_KEY = 'backend:board:read-stories'
 # Set once, the first time this feature runs. Older posts were written before the
 # board told authors a post can be read on air, so they never become candidates.
 STORIES_SINCE_KEY = 'backend:board:stories-since'
+# Channels that were ever handed a story. When one channel reads a story, the others are told to drop it.
+STORY_STATIONS_KEY = 'backend:board:story-stations'
 # Segments carry a story in request_ref; the prefix tells it apart from a listener request.
 STORY_PREFIX = 'story_'
 MAX_CANDIDATES = 30
@@ -22,8 +24,8 @@ MAX_BODY_LENGTH = 500
 
 # A retried station.started or a new post must never hand the engine the same story twice.
 OFFER = """
-local kinds = {'string', 'set', 'stream', 'hash'}
-for i=1,4 do
+local kinds = {'string', 'set', 'stream', 'hash', 'set'}
+for i=1,5 do
  local t = redis.call('TYPE', KEYS[i]).ok
  if t ~= 'none' and t ~= kinds[i] then return redis.error_reply('Unexpected story key type') end
 end
@@ -31,6 +33,7 @@ local station = redis.call('GET', KEYS[1])
 if not station or cjson.decode(station).status ~= 'started' then return 0 end
 if redis.call('HEXISTS', KEYS[4], ARGV[1]) == 1 then return 0 end
 if redis.call('SADD', KEYS[2], ARGV[1]) == 0 then return 0 end
+redis.call('SADD', KEYS[5], ARGV[3])
 redis.call('XADD', KEYS[3], '*', 'type', 'board.story', 'contract_version', '1',
  'event_id', ARGV[2], 'station_id', ARGV[3], 'at', ARGV[4], 'payload', ARGV[5])
 return 1
@@ -90,7 +93,8 @@ class StoryFeed:
     async def _send(self, post):
         payload = dict(story_id=story_id(post['id']), body=post['body'], author_ref=post['authorId'],
                        nickname=post['authorName'], posted_at=posted_at(post), tags=[])
-        return await self.redis.eval(OFFER, 4, *self._keys, READ_KEY, payload['story_id'], 'evt_' + uuid4().hex,
+        return await self.redis.eval(OFFER, 5, *self._keys, READ_KEY, STORY_STATIONS_KEY, payload['story_id'],
+                                     'evt_' + uuid4().hex,
                                      self.station_id, str(time.time()), json.dumps(payload, ensure_ascii=False))
 
     async def offer_recent(self):
@@ -118,10 +122,16 @@ class StoryFeed:
 
 
 async def settle_read(redis, station_id, read_story_id):
-    """Mark a story read on PUBLISHED and tell its author once, even if delivery is retried."""
+    """Mark a story read on PUBLISHED and tell its author once, even if delivery is retried.
+
+    Other channels that were handed the same story get board.story.withdrawn so it is read only once.
+    A segment another channel already submitted still plays.
+    """
     if not await redis.hsetnx(READ_KEY, read_story_id, str(time.time())):
         return
     post_id = read_story_id.removeprefix(STORY_PREFIX)
+    for other in sorted(await redis.smembers(STORY_STATIONS_KEY) - {station_id}):
+        await StoryFeed(redis, other).withdraw(post_id)
     raw_post = await redis.hget(POSTS_KEY, post_id)
     if not raw_post:
         return
