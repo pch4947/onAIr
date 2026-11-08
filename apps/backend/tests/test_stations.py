@@ -160,6 +160,7 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
         default_runtime(app).stations = SimpleNamespace(create=AsyncMock(return_value={
             'station_id': 'st_local_dev', 'status': 'preparing', 'owner_id': 'u1',
             'retry_key': 'private', 'fingerprint': 'private'}))
+        app.state.redis = SimpleNamespace(mget=AsyncMock(return_value=[None]))  # every channel free
         app.state.engine_http = httpx.AsyncClient(transport=httpx.MockTransport(
             lambda req: httpx.Response(200, json={'voices': [{'id': 'dummy'}]})),
             base_url='http://engine')

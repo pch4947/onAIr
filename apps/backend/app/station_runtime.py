@@ -2,6 +2,7 @@
 
 채널은 설정(ONAIR_STATION_IDS)으로 정한다. 방송 ID가 없는 기존 경로는 첫 채널(기본 방송)을 쓴다.
 """
+import asyncio
 from dataclasses import replace
 
 from fastapi import HTTPException, Request
@@ -45,6 +46,14 @@ def ensure_runtimes(state) -> dict[str, StationRuntime]:
                                               else replace(settings, station_id=sid)) for sid in ids}
         state.default_station_id = ids[0]
     return state.runtimes
+
+
+def creation_lock(state):
+    """방송 생성 전용 잠금. 채널을 고르기 전이라 채널별 잠금으로는 막을 수 없다."""
+    lock = getattr(state, 'creation_lock', None)
+    if lock is None:
+        lock = state.creation_lock = asyncio.Lock()
+    return lock
 
 
 def default_runtime(app) -> StationRuntime:

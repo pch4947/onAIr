@@ -1,4 +1,4 @@
-"""Creation of the configured single station by non-guest users and engine REST bridge."""
+"""Broadcast creation on a free channel (non-guest users, one live broadcast each) and engine REST bridge."""
 import asyncio
 import hashlib
 import json
@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from redis.exceptions import RedisError
 
 from .auth import get_broadcast_host, get_current_user
-from .station_runtime import default_runtime, station_runtime
+from .station_runtime import creation_lock, ensure_runtimes, station_runtime
 
 router = APIRouter(prefix='/api')
 User = Annotated[dict, Depends(get_current_user)]
@@ -124,17 +124,25 @@ class CheckInput(BaseModel):
     persona: Persona
 
 
+def station_fingerprint(body):
+    # Preserve fingerprints and wire shape for clients that omit M3 fields.
+    fields = body.legacy_fields() | body.format_options()
+    if body.first_song_url:
+        fields['first_song_url'] = body.first_song_url
+    return hashlib.sha256(json.dumps(fields, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+
+
+def station_key(station_id):
+    return f'backend:{station_id}:station'
+
+
 class StationStore:
     def __init__(self, redis, station_id):
         self.redis, self.station_id = redis, station_id
-        self.key = f'backend:{station_id}:station'
+        self.key = station_key(station_id)
 
     async def create(self, body, owner, retry_key):
-        # Preserve fingerprints and wire shape for clients that omit M3 fields.
-        fields = body.legacy_fields() | body.format_options()
-        if body.first_song_url:
-            fields['first_song_url'] = body.first_song_url
-        fingerprint = hashlib.sha256(json.dumps(fields, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+        fingerprint = station_fingerprint(body)
         persona = body.persona.model_copy(update={'persona_id': 'psn_' + uuid4().hex})
         payload = StationCreated(**{**body.legacy_fields(), 'persona': persona}).model_dump(
             exclude={'format', 'corners', 'news_sections', 'intensity', 'experiment'}) | body.format_options()
@@ -193,26 +201,98 @@ def public_station(record, request):
         'hls_url': f'/hls/{record["station_id"]}/index.m3u8'}
 
 
+CHANNELS_BUSY_RETRY_SECONDS = 30
+
+
+async def channel_records(request):
+    runtimes = list(ensure_runtimes(request.app.state).values())
+    raws = await request.app.state.redis.mget([station_key(r.station_id) for r in runtimes])
+    return [(runtime, json.loads(raw) if raw else None) for runtime, raw in zip(runtimes, raws)]
+
+
+def choose_channel(channels, owner, retry_key, fingerprint):
+    """같은 요청을 다시 보냈으면 그 채널, 진행 중 방송이 있으면 409, 아니면 비어 있는 첫 채널."""
+    for runtime, record in channels:
+        if record and (record['owner_id'], record.get('retry_key'), record.get('fingerprint')) == (
+                owner, retry_key, fingerprint):
+            return runtime
+    for _, record in channels:
+        if record and record['owner_id'] == owner and record['status'] != 'ended':
+            raise HTTPException(409, {'message': 'You already have a broadcast in progress',
+                                      'station_id': record['station_id']})
+    for runtime, record in channels:
+        if not record or record['status'] == 'ended':
+            return runtime
+    raise HTTPException(503, 'All channels are busy',
+                        headers={'Retry-After': str(CHANNELS_BUSY_RETRY_SECONDS)})
+
+
 @router.post('/stations', status_code=202)
 async def create_station(body: StationInput, request: Request, user: Host,
     idempotency_key: Annotated[str, Header(min_length=1, max_length=128, pattern=r'^[A-Za-z0-9._:-]+$')]):
-    """Create the configured station once. 202 means queued, not live. Retry with the same key."""
+    """Open a broadcast on a free channel. 202 means queued, not live. Retry with the same key.
+
+    One broadcast per user until it ends (409 with its station_id); 503 when every channel is in use.
+    """
     if body.persona.persona_id is not None:
         raise HTTPException(422, 'Submit a persona draft without persona_id; the backend assigns it')
-    # 채널 선택은 다중 방송 3단계. 지금은 기본 방송 하나에 만든다
-    station = default_runtime(request.app)
     try:
         async with asyncio.timeout(3):
-            if station.lifecycle:
-                async with station.lifecycle.lock:
+            # 채널 고르기부터 기록까지 한 번에 하나. 백엔드 프로세스가 하나라는 전제다
+            async with creation_lock(request.app.state):
+                station = choose_channel(await channel_records(request), user['id'], idempotency_key,
+                                         station_fingerprint(body))
+                if station.lifecycle:
+                    async with station.lifecycle.lock:
+                        record = await station.stations.create(body, user['id'], idempotency_key)
+                else:
                     record = await station.stations.create(body, user['id'], idempotency_key)
-            else:
-                record = await station.stations.create(body, user['id'], idempotency_key)
     except (RedisError, TimeoutError):
         raise HTTPException(503, 'Redis unavailable; retry with the same Idempotency-Key') from None
     from .first_song import ensure_first_song_task  # first_song imports this module
     ensure_first_song_task(station, record)
     return {'station': public_station(record, request)}
+
+
+def station_card(record, request, user, listeners):
+    """방송 목록 한 칸. 소유자 ID 같은 내부 값은 싣지 않는다."""
+    config = record.get('config') or {}
+    persona = config.get('persona') or {}
+    public = public_station(record, request)
+    return {'station_id': record['station_id'], 'status': record['status'], 'dj_name': persona.get('dj_name'),
+            'topic': config.get('topic'), 'format': config.get('format', 'talk'), 'hls_url': public['hls_url'],
+            'hls_ready': public['hls_ready'], 'listeners': listeners, 'created_at': record['created_at'],
+            'mine': record['owner_id'] == user['id']}
+
+
+@router.get('/stations')
+async def list_stations(request: Request, response: Response, user: User):
+    """진행 중인 방송 목록 (끝난 방송과 빈 채널은 뺀다)."""
+    response.headers['Cache-Control'] = 'no-store'
+    now = time.time()
+    try:
+        async with asyncio.timeout(3):
+            live = [(runtime, record) for runtime, record in await channel_records(request)
+                    if record and record['status'] != 'ended']
+            counts = await asyncio.gather(*(runtime.presence.count(now) for runtime, _ in live))
+    except (RedisError, TimeoutError):
+        raise HTTPException(503, 'Redis unavailable') from None
+    return {'stations': [station_card(record, request, user, count)
+                         for (_, record), count in zip(live, counts)]}
+
+
+@router.get('/stations/mine')
+async def my_station(request: Request, response: Response, user: User):
+    """내가 진행 중인 방송. 호스트 화면으로 돌아갈 때 쓴다."""
+    response.headers['Cache-Control'] = 'no-store'
+    try:
+        async with asyncio.timeout(3):
+            channels = await channel_records(request)
+    except (RedisError, TimeoutError):
+        raise HTTPException(503, 'Redis unavailable') from None
+    record = next((record for _, record in channels
+                   if record and record['owner_id'] == user['id'] and record['status'] != 'ended'), None)
+    return {'station': public_station(record, request) if record else None}
 
 
 @router.get('/stations/{station_id}')
