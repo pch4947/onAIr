@@ -146,6 +146,8 @@ macOS/Linux에서는 가상환경 실행 파일이 `.venv/bin/python`입니다.
 
 다중 방송: 위의 `/api/stream/state`, `/api/requests`, `/api/requests/{id}/state`·`/history`, `/api/broadcast/queue`, `/api/broadcast/segments/{id}/state`는 `/api/stations/{station_id}/...` 아래에도 있습니다 (예: `/api/stations/st_ch02/requests`). 응답 형식은 같고, 방송 ID가 없는 경로는 첫 채널(기본 채널)을 씁니다. 없는 채널은 404입니다. 방송 ID 없는 경로는 프론트가 방송별 경로로 옮긴 뒤 지웁니다. `/api/scheduler/tick`은 디버그용이라 기본 채널만 있습니다.
 
+다시듣기: `GET /api/replays/mine`은 내가 진행한 방송의 다시듣기를 모든 채널에서 모아 최신순으로 돌려줍니다. `/api/replays/bookmarked`도 모든 채널의 북마크를 북마크한 순서로 합칩니다. 북마크와 삭제(`/api/replays/{session_id}...`)는 세션→채널 색인(`backend:replay-stations`)으로 그 세션의 채널을 찾습니다. 다시듣기 항목에는 `stationId`가 들어 있습니다.
+
 Node 서버와 package.json은 제거했습니다. 실행은 `python -m app`입니다.
 `app/api.py`는 입력 모델과 HTTP 경로, 앱별 메모리 상태를 관리합니다.
 `app/scheduler.py`는 기존 버퍼 정책의 순수 계산 함수입니다.
