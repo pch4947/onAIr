@@ -15,13 +15,15 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 
 from app.auth import get_current_user
 from app.board import BoardStore
-from app.board_stories import POSTS_KEY, READ_KEY, STORIES_SINCE_KEY, STORY_PREFIX, StoryFeed, eligible, settle_read
+from app.board_stories import (POSTS_KEY, READ_KEY, STORIES_SINCE_KEY, STORY_PREFIX, STORY_STATIONS_KEY, StoryFeed,
+                               eligible, settle_read)
+from dataclasses import replace
 from app.config import Settings
 from app.main import create_app
 from app.messaging.consumer import EngineConsumer, GROUP
 from app.notifications import NotificationStore
 from app.streaming.journal import Journal
-from app.station_runtime import default_runtime
+from app.station_runtime import default_runtime, ensure_runtimes
 
 
 def post(post_id, body='오늘 시험 끝났어요', age=timedelta(hours=1), author='author-1'):
@@ -57,13 +59,26 @@ class BoardRouteTests(unittest.IsolatedAsyncioTestCase):
         default_runtime(self.app).story_feed.offer.side_effect = RedisConnectionError('offline')
         self.assertEqual((await self.client.post('/api/board/posts', json=body)).status_code, 201)
 
+    async def test_every_channel_is_offered_new_posts_and_told_about_deletions(self):
+        app = create_app(replace(Settings('127.0.0.1', 3000), station_id='st_a', station_ids=('st_a', 'st_b')))
+        app.dependency_overrides[get_current_user] = lambda: {'id': 'u1', 'name': '글쓴이'}
+        feeds = {sid: SimpleNamespace(offer=AsyncMock(), withdraw=AsyncMock()) for sid in ('st_a', 'st_b')}
+        for sid, station in ensure_runtimes(app.state).items():
+            station.story_feed = feeds[sid]
+        feeds['st_a'].offer.side_effect = RedisConnectionError('offline')  # one channel failing does not stop the other
+        app.state.board = BoardStore(SimpleNamespace(hset=AsyncMock()))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
+            reply = await client.post('/api/board/posts', json={'title': '제목', 'body': '내용'})
+        self.assertEqual(reply.status_code, 201)
+        self.assertEqual(feeds['st_b'].offer.await_args.args[0]['id'], reply.json()['post']['id'])
+
 
 @unittest.skipUnless(os.environ.get('ONAIR_INTEGRATION_TEST') == '1', 'Requires local Redis')
 class StoryFeedRedisTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         # Posts and read marks are global keys, so this suite keeps to its own database.
         self.redis = Redis.from_url('redis://127.0.0.1:6379/13', decode_responses=True)
-        await self.redis.delete(POSTS_KEY, READ_KEY)
+        await self.redis.delete(POSTS_KEY, READ_KEY, STORY_STATIONS_KEY)
         await self.redis.set(STORIES_SINCE_KEY, '0')
         self.station = 'st_story_' + uuid4().hex
         self.prefix = 'backend:' + self.station
@@ -73,7 +88,7 @@ class StoryFeedRedisTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         keys = [key async for key in self.redis.scan_iter(f'*{self.station}*')]
         keys += [key async for key in self.redis.scan_iter('backend:notifications:*')]
-        await self.redis.delete(POSTS_KEY, READ_KEY, STORIES_SINCE_KEY, *keys)
+        await self.redis.delete(POSTS_KEY, READ_KEY, STORIES_SINCE_KEY, STORY_STATIONS_KEY, *keys)
         await self.redis.aclose()
 
     async def set_station(self, status='started', **config):
@@ -138,6 +153,31 @@ class StoryFeedRedisTests(unittest.IsolatedAsyncioTestCase):
         await self.feed.withdraw('live')
         self.assertEqual([(t, p['story_id']) for t, p in await self.events()],
                          [('board.story', STORY_PREFIX + 'live'), ('board.story.withdrawn', STORY_PREFIX + 'live')])
+
+    async def test_a_story_read_on_one_channel_is_withdrawn_from_the_others(self):
+        other = 'st_story_' + uuid4().hex
+        idle = 'st_story_' + uuid4().hex
+        try:
+            for sid, status in ((other, 'started'), (idle, 'ended')):
+                await self.redis.set(f'backend:{sid}:station', json.dumps(dict(status=status, created_at=1, config={})))
+            await self.add(post('one'))
+            for feed in (self.feed, StoryFeed(self.redis, other)):
+                await feed.offer(post('one'))
+            await self.redis.sadd(STORY_STATIONS_KEY, idle)  # handed a story earlier, no longer on air
+            await settle_read(self.redis, self.station, STORY_PREFIX + 'one')
+            await settle_read(self.redis, self.station, STORY_PREFIX + 'one')  # a retried delivery
+            other_events = [(f['type'], json.loads(f['payload'])['story_id'])
+                            for _, f in await self.redis.xrange(f'engine:{other}:in')]
+            self.assertEqual(other_events, [('board.story', STORY_PREFIX + 'one'),
+                                            ('board.story.withdrawn', STORY_PREFIX + 'one')])
+            self.assertEqual([t for t, _ in await self.events()], ['board.story'])
+            self.assertEqual(await self.redis.xlen(f'engine:{idle}:in'), 0)
+            await StoryFeed(self.redis, other).offer(post('one'))  # already read, never offered again
+            self.assertEqual(await self.redis.xlen(f'engine:{other}:in'), 2)
+        finally:
+            keys = [k for sid in (other, idle) async for k in self.redis.scan_iter(f'*{sid}*')]
+            if keys:
+                await self.redis.delete(*keys)
 
     async def test_station_started_event_sends_candidates_after_recording_the_result(self):
         await self.add(post('one'))

@@ -86,6 +86,7 @@ StationRuntime
 ### 4.1 게시판 사연
 
 - 새 글은 진행 중인 talk 방송 **모두**에 후보로 보낸다 (`StoryFeed`를 채널마다).
+- 사연을 보낸 채널은 `backend:board:story-stations`에 남긴다(보내는 Lua 안에서 함께 기록).
 - 읽힘 표시(`backend:board:read-stories`)는 지금처럼 전역 하나다. 한 채널에서 읽히면
   **다른 채널에는 `board.story.withdrawn`을 보내** 같은 사연이 두 번 읽히지 않게 한다.
   엔진이 이미 제출한 조각은 그대로 나가므로, 거의 동시에 두 채널에서 읽히는 경우는 남는다.
@@ -198,7 +199,7 @@ StationRuntime
 2. 채널 목록 설정과 채널별 런타임·task 시작·종료, 방송별 경로 검증을 채널 목록 기준으로, 엔진 상태 조회 공용 캐시 — 완료
 3. 생성 Lua(사용자당 1개·빈 채널 선택)와 `GET /api/stations`, `/api/stations/mine` — 완료
 4. 방송별 경로(6.1) 추가, 기존 경로는 기본 채널로 — 완료
-5. 게시판 사연을 모든 talk 채널로 보내고 읽히면 다른 채널에서 회수 (4.1절)
+5. 게시판 사연을 모든 talk 채널로 보내고 읽히면 다른 채널에서 회수 (4.1절) — 완료
 6. 다시듣기 색인과 `GET /api/replays/mine`
 7. 프론트 전환 뒤 방송 ID 없는 경로 삭제, 문서([BACKEND_STATION_CREATION.md](BACKEND_STATION_CREATION.md) 등) 갱신
 
