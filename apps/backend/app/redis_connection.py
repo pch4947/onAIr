@@ -20,14 +20,14 @@ from .notifications import NotificationStore
 from .replays import ReplaySessionStore
 from .api import PresenceStore
 from .music import MusicService
-from .station_lifecycle import StationLifecycle
+from .station_lifecycle import EngineStatusCache, StationLifecycle
 from .station_runtime import ensure_runtimes
 
 
-def open_station(station, client):
+def open_station(station, client, music_lock):
     """방송 하나의 저장소와 작업자를 만든다. 작업자 task는 호출한 쪽이 띄운다."""
     settings, sid = station.settings, station.station_id
-    station.music = MusicService(client, settings)
+    station.music = MusicService(client, settings, music_lock)
     station.requests = RequestStore(client, sid)
     station.stations = StationStore(client, sid)
     station.story_feed = StoryFeed(client, sid)
@@ -66,11 +66,13 @@ async def redis_lifespan(app):
     engine_http = httpx.AsyncClient(base_url=app.state.settings.engine_api_url,
                                    headers=headers, timeout=httpx.Timeout(30, connect=3), trust_env=False)
     app.state.engine_http = engine_http
+    app.state.engine_status = EngineStatusCache(engine_http)
     stations = list(ensure_runtimes(app.state).values())
+    music_lock = asyncio.Lock()
     consumer_tasks, lifecycle_tasks = [], []
     try:
         for station in stations:
-            open_station(station, client)
+            open_station(station, client, music_lock)
             consumer_tasks.append(asyncio.create_task(
                 station.engine_consumer.run(), name=f"engine-consumer-{station.station_id}"))
         try:

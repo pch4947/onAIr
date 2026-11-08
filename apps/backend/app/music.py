@@ -271,10 +271,11 @@ def music_segment_id(generation, owner, retry_key):
 
 
 class MusicService:
-    def __init__(self, redis, settings):
+    def __init__(self, redis, settings, lock=None):
         self.redis, self.settings = redis, settings
         self.prefix = f'backend:{settings.station_id}'
-        self.lock = asyncio.Lock()
+        # 채널끼리 같이 쓴다 — 다운로드·변환은 서버 전체에서 한 번에 하나
+        self.lock = lock or asyncio.Lock()
 
     def is_cached(self, segment_id):
         directory = self.settings.audio_dir / self.settings.station_id / 'youtube'
