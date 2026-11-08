@@ -1,7 +1,9 @@
 """방송(채널)마다 하나씩 두는 저장소·작업자 묶음 (docs/BACKEND_MULTI_STATION.md 4절).
 
-지금은 설정한 방송 하나만 만든다. 방송 ID가 없는 기존 경로는 기본 방송을 쓴다.
+채널은 설정(ONAIR_STATION_IDS)으로 정한다. 방송 ID가 없는 기존 경로는 첫 채널(기본 방송)을 쓴다.
 """
+from dataclasses import replace
+
 from fastapi import HTTPException, Request
 
 
@@ -29,12 +31,19 @@ class StationRuntime:
     def engine_http(self):
         return self._shared.engine_http
 
+    @property
+    def engine_status(self):
+        return getattr(self._shared, 'engine_status', None)
+
 
 def ensure_runtimes(state) -> dict[str, StationRuntime]:
     if getattr(state, 'runtimes', None) is None:
-        station = StationRuntime(state, state.settings)
-        state.runtimes = {station.station_id: station}
-        state.default_station_id = station.station_id
+        settings = state.settings
+        ids = getattr(settings, 'channel_ids', None) or (settings.station_id,)
+        # 채널마다 방송 ID만 바꾼 설정 사본. Redis 키·HLS·음원 디렉터리가 방송 ID로 나뉜다
+        state.runtimes = {sid: StationRuntime(state, settings if sid == settings.station_id
+                                              else replace(settings, station_id=sid)) for sid in ids}
+        state.default_station_id = ids[0]
     return state.runtimes
 
 

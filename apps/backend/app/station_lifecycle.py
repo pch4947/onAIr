@@ -65,6 +65,39 @@ return 1
 """
 
 
+ENGINE_STATUS_TTL_SECONDS = 2
+
+
+async def engine_station_ids(http) -> set[str]:
+    """엔진이 지금 띄우고 있는 방송 ID."""
+    response = await http.get('/v1/engine/status', timeout=3)
+    response.raise_for_status()
+    stations = response.json().get('stations')
+    if not isinstance(stations, list) or any(
+            not isinstance(s, dict) or not isinstance(s.get('station_id'), str) for s in stations):
+        raise ValueError('Invalid engine station list')
+    return {s['station_id'] for s in stations}
+
+
+class EngineStatusCache:
+    """채널마다 5초에 한 번씩 엔진 상태를 묻지 않게, 잠깐 동안 한 번 받은 목록을 나눠 쓴다.
+
+    실패는 기억하지 않는다. 다음 호출이 다시 묻는다.
+    """
+
+    def __init__(self, http, ttl=ENGINE_STATUS_TTL_SECONDS):
+        self.http, self.ttl = http, ttl
+        self.lock = asyncio.Lock()
+        self.ids, self.fetched_at = None, 0.0
+
+    async def station_ids(self) -> set[str]:
+        async with self.lock:
+            if self.ids is None or time.monotonic() - self.fetched_at > self.ttl:
+                self.ids = await engine_station_ids(self.http)
+                self.fetched_at = time.monotonic()
+            return self.ids
+
+
 class StationLifecycle:
     def __init__(self, station):
         """station: StationRuntime (hls, replay_sessions, settings, engine_http를 쓴다)."""
@@ -169,14 +202,9 @@ class StationLifecycle:
             elif (status != 'stopping' and self.state.settings.hls_enabled
                   and not self.state.hls.started):
                 await self.state.hls.start()
-            response = await self.state.engine_http.get('/v1/engine/status', timeout=3)
-            response.raise_for_status()
-            payload = response.json()
-            stations = payload.get('stations')
-            if not isinstance(stations, list) or any(
-                    not isinstance(s, dict) or not isinstance(s.get('station_id'), str) for s in stations):
-                raise ValueError('Invalid engine station list')
-            present = any(s['station_id'] == self.sid for s in stations)
+            cache = getattr(self.state, 'engine_status', None)
+            present = self.sid in (await cache.station_ids() if cache else
+                                   await engine_station_ids(self.state.engine_http))
             identity = record['created_at']
             if identity != self.observed:
                 self.absences = 0

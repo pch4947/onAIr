@@ -241,6 +241,7 @@ compose.yaml은 Redis 7.4 Alpine 이미지와 데이터 볼륨을 사용하고,
 같은 방송을 소비하는 백엔드를 중복 실행하지 마세요.
 
 - `ONAIR_STATION_ID`: 기본 st_local_dev
+- `ONAIR_STATION_IDS`: 다중 방송 채널 목록(쉼표 구분). 설정하면 `ONAIR_STATION_ID` 대신 쓰고 첫 번째가 기본 채널입니다. 채널마다 엔진 수신기, 종료 정리, HLS 송출기가 따로 돌고, 엔진 상태 조회와 유튜브 다운로드는 채널끼리 같이 씁니다. 방송 생성은 아직 기본 채널에만 합니다 (docs/BACKEND_MULTI_STATION.md)
 - `ONAIR_AUDIO_DIR`: 공유 오디오 루트의 절대 경로. 생략하면 저장소 apps/engine/var/audio
 - `ONAIR_REDIS_URL`: 엔진과 동일한 변수 이름 지원. 설정하면 기존 REDIS_URL보다 우선
 - 엔진은 apps/engine에서 실행하며 transport.audio_dir가 백엔드 루트와 같은 실제 폴더여야 함

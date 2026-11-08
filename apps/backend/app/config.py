@@ -24,6 +24,8 @@ class Settings:
     buffer_low_seconds: float = 15
     broadcast_delay_seconds: float = 12
     station_id: str = "st_local_dev"
+    # 다중 방송 채널 (ONAIR_STATION_IDS). 비어 있으면 station_id 하나만 쓴다
+    station_ids: tuple[str, ...] = ()
     audio_dir: Path = Path(__file__).resolve().parents[2] / "engine" / "var" / "audio"
     jwt_secret: str = "dev-insecure-secret-change-me"
     engine_api_url: str = "http://127.0.0.1:8100"
@@ -35,6 +37,23 @@ class Settings:
     track_intro_enabled: bool = False
     # 데모용 어드민 참가 핀 → 어드민 닉네임 (ONAIR_ADMIN_PINS). 비어 있으면 어드민 참가를 막는다
     admin_pins: dict[str, str] = field(default_factory=dict, repr=False)
+
+    @property
+    def channel_ids(self) -> tuple[str, ...]:
+        """방송 채널 목록. 첫 번째가 방송 ID 없는 기존 경로가 쓰는 기본 채널이다."""
+        return self.station_ids or (self.station_id,)
+
+
+STATION_ID_PATTERN = r"[A-Za-z0-9_-]{1,64}"
+
+
+def parse_station_ids(raw: str) -> tuple[str, ...]:
+    ids = tuple(filter(None, (part.strip() for part in raw.split(','))))
+    if any(not re.fullmatch(STATION_ID_PATTERN, sid) for sid in ids):
+        raise ValueError("ONAIR_STATION_IDS must be comma-separated station IDs")
+    if len(set(ids)) != len(ids):
+        raise ValueError("ONAIR_STATION_IDS has a duplicate station ID")
+    return ids
 
 
 def parse_admin_pins(raw: str) -> dict[str, str]:
@@ -61,8 +80,9 @@ def load_settings() -> Settings:
             raise ValueError(f"{name} must be finite and at least 1")
         return value
 
-    station_id = os.environ.get("ONAIR_STATION_ID", "st_local_dev")
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", station_id):
+    station_ids = parse_station_ids(os.environ.get("ONAIR_STATION_IDS", ""))
+    station_id = station_ids[0] if station_ids else os.environ.get("ONAIR_STATION_ID", "st_local_dev")
+    if not re.fullmatch(STATION_ID_PATTERN, station_id):
         raise ValueError("ONAIR_STATION_ID is invalid")
     audio_dir = Path(os.environ.get("ONAIR_AUDIO_DIR", str(Settings.audio_dir))).expanduser()
     if not audio_dir.is_absolute():
@@ -81,7 +101,7 @@ def load_settings() -> Settings:
                     buffer_target_seconds=positive_seconds("STREAM_BUFFER_TARGET_SECONDS", "45"),
                     response_window_seconds=positive_seconds("REQUEST_RESPONSE_WINDOW_SECONDS", "90"),
                     redis_url=os.environ.get("ONAIR_REDIS_URL") or os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0"),
-                    station_id=station_id, audio_dir=audio_dir.resolve(),
+                    station_id=station_id, station_ids=station_ids, audio_dir=audio_dir.resolve(),
                     hls_enabled=os.environ.get("ONAIR_HLS_ENABLED", "1") == "1",
                     hls_dir=Path(os.environ.get("ONAIR_HLS_DIR", str(Settings.hls_dir))).resolve(),
                     ffmpeg=os.environ.get("ONAIR_FFMPEG", "ffmpeg"),
