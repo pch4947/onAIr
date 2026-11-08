@@ -21,6 +21,7 @@ from app.main import create_app
 from app.messaging.consumer import EngineConsumer, GROUP
 from app.notifications import NotificationStore
 from app.streaming.journal import Journal
+from app.station_runtime import default_runtime
 
 
 def post(post_id, body='오늘 시험 끝났어요', age=timedelta(hours=1), author='author-1'):
@@ -43,7 +44,7 @@ class BoardRouteTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.app = create_app(Settings('127.0.0.1', 3000))
         self.app.dependency_overrides[get_current_user] = lambda: {'id': 'u1', 'name': '글쓴이'}
-        self.app.state.story_feed = SimpleNamespace(offer=AsyncMock(), withdraw=AsyncMock())
+        default_runtime(self.app).story_feed = SimpleNamespace(offer=AsyncMock(), withdraw=AsyncMock())
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(self.app), base_url='http://test')
         self.addAsyncCleanup(self.client.aclose)
 
@@ -52,8 +53,8 @@ class BoardRouteTests(unittest.IsolatedAsyncioTestCase):
         body = {'title': '제목', 'body': '내용'}
         reply = await self.client.post('/api/board/posts', json=body)
         self.assertEqual(reply.status_code, 201)
-        self.assertEqual(self.app.state.story_feed.offer.await_args.args[0]['id'], reply.json()['post']['id'])
-        self.app.state.story_feed.offer.side_effect = RedisConnectionError('offline')
+        self.assertEqual(default_runtime(self.app).story_feed.offer.await_args.args[0]['id'], reply.json()['post']['id'])
+        default_runtime(self.app).story_feed.offer.side_effect = RedisConnectionError('offline')
         self.assertEqual((await self.client.post('/api/board/posts', json=body)).status_code, 201)
 
 

@@ -22,6 +22,7 @@ from app.main import create_app
 from app.music import MusicService, TrackInput, fetch_oembed_title, run_process, youtube_id
 from app.streaming.hls import HlsPublisher
 from app.youtube_worker import validate_metadata
+from app.station_runtime import default_runtime
 
 VIDEO = 'BaW_jenozKc'
 
@@ -176,7 +177,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_authenticated_listener_state_and_accepted_queue(self):
         app = create_app(Settings('127.0.0.1', 3000, hls_enabled=True))
         app.state.redis = SimpleNamespace(get=AsyncMock(return_value=json.dumps(dict(owner_id='owner', status='started'))))
-        app.state.music = SimpleNamespace(enqueue=AsyncMock(return_value={'status': 'queued'}))
+        default_runtime(app).music = SimpleNamespace(enqueue=AsyncMock(return_value={'status': 'queued'}))
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
             path = '/api/stations/st_local_dev/tracks'
             body = {'url': f'https://youtu.be/{VIDEO}'}
@@ -187,19 +188,19 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             app.dependency_overrides[get_current_user] = current_listener
             self.assertEqual((await client.post(path, json={'url': 'https://example.com'}, headers=headers)).status_code, 422)
             self.assertEqual((await client.post(path, json=body)).status_code, 422)
-            app.state.music.enqueue.assert_not_awaited()
+            default_runtime(app).music.enqueue.assert_not_awaited()
             self.assertEqual((await client.post(path, json=body, headers=headers)).status_code, 202)
-            app.state.music.enqueue.assert_awaited_once_with(VIDEO, 'other', 'song-one')
+            default_runtime(app).music.enqueue.assert_awaited_once_with(VIDEO, 'other', 'song-one')
             async def named_listener():
                 return {'id': 'other', 'name': '청취자'}
             app.dependency_overrides[get_current_user] = named_listener
             request_body = {**body, 'source': 'request', 'comment': '시험 끝났어요'}
             for extra, nickname in [({}, '청취자'), ({'anonymous': True}, None)]:
                 with self.subTest(anonymous=bool(extra)):
-                    app.state.music.enqueue.reset_mock()
+                    default_runtime(app).music.enqueue.reset_mock()
                     response = await client.post(path, json={**request_body, **extra}, headers=headers)
                     self.assertEqual(response.status_code, 202)
-                    app.state.music.enqueue.assert_awaited_once_with(
+                    default_runtime(app).music.enqueue.assert_awaited_once_with(
                         VIDEO, 'other', 'song-one', 'request', None, nickname, '시험 끝났어요')
             app.state.redis.get.return_value = json.dumps(dict(owner_id='owner', status='preparing'))
             self.assertEqual((await client.post(path, json=body, headers=headers)).status_code, 409)
@@ -347,7 +348,7 @@ class MusicIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 fragment = next(name for name in manifest.splitlines() if name.endswith('.ts')
                     and (publisher.playback_metadata(name)['segment'] or {}).get('id') == first['segment_id'])
                 app = create_app(settings)
-                app.state.hls = publisher
+                default_runtime(app).hls = publisher
                 async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
                     playlist_response = await client.get(first['hls_url'])
                     self.assertEqual(playlist_response.status_code, 200)

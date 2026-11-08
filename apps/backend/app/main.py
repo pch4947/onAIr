@@ -12,6 +12,7 @@ from .music import router as music_router
 from .test_controls import router as test_controls_router
 from .config import Settings, load_settings
 from .redis_connection import redis_health, redis_lifespan
+from .station_runtime import ensure_runtimes
 from fastapi import Request, HTTPException
 from fastapi.responses import FileResponse, Response
 import re
@@ -19,9 +20,10 @@ import re
 
 async def hls_file(station_id: str, filename: str, request: Request):
     settings = request.app.state.settings
-    publisher = request.app.state.hls
-    if not settings.hls_enabled or station_id != settings.station_id:
+    station = ensure_runtimes(request.app.state).get(station_id)
+    if not settings.hls_enabled or station is None:
         raise HTTPException(404, "Station not found")
+    publisher = station.hls
     if filename == "index.m3u8":
         if not publisher.ready:
             raise HTTPException(503, "Stream warming up", headers={"Retry-After": "2"})
@@ -43,9 +45,10 @@ async def hls_file(station_id: str, filename: str, request: Request):
 
 async def vod_file(station_id: str, session_id: str, filename: str, request: Request):
     settings = request.app.state.settings
-    publisher = request.app.state.hls
-    if not settings.hls_enabled or station_id != settings.station_id:
+    station = ensure_runtimes(request.app.state).get(station_id)
+    if not settings.hls_enabled or station is None:
         raise HTTPException(404, "Station not found")
+    publisher = station.hls
     if not re.fullmatch(r"[a-f0-9]{32}", session_id):
         raise HTTPException(404, "Replay not found")
     if filename == "index.m3u8":

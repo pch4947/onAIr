@@ -23,6 +23,7 @@ from app.music import MusicService
 from app.streaming.hls import HlsPublisher
 from app.main import create_app
 from app.auth import get_current_user
+from app.station_runtime import default_runtime
 from test_stations import BODY
 
 
@@ -48,7 +49,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             json={'stations': []}, request=httpx.Request('GET', 'http://engine/v1/engine/status'))))
         self.state = SimpleNamespace(redis=self.redis, settings=self.settings, hls=self.publisher,
                                     replay_sessions=None, engine_http=self.http)
-        self.lifecycle = StationLifecycle(SimpleNamespace(state=self.state))
+        self.lifecycle = StationLifecycle(self.state)
 
     async def asyncTearDown(self):
         keys = [k async for k in self.redis.scan_iter(match=f'*{self.sid}*')]
@@ -171,8 +172,8 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_stop_http_auth_and_owner_checks(self):
         app = create_app(self.settings)
-        app.state.lifecycle = self.lifecycle
-        app.state.hls = SimpleNamespace(ready=False)
+        default_runtime(app).lifecycle = self.lifecycle
+        default_runtime(app).hls = SimpleNamespace(ready=False)
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
             path = f'/api/stations/{self.sid}/stop'
             self.assertEqual((await client.post(path, json={'created_at': 100})).status_code, 401)

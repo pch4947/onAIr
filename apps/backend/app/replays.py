@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from redis.exceptions import RedisError
 
 from .auth import get_current_user
+from .station_runtime import default_runtime, station_runtime
 
 router = APIRouter(prefix="/api")
 User = Annotated[dict, Depends(get_current_user)]
@@ -78,24 +79,19 @@ def public_replay(record: dict, bookmark_count: int, bookmarked: bool) -> dict:
     }
 
 
-def require_station(station_id: str, request: Request) -> None:
-    if station_id != request.app.state.settings.station_id:
-        raise HTTPException(404, "Station not found")
-
-
-async def is_station_owner(request: Request, user_id: str) -> bool:
-    raw = await request.app.state.redis.get(request.app.state.stations.key)
+async def is_station_owner(request: Request, station, user_id: str) -> bool:
+    raw = await request.app.state.redis.get(station.stations.key)
     return bool(raw and json.loads(raw)["owner_id"] == user_id)
 
 
 @router.get("/stations/{station_id}/replays")
 async def list_replays(station_id: str, request: Request, current_user: User,
                        offset: Offset = 0, limit: Annotated[int, Query(ge=1, le=100)] = 20):
-    require_station(station_id, request)
+    station = station_runtime(request, station_id)
     try:
         async with asyncio.timeout(3):
-            sessions, total = await request.app.state.replay_sessions.list(offset, limit)
-            marks = await request.app.state.replay_bookmarks.status_many(
+            sessions, total = await station.replay_sessions.list(offset, limit)
+            marks = await station.replay_bookmarks.status_many(
                 [s["id"] for s in sessions], current_user["id"])
     except (RedisError, TimeoutError):
         raise HTTPException(503, "Redis unavailable") from None
@@ -105,15 +101,15 @@ async def list_replays(station_id: str, request: Request, current_user: User,
 @router.get("/stations/{station_id}/replays/mine")
 async def list_my_replays(station_id: str, request: Request, current_user: User,
                           offset: Offset = 0, limit: Annotated[int, Query(ge=1, le=100)] = 20):
-    require_station(station_id, request)
+    station = station_runtime(request, station_id)
     try:
         async with asyncio.timeout(3):
-            legacy_owner = await is_station_owner(request, current_user['id'])
-            all_sessions, _ = await request.app.state.replay_sessions.list(0, 2147483647)
+            legacy_owner = await is_station_owner(request, station, current_user['id'])
+            all_sessions, _ = await station.replay_sessions.list(0, 2147483647)
             owned = [s for s in all_sessions if s.get('ownerId') == current_user['id']
                      or ('ownerId' not in s and legacy_owner)]
             sessions, total = owned[offset:offset + limit], len(owned)
-            marks = await request.app.state.replay_bookmarks.status_many(
+            marks = await station.replay_bookmarks.status_many(
                 [s["id"] for s in sessions], current_user["id"])
     except (RedisError, TimeoutError):
         raise HTTPException(503, "Redis unavailable") from None
@@ -125,10 +121,10 @@ async def list_bookmarked_replays(request: Request, current_user: User,
                                   offset: Offset = 0, limit: Annotated[int, Query(ge=1, le=100)] = 20):
     try:
         async with asyncio.timeout(3):
-            session_ids, total = await request.app.state.replay_bookmarks.liked_by(
+            session_ids, total = await default_runtime(request.app).replay_bookmarks.liked_by(
                 current_user["id"], offset, limit)
-            by_id = await request.app.state.replay_sessions.get_many(session_ids)
-            marks = await request.app.state.replay_bookmarks.status_many(session_ids, current_user["id"])
+            by_id = await default_runtime(request.app).replay_sessions.get_many(session_ids)
+            marks = await default_runtime(request.app).replay_bookmarks.status_many(session_ids, current_user["id"])
     except (RedisError, TimeoutError):
         raise HTTPException(503, "Redis unavailable") from None
     replays = [public_replay(by_id[sid], *marks[sid]) for sid in session_ids if sid in by_id]
@@ -139,8 +135,8 @@ async def list_bookmarked_replays(request: Request, current_user: User,
 async def bookmark_replay(session_id: str, request: Request, current_user: User):
     try:
         async with asyncio.timeout(3):
-            await request.app.state.replay_bookmarks.like(session_id, current_user["id"])
-            count, bookmarked = await request.app.state.replay_bookmarks.status(session_id, current_user["id"])
+            await default_runtime(request.app).replay_bookmarks.like(session_id, current_user["id"])
+            count, bookmarked = await default_runtime(request.app).replay_bookmarks.status(session_id, current_user["id"])
     except (RedisError, TimeoutError):
         raise HTTPException(503, "Redis unavailable") from None
     return {"bookmarkCount": count, "bookmarked": bookmarked}
@@ -150,8 +146,8 @@ async def bookmark_replay(session_id: str, request: Request, current_user: User)
 async def unbookmark_replay(session_id: str, request: Request, current_user: User):
     try:
         async with asyncio.timeout(3):
-            await request.app.state.replay_bookmarks.unlike(session_id, current_user["id"])
-            count, bookmarked = await request.app.state.replay_bookmarks.status(session_id, current_user["id"])
+            await default_runtime(request.app).replay_bookmarks.unlike(session_id, current_user["id"])
+            count, bookmarked = await default_runtime(request.app).replay_bookmarks.status(session_id, current_user["id"])
     except (RedisError, TimeoutError):
         raise HTTPException(503, "Redis unavailable") from None
     return {"bookmarkCount": count, "bookmarked": bookmarked}
@@ -163,23 +159,23 @@ async def delete_replay(session_id: str, request: Request, current_user: User):
     HlsPublisher가 지금도 그 vod 디렉터리에 쓰고 있을 수 있어 삭제를 막는다."""
     try:
         async with asyncio.timeout(3):
-            record = (await request.app.state.replay_sessions.get_many([session_id])).get(session_id)
+            record = (await default_runtime(request.app).replay_sessions.get_many([session_id])).get(session_id)
             if not record:
                 raise HTTPException(404, "다시듣기를 찾을 수 없어요")
             owner = (record['ownerId'] == current_user['id'] if 'ownerId' in record
-                     else await is_station_owner(request, current_user['id']))
+                     else await is_station_owner(request, default_runtime(request.app), current_user['id']))
             if not owner:
                 raise HTTPException(403, "본인 방송만 삭제할 수 있어요")
             if record["endedAt"] is None:
                 raise HTTPException(409, "진행 중인 방송은 삭제할 수 없어요")
             # 삭제된 세션이 북마크한 사람들의 목록/카운트에 고아로 남지 않도록 같이 정리한다.
-            bookmarks = request.app.state.replay_bookmarks
+            bookmarks = default_runtime(request.app).replay_bookmarks
             bookmarker_ids = await request.app.state.redis.smembers(bookmarks.key(session_id))
             for user_id in bookmarker_ids:
                 await request.app.state.redis.zrem(bookmarks.user_index_key(user_id), session_id)
             await request.app.state.redis.delete(bookmarks.key(session_id))
-            await request.app.state.replay_sessions.delete(session_id)
+            await default_runtime(request.app).replay_sessions.delete(session_id)
     except (RedisError, TimeoutError):
         raise HTTPException(503, "Redis unavailable") from None
-    vod_dir = request.app.state.hls.directory / "vod" / session_id
+    vod_dir = default_runtime(request.app).hls.directory / "vod" / session_id
     shutil.rmtree(vod_dir, ignore_errors=True)

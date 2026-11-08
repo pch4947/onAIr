@@ -21,6 +21,7 @@ from app.config import Settings
 from app.main import create_app
 from app.messaging.consumer import EngineConsumer
 from app.stations import StationInput, StationStore, engine_call
+from app.station_runtime import default_runtime
 
 
 BODY = {'broadcast_minutes': 30, 'persona': {
@@ -68,8 +69,8 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_owner_lookup_and_redis_failure(self):
         app = create_app(Settings('127.0.0.1', 3000))
         app.dependency_overrides[get_current_user] = lambda: {'id': 'u1'}
-        app.state.hls = SimpleNamespace(ready=True)
-        app.state.stations = SimpleNamespace(key='station')
+        default_runtime(app).hls = SimpleNamespace(ready=True)
+        default_runtime(app).stations = SimpleNamespace(key='station')
         app.state.redis = SimpleNamespace(get=AsyncMock(return_value=json.dumps({
             'station_id': 'st_local_dev', 'owner_id': 'u2', 'status': 'started'})))
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
@@ -83,27 +84,27 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_request_input_is_validated_for_a_logged_in_listener(self):
         app = create_app(Settings('127.0.0.1', 3000))
         app.dependency_overrides[get_current_user] = lambda: {'id': 'user-1', 'name': '로그인이름'}
-        app.state.requests = SimpleNamespace(create=AsyncMock(return_value={'id': 'req-1', 'listenerId': 'user-1'}))
+        default_runtime(app).requests = SimpleNamespace(create=AsyncMock(return_value={'id': 'req-1', 'listenerId': 'user-1'}))
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
             for body in [{}, {'prompt': ''}, {'prompt': 5}, {'prompt': '노래 부탁해요', 'kind': 'mood'},
                          {'prompt': 'x' * 201, 'kind': 'message'}]:
                 with self.subTest(body=body):
                     self.assertEqual((await client.post('/api/requests', json=body)).status_code, 422)
-            app.state.requests.create.assert_not_awaited()
+            default_runtime(app).requests.create.assert_not_awaited()
             sent = {'prompt': '안녕', 'kind': 'message', 'listenerId': 'someone-else'}
             result = await client.post('/api/requests', json=sent)
             self.assertEqual(result.status_code, 202)
             self.assertEqual(result.json()['request'], {'id': 'req-1', 'mine': True})
-            args, kwargs = app.state.requests.create.await_args
+            args, kwargs = default_runtime(app).requests.create.await_args
             self.assertEqual(args[:3], ('안녕', 'user-1', 'message'))
             self.assertIsNone(kwargs['listener_name'])
             await client.post('/api/requests', json=sent | {'listenerName': '다른사람'})
-            self.assertEqual(app.state.requests.create.await_args.kwargs['listener_name'], '로그인이름')
+            self.assertEqual(default_runtime(app).requests.create.await_args.kwargs['listener_name'], '로그인이름')
     async def test_stream_state_reports_current_corner_only_while_on_air(self):
         app = create_app(Settings('127.0.0.1', 3000))
-        app.state.hls = SimpleNamespace()
-        app.state.presence = SimpleNamespace(count=AsyncMock(return_value=0))
-        app.state.requests = SimpleNamespace(metrics=AsyncMock(return_value={}))
+        default_runtime(app).hls = SimpleNamespace()
+        default_runtime(app).presence = SimpleNamespace(count=AsyncMock(return_value=0))
+        default_runtime(app).requests = SimpleNamespace(metrics=AsyncMock(return_value={}))
         corner = dict(corner='topic_talk', title='오늘의 이야기', contract=dict(chat='quote'))
         status = {'status': 'started', 'config': {}}
         async def get(key):
@@ -116,9 +117,9 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_stream_state_reports_station_format(self):
         app = create_app(Settings('127.0.0.1', 3000))
-        app.state.hls = SimpleNamespace()
-        app.state.presence = SimpleNamespace(count=AsyncMock(return_value=0))
-        app.state.requests = SimpleNamespace(metrics=AsyncMock(return_value={}))
+        default_runtime(app).hls = SimpleNamespace()
+        default_runtime(app).presence = SimpleNamespace(count=AsyncMock(return_value=0))
+        default_runtime(app).requests = SimpleNamespace(metrics=AsyncMock(return_value={}))
         app.state.redis = SimpleNamespace(get=AsyncMock())
         cases = [(json.dumps({'status': 'started', 'config': {}}), 'started', 'talk'),
                  (json.dumps({'status': 'started', 'config': {'format': 'music'}}), 'started', 'music'),
@@ -155,8 +156,8 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_auth_validation_proxy_errors_and_readiness(self):
         app = create_app(Settings('127.0.0.1', 3000))
-        app.state.hls = SimpleNamespace(ready=True)
-        app.state.stations = SimpleNamespace(create=AsyncMock(return_value={
+        default_runtime(app).hls = SimpleNamespace(ready=True)
+        default_runtime(app).stations = SimpleNamespace(create=AsyncMock(return_value={
             'station_id': 'st_local_dev', 'status': 'preparing', 'owner_id': 'u1',
             'retry_key': 'private', 'fingerprint': 'private'}))
         app.state.engine_http = httpx.AsyncClient(transport=httpx.MockTransport(
@@ -172,7 +173,7 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
                 with self.subTest(path=path):
                     self.assertEqual((await client.post(path, json=body, headers=headers)).status_code, 403)
             self.assertEqual((await client.get('/api/voices')).status_code, 200)
-            app.state.stations.create.assert_not_awaited()
+            default_runtime(app).stations.create.assert_not_awaited()
             # kind가 없는 계정은 게스트 도입 전에 가입한 일반 회원이다
             for kind in ('admin', None):
                 app.dependency_overrides[get_current_user] = lambda kind=kind: {'id': 'u1', 'kind': kind}

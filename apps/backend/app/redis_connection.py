@@ -21,6 +21,33 @@ from .replays import ReplaySessionStore
 from .api import PresenceStore
 from .music import MusicService
 from .station_lifecycle import StationLifecycle
+from .station_runtime import ensure_runtimes
+
+
+def open_station(station, client):
+    """방송 하나의 저장소와 작업자를 만든다. 작업자 task는 호출한 쪽이 띄운다."""
+    settings, sid = station.settings, station.station_id
+    station.music = MusicService(client, settings)
+    station.requests = RequestStore(client, sid)
+    station.stations = StationStore(client, sid)
+    station.story_feed = StoryFeed(client, sid)
+    station.replay_sessions = ReplaySessionStore(client, sid)
+    station.replay_bookmarks = LikeStore(
+        client, f"backend:{sid}:replay-bookmarks", f"backend:{sid}:user-bookmarked-replays")
+    station.presence = PresenceStore(client, sid)
+    station.engine_consumer = EngineConsumer(client, settings)
+    station.engine_consumer.state = station
+    station.hls = HlsPublisher(client, settings, station.replay_sessions)
+    station.lifecycle = StationLifecycle(station)
+    station.engine_consumer.lifecycle_lock = station.lifecycle.lock
+
+
+async def station_status(client, station):
+    try:
+        raw = await client.get(station.stations.key)
+    except RedisError:
+        return 'unknown'  # Keep health endpoints available; retry from lifecycle.
+    return json.loads(raw)['status'] if raw else None
 
 
 @asynccontextmanager
@@ -29,53 +56,42 @@ async def redis_lifespan(app):
     client = Redis.from_url(app.state.settings.redis_url, decode_responses=True,
                             socket_connect_timeout=2, socket_timeout=2)
     app.state.redis = client
-    app.state.music = MusicService(client, app.state.settings)
-    app.state.requests = RequestStore(client, app.state.settings.station_id)
     app.state.users = UserStore(client)
-    app.state.stations = StationStore(client, app.state.settings.station_id)
     app.state.board = BoardStore(client)
-    app.state.story_feed = StoryFeed(client, app.state.settings.station_id)
     app.state.board_comments = CommentStore(client)
     app.state.post_likes = LikeStore(client, "backend:board:post-likes", "backend:board:user-liked-posts")
     app.state.comment_likes = LikeStore(client, "backend:board:comment-likes")
     app.state.notifications = NotificationStore(client)
-    station_prefix = f"backend:{app.state.settings.station_id}"
-    app.state.replay_sessions = ReplaySessionStore(client, app.state.settings.station_id)
-    app.state.replay_bookmarks = LikeStore(
-        client, f"{station_prefix}:replay-bookmarks", f"{station_prefix}:user-bookmarked-replays")
-    app.state.presence = PresenceStore(client, app.state.settings.station_id)
     headers = {'Authorization': f'Bearer {app.state.settings.engine_token}'} if app.state.settings.engine_token else {}
     engine_http = httpx.AsyncClient(base_url=app.state.settings.engine_api_url,
                                    headers=headers, timeout=httpx.Timeout(30, connect=3), trust_env=False)
     app.state.engine_http = engine_http
-    app.state.engine_consumer = EngineConsumer(client, app.state.settings)
-    app.state.engine_consumer.state = app.state
-    task = asyncio.create_task(app.state.engine_consumer.run(), name="engine-consumer")
-    publisher = HlsPublisher(client, app.state.settings, app.state.replay_sessions)
-    app.state.hls = publisher
-    lifecycle = StationLifecycle(app)
-    app.state.lifecycle = lifecycle
-    app.state.engine_consumer.lifecycle_lock = lifecycle.lock
-    lifecycle_task = None
+    stations = list(ensure_runtimes(app.state).values())
+    consumer_tasks, lifecycle_tasks = [], []
     try:
+        for station in stations:
+            open_station(station, client)
+            consumer_tasks.append(asyncio.create_task(
+                station.engine_consumer.run(), name=f"engine-consumer-{station.station_id}"))
         try:
-            raw = await client.get(app.state.stations.key)
-            status = json.loads(raw)['status'] if raw else None
-        except RedisError:
-            status = 'unknown'  # Keep health endpoints available; retry from lifecycle.
-        try:
-            await app.state.story_feed.stories_since()
+            await StoryFeed(client, app.state.default_station_id).stories_since()
         except RedisError:
             pass  # Recorded on the first story offer instead.
-        if app.state.settings.hls_enabled and status not in ('ended', 'cleaning', 'unknown'):
-            await publisher.start()
-        lifecycle_task = asyncio.create_task(lifecycle.run(), name='station-lifecycle')
+        for station in stations:
+            status = await station_status(client, station)
+            if station.settings.hls_enabled and status not in ('ended', 'cleaning', 'unknown'):
+                await station.hls.start()
+            lifecycle_tasks.append(asyncio.create_task(
+                station.lifecycle.run(), name=f'station-lifecycle-{station.station_id}'))
         yield
     finally:
-        if lifecycle_task:
-            await stop_consumer(lifecycle_task)
-        await app.state.hls.stop()
-        await stop_consumer(task)
+        for task in lifecycle_tasks:
+            await stop_consumer(task)
+        for station in stations:
+            if station.hls:
+                await station.hls.stop()
+        for task in consumer_tasks:
+            await stop_consumer(task)
         await client.aclose()
         await engine_http.aclose()
 

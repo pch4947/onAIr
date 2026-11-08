@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from redis.exceptions import RedisError
 
 from .auth import get_current_user
+from .station_runtime import default_runtime
 from .board_stories import POSTS_KEY
 
 log = logging.getLogger(__name__)
@@ -194,7 +195,7 @@ async def create_post(body: BoardPostInput, request: Request, current_user: User
     # The post is saved; a retry would duplicate it, so a missed offer only costs this broadcast.
     try:
         async with asyncio.timeout(3):
-            await request.app.state.story_feed.offer(entry)
+            await default_runtime(request.app).story_feed.offer(entry)
     except (RedisError, TimeoutError):
         log.warning("Board story offer skipped for %s", entry["id"])
     return {"post": with_like_status(entry, 0, False)}
@@ -284,7 +285,7 @@ async def delete_post(post_id: str, request: Request, current_user: User):
                 await request.app.state.comment_likes.delete(comment_id)
             await request.app.state.post_likes.delete(post_id)
             await request.app.state.board.delete(post_id)
-            await request.app.state.story_feed.withdraw(post_id)
+            await default_runtime(request.app).story_feed.withdraw(post_id)
     except (RedisError, TimeoutError):
         raise HTTPException(503, "Redis unavailable") from None
     return None

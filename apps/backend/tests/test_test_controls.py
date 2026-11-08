@@ -13,6 +13,7 @@ from app.auth import get_current_user
 from app.config import Settings
 from app.main import create_app
 from app.test_controls import discardable_segments, public_decision
+from app.station_runtime import default_runtime
 
 
 def segment(key, kind='speech'):
@@ -69,7 +70,7 @@ class CornerSkipApiTests(unittest.IsolatedAsyncioTestCase):
         self.redis = Redis.from_url('redis://127.0.0.1:6379/15', decode_responses=True)
         self.app = create_app(Settings('127.0.0.1', 3000, station_id=self.station, hls_enabled=True))
         self.app.state.redis = self.redis
-        self.app.state.hls = publisher(current='playing')
+        default_runtime(self.app).hls = publisher(current='playing')
         self.user = {'id': 'a1', 'kind': 'admin'}
         self.app.dependency_overrides[get_current_user] = lambda: self.user
         await self.redis.set(self.prefix + ':station', json.dumps({'status': 'started'}))

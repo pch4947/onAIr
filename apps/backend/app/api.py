@@ -11,6 +11,7 @@ from redis.exceptions import RedisError
 from pydantic import BaseModel, Field, model_validator
 
 from .auth import get_current_user
+from .station_runtime import default_runtime, station_runtime
 from .scheduler import decide_next_segment
 from .requests import IdempotencyConflict
 
@@ -45,7 +46,7 @@ async def request_history(request_id: str, request: Request,
     """State transitions observed by the backend; missing engine stages are not invented."""
     try:
         async with asyncio.timeout(3):
-            prefix = request.app.state.engine_consumer.prefix
+            prefix = default_runtime(request.app).engine_consumer.prefix
             entries = await request.app.state.redis.lrange(prefix + ':request-history:' + request_id,
                                                            offset, offset + limit - 1)
     except (RedisError, TimeoutError):
@@ -58,7 +59,7 @@ async def segment_state(segment_id: str, request: Request):
     try:
         async with asyncio.timeout(3):
             raw = await request.app.state.redis.hget(
-                request.app.state.engine_consumer.prefix + ':segment-states', segment_id)
+                default_runtime(request.app).engine_consumer.prefix + ':segment-states', segment_id)
     except (RedisError, TimeoutError):
         raise HTTPException(503, 'Redis unavailable') from None
     if raw is None:
@@ -69,7 +70,7 @@ async def segment_state(segment_id: str, request: Request):
 @router.get("/broadcast/queue")
 async def broadcast_queue(request: Request):
     """Development visibility: queued source audio, not published/playable HLS."""
-    prefix = request.app.state.engine_consumer.prefix
+    prefix = default_runtime(request.app).engine_consumer.prefix
     try:
         async with asyncio.timeout(3):
             ids = await request.app.state.redis.lrange(prefix + ":queue", 0, 99)
@@ -77,7 +78,7 @@ async def broadcast_queue(request: Request):
             count = await request.app.state.redis.llen(prefix + ":queue")
     except (RedisError, TimeoutError):
         raise HTTPException(503, "Redis unavailable") from None
-    return {"station_id": request.app.state.settings.station_id, "count": count,
+    return {"station_id": default_runtime(request.app).station_id, "count": count,
             "segments": [json.loads(item) for item in items if item]}
 
 
@@ -85,10 +86,10 @@ async def broadcast_queue(request: Request):
 async def engine_request_state(request_id: str, request: Request):
     try:
         async with asyncio.timeout(3):
-            entry = await request.app.state.requests.get(request_id)
+            entry = await default_runtime(request.app).requests.get(request_id)
             # Preserve lookup of legacy engine-only requests that have no registration record.
             raw = None if entry else await request.app.state.redis.hget(
-                request.app.state.engine_consumer.prefix + ":request-states", request_id)
+                default_runtime(request.app).engine_consumer.prefix + ":request-states", request_id)
     except (RedisError, TimeoutError):
         raise HTTPException(503, "Redis unavailable") from None
     if entry:
@@ -139,7 +140,7 @@ class BroadcastState:
 async def request_metrics(request: Request, required=False):
     try:
         async with asyncio.timeout(3):
-            return await request.app.state.requests.metrics()
+            return await default_runtime(request.app).requests.metrics()
     except (RedisError, TimeoutError):
         if required:
             raise HTTPException(503, "Redis unavailable") from None
@@ -151,7 +152,7 @@ async def request_metrics(request: Request, required=False):
 async def viewer_count(request: Request):
     try:
         async with asyncio.timeout(3):
-            return await request.app.state.presence.count(time.time())
+            return await default_runtime(request.app).presence.count(time.time())
     except (RedisError, TimeoutError):
         # Unknown, not zero — same convention as request_metrics above.
         return None
@@ -160,7 +161,7 @@ async def viewer_count(request: Request):
 async def station_summary(request: Request) -> tuple[str, str | None]:
     try:
         async with asyncio.timeout(3):
-            raw = await request.app.state.redis.get(f'backend:{request.app.state.settings.station_id}:station')
+            raw = await request.app.state.redis.get(f'backend:{default_runtime(request.app).station_id}:station')
     except (RedisError, TimeoutError):
         return 'unknown', None
     if not raw:
@@ -173,7 +174,7 @@ async def station_summary(request: Request) -> tuple[str, str | None]:
 async def current_corner(request: Request) -> dict | None:
     try:
         async with asyncio.timeout(3):
-            raw = await request.app.state.redis.get(f'backend:{request.app.state.settings.station_id}:current-corner')
+            raw = await request.app.state.redis.get(f'backend:{default_runtime(request.app).station_id}:current-corner')
     except (RedisError, TimeoutError):
         return None
     return json.loads(raw) if raw else None
@@ -181,11 +182,10 @@ async def current_corner(request: Request) -> dict | None:
 
 @router.post("/stations/{station_id}/presence", status_code=204)
 async def presence_heartbeat(station_id: str, body: PresenceInput, request: Request):
-    if station_id != request.app.state.settings.station_id:
-        raise HTTPException(404, "Station not found")
+    station = station_runtime(request, station_id)
     try:
         async with asyncio.timeout(3):
-            await request.app.state.presence.heartbeat(body.clientId, time.time())
+            await station.presence.heartbeat(body.clientId, time.time())
     except (RedisError, TimeoutError):
         raise HTTPException(503, "Redis unavailable") from None
 
@@ -196,7 +196,7 @@ async def stream_state(request: Request, response: Response,
                            pattern=r"^[a-f0-9]{32}_[a-f0-9]{32}_[0-9]+\.ts$")] = None):
     response.headers["Cache-Control"] = "no-store"
     result = request.app.state.broadcast.snapshot()
-    result["stationId"] = request.app.state.settings.station_id
+    result["stationId"] = default_runtime(request.app).station_id
     # 둘 다 Redis 호출이라 순차 await하면 각자의 연결 타임아웃이 합산돼 버림; 동시에 실행.
     viewers, metrics, (status, station_format), corner = await asyncio.gather(
         viewer_count(request), request_metrics(request), station_summary(request), current_corner(request))
@@ -205,11 +205,11 @@ async def stream_state(request: Request, response: Response,
     result['currentCorner'] = corner if status in ('started', 'draining') else None
     result["viewerCount"] = viewers
     result.update(metrics)
-    hls = request.app.state.hls
+    hls = default_runtime(request.app).hls
     if request.app.state.settings.hls_enabled:
         result["stream"] = {**result["stream"], "status": "ready" if hls.ready else "bootstrapping",
                             "currentSegment": None, "updatedAt": timestamp(),
-                            "hlsUrl": f"/hls/{request.app.state.settings.station_id}/index.m3u8",
+                            "hlsUrl": f"/hls/{default_runtime(request.app).station_id}/index.m3u8",
                             "sessionId": hls.session, "error": hls.error}
         result['stream'].update(hls.buffer_snapshot())
         result['stream']['error'] = hls.error or hls.redis_error
@@ -232,7 +232,7 @@ def public_request(entry: dict, user: dict) -> dict:
 async def list_requests(request: Request, user: Annotated[dict, Depends(get_current_user)]):
     try:
         async with asyncio.timeout(3):
-            entries = await request.app.state.requests.list()
+            entries = await default_runtime(request.app).requests.list()
     except (RedisError, TimeoutError):
         raise HTTPException(503, "Redis unavailable") from None
     return {"requests": [public_request(entry, user) for entry in entries]}
@@ -249,7 +249,7 @@ async def create_request(body: ListenerInput, request: Request,
     """
     try:
         async with asyncio.timeout(3):
-            entry = await request.app.state.requests.create(
+            entry = await default_runtime(request.app).requests.create(
                 body.prompt, user["id"], body.kind, idempotency_key,
                 listener_name=user["name"] if body.listenerName else None, track_title=body.trackTitle,
                 track_artist=body.trackArtist, track_thumbnail_url=body.trackThumbnailUrl)
@@ -265,7 +265,7 @@ async def tick(request: Request, body: TickInput = Body(default_factory=TickInpu
     state = request.app.state.broadcast
     settings = request.app.state.settings
     metrics = await request_metrics(request, required=True)
-    buffer = (request.app.state.hls.buffer_snapshot()['bufferSeconds'] if settings.hls_enabled
+    buffer = (default_runtime(request.app).hls.buffer_snapshot()['bufferSeconds'] if settings.hls_enabled
               else state.stream['bufferSeconds']) if body.bufferSeconds is None else body.bufferSeconds
     decision = decide_next_segment(
         buffer_seconds=buffer, estimated_generation_seconds=body.estimatedGenerationSeconds,
