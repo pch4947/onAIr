@@ -1,14 +1,14 @@
 // 01_Listen_스트리밍 방송 화면
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Sidebar, type NavKey } from '@/app/Sidebar'
 import { useLivePlayback } from '@/player/useLivePlayback'
 import { useRealtimeConnection } from '@/realtime/useRealtimeConnection'
 import { useRealtimeStore } from '@/realtime/store'
 import {
-  bookmarkReplay, getBroadcastState, getMusicQueue, getRequests, sendPresenceHeartbeat, submitRequest,
+  ApiError, bookmarkReplay, getBroadcastState, getMusicQueue, getRequests, sendPresenceHeartbeat, submitRequest,
 } from '@/shared/api'
 import { useCurrentUser } from '@/shared/useCurrentUser'
 import { randomId } from '@/shared/randomId'
@@ -66,10 +66,15 @@ interface ListenPageProps {
   navActive?: NavKey
   // 테스트 화면: 이 시각(초) 뒤 채팅만 보인다. null이면 아직 몰라 비워 둔다
   chatSince?: number | null
+  // 테스트 화면처럼 주소에 방송 ID가 없을 때 넘긴다
+  stationId?: string
 }
 
-export function ListenPage({ testPanel, navActive, chatSince }: ListenPageProps = {}) {
+export function ListenPage({ testPanel, navActive, chatSince, stationId: stationIdProp }: ListenPageProps = {}) {
   const navigate = useNavigate()
+  // 다중 방송: 주소(/listen/:stationId)의 방송을 듣는다
+  const { stationId: routeStationId } = useParams()
+  const requestedStationId = stationIdProp ?? routeStationId
   const [isSurveyOpen, setIsSurveyOpen] = useState(false)
   const [isSongRequestOpen, setIsSongRequestOpen] = useState(false)
   const [isMessageOpen, setIsMessageOpen] = useState(false)
@@ -83,11 +88,14 @@ export function ListenPage({ testPanel, navActive, chatSince }: ListenPageProps 
   const connectionStatus = useRealtimeStore((state) => state.connectionStatus)
   const { data: currentUser } = useCurrentUser()
   const broadcastStateQuery = useQuery({
-    queryKey: ['broadcast-state'],
-    queryFn: getBroadcastState,
+    queryKey: ['broadcast-state', requestedStationId],
+    queryFn: () => getBroadcastState(requestedStationId),
     refetchInterval: BROADCAST_STATE_POLL_INTERVAL_MS,
+    // 없는 방송(404)은 다시 물어도 없다
+    retry: (count, error) => !(error instanceof ApiError && error.status === 404) && count < 3,
   })
-  const stationId = broadcastStateQuery.data?.stationId
+  const notFound = broadcastStateQuery.error instanceof ApiError && broadcastStateQuery.error.status === 404
+  const stationId = requestedStationId ?? broadcastStateQuery.data?.stationId
   const stationStatus = broadcastStateQuery.data?.stationStatus
   const stationFormat = broadcastStateQuery.data?.stationFormat
   // 음악·뉴스 형식은 엔진이 사연(message)을 방송에 반영하지 않는다
@@ -105,8 +113,8 @@ export function ListenPage({ testPanel, navActive, chatSince }: ListenPageProps 
   }, [stationId, presenceClientId])
   const requestsQuery = useQuery({
     // mine은 사용자마다 다르므로 계정이 바뀌면 이전 사용자의 목록을 다시 쓰지 않는다
-    queryKey: ['requests', currentUser?.id],
-    queryFn: getRequests,
+    queryKey: ['requests', requestedStationId, currentUser?.id],
+    queryFn: () => getRequests(requestedStationId),
     enabled: Boolean(currentUser),
     refetchInterval: REQUESTS_POLL_INTERVAL_MS,
   })
@@ -167,11 +175,31 @@ export function ListenPage({ testPanel, navActive, chatSince }: ListenPageProps 
     const trimmed = chatInput.trim()
     if (!trimmed) return
     submitRequestMutation.mutate({
-      prompt: trimmed, listenerName: currentUser?.name, kind: 'story',
+      stationId: requestedStationId, prompt: trimmed, listenerName: currentUser?.name, kind: 'story',
     })
     setChatInput('')
   }
 
+
+
+  if (notFound) {
+    return (
+      <div className="flex h-dvh md:h-screen">
+        <Sidebar active={navActive} />
+        <main className="flex flex-1 flex-col items-center justify-center gap-4 bg-field-bg p-6 pb-24 text-center">
+          <p className="text-sm font-semibold text-text">방송을 찾을 수 없어요</p>
+          <p className="text-[13px] text-text-muted">주소가 잘못됐거나 없는 방송이에요.</p>
+          <button
+            type="button"
+            onClick={() => navigate('/main')}
+            className="rounded-md bg-primary px-4.5 py-2.5 text-xs font-semibold text-white"
+          >
+            방송 목록으로
+          </button>
+        </main>
+      </div>
+    )
+  }
 
   return (
     <div className="flex h-dvh overflow-hidden md:h-screen">
@@ -524,6 +552,7 @@ export function ListenPage({ testPanel, navActive, chatSince }: ListenPageProps 
       )}
       {isMessageOpen && (
         <MessageModal
+          stationId={requestedStationId}
           listenerName={currentUser?.name}
           onClose={() => setIsMessageOpen(false)}
           onSubmitted={() => { void requestsQuery.refetch() }}

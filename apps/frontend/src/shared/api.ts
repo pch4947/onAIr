@@ -10,15 +10,41 @@ import type {
   NotificationItem,
   ReplaySession,
   RequestRecord,
+  StationListItem,
   SubmitRequestResponse,
 } from '@/shared/types'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
 
-export async function getBroadcastState(): Promise<BroadcastStateResponse> {
-  const res = await fetch(`${API_BASE}/api/stream/state`)
+// 다중 방송(#238): 방송 ID가 있으면 방송별 경로, 없으면 기본 채널 경로 (테스트·마이페이지를 옮기기 전까지)
+function stationPath(stationId: string | undefined, path: string) {
+  return stationId ? `/api/stations/${encodeURIComponent(stationId)}${path}` : `/api${path}`
+}
+
+export class ApiError extends Error {
+  readonly status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
+  }
+}
+
+export async function getStations(): Promise<{ stations: StationListItem[] }> {
+  const res = await fetch(`${API_BASE}/api/stations`, {
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
+  })
   if (!res.ok) {
-    throw new Error(`GET /api/stream/state failed: ${res.status}`)
+    throw new ApiError(res.status, `GET /api/stations failed: ${res.status}`)
+  }
+  return res.json() as Promise<{ stations: StationListItem[] }>
+}
+
+export async function getBroadcastState(stationId?: string): Promise<BroadcastStateResponse> {
+  const path = stationPath(stationId, '/stream/state')
+  const res = await fetch(`${API_BASE}${path}`)
+  if (!res.ok) {
+    throw new ApiError(res.status, `GET ${path} failed: ${res.status}`)
   }
   return res.json() as Promise<BroadcastStateResponse>
 }
@@ -82,6 +108,7 @@ export async function sendPresenceHeartbeat(stationId: string, clientId: string)
 }
 
 export async function submitRequest(input: {
+  stationId?: string
   prompt: string
   listenerName?: string
   kind?: 'story' | 'message'
@@ -89,7 +116,7 @@ export async function submitRequest(input: {
   trackArtist?: string
   trackThumbnailUrl?: string
 }): Promise<SubmitRequestResponse> {
-  const res = await fetch(`${API_BASE}/api/requests`, {
+  const res = await fetch(`${API_BASE}${stationPath(input.stationId, '/requests')}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getAccessToken() ?? ''}` },
     body: JSON.stringify({
@@ -107,8 +134,8 @@ export async function submitRequest(input: {
   return res.json() as Promise<SubmitRequestResponse>
 }
 
-export async function getRequests(): Promise<{ requests: RequestRecord[] }> {
-  const res = await fetch(`${API_BASE}/api/requests`, {
+export async function getRequests(stationId?: string): Promise<{ requests: RequestRecord[] }> {
+  const res = await fetch(`${API_BASE}${stationPath(stationId, '/requests')}`, {
     headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
   })
   if (!res.ok) {

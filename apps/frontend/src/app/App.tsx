@@ -14,7 +14,9 @@ export function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/login" replace />} />
         <Route path="/main" element={<MainPage />} />
-        <Route path="/listen" element={<ListenPage />} />
+        <Route path="/listen/:stationId" element={<ListenPage />} />
+        {/* 방송 ID 없는 옛 주소는 방송 목록으로 */}
+        <Route path="/listen" element={<Navigate to="/main" replace />} />
         <Route path="/board" element={<BoardPage />} />
         <Route path="/mypage" element={<MyPagePage />} />
         <Route path="/mypage/:tab" element={<MyPageTabPage />} />
