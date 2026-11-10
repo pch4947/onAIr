@@ -1,4 +1,4 @@
-// 방송 화면에 붙는 테스트 패널 — 코너 변경과, 엔진이 입력을 어떻게 분류하고 무엇을 송출하기로 했는지 보여주는 로그
+// 방송 화면에 붙는 테스트 패널 — 코너 변경과, 엔진의 판단 흐름(입력 라우팅·선별·생성·코너·송출)을 보여주는 로그
 
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
@@ -6,17 +6,18 @@ import { cornerLabel, skippableCorners } from '@/routes/test/corners'
 import { PERSONA_PRESETS } from '@/routes/test/presets'
 import { testStationQuery } from '@/routes/test/testStation'
 import {
-  describeDecision, describeInputChange, describePolicy, type LogEntry,
+  describeEvent, describeInputChange, describePolicy, type LogEntry,
 } from '@/routes/test/engineLog'
-import { getDecisions, getRequests, skipCorner } from '@/shared/api'
+import { getEngineEvents, getRequests, skipCorner } from '@/shared/api'
 import type { BroadcastStateResponse, StationFormat } from '@/shared/types'
 
-const DECISION_POLL_INTERVAL_MS = 2000
+const EVENT_POLL_INTERVAL_MS = 2000
 const REQUESTS_POLL_INTERVAL_MS = 3000
 const MAX_LOG_ENTRIES = 300
 
 const TONE_CLASS: Record<LogEntry['tone'], string> = {
   decision: 'text-primary',
+  reflect: 'text-status-played',
   policy: 'text-status-generating',
   input: 'text-text',
   control: 'text-danger',
@@ -55,7 +56,7 @@ export function TestPanel({ state }: { state: BroadcastStateResponse }) {
     })
   }
 
-  // 엔진 결정 — 커서를 이어 받아 새 결정만 붙인다
+  // 엔진 판단 흐름 — 커서를 이어 받아 새 이벤트만 붙인다
   const cursor = useRef<number | null>(null)
   useEffect(() => {
     let stopped = false
@@ -64,10 +65,10 @@ export function TestPanel({ state }: { state: BroadcastStateResponse }) {
       if (busy) return
       busy = true
       try {
-        const page = await getDecisions(stationId, cursor.current)
+        const page = await getEngineEvents(stationId, cursor.current)
         if (stopped) return
         cursor.current = page.next
-        push(page.decisions.map(describeDecision))
+        push(page.events.map(describeEvent))
       } catch {
         // 엔진이 잠깐 안 받아도 다음 주기에 이어 받는다
       } finally {
@@ -75,7 +76,7 @@ export function TestPanel({ state }: { state: BroadcastStateResponse }) {
       }
     }
     void poll()
-    const timer = setInterval(() => void poll(), DECISION_POLL_INTERVAL_MS)
+    const timer = setInterval(() => void poll(), EVENT_POLL_INTERVAL_MS)
     return () => { stopped = true; clearInterval(timer) }
   }, [stationId])
 

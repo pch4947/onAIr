@@ -129,6 +129,10 @@ def decision(key, at, action='generate', quotes=()):
                          'situation': 'normal', 'criterion': 'recency'}}
 
 
+def event(key, at, kind, summary):
+    return {'id': key, 'at': at, 'kind': kind, 'summary': summary, 'data': {}}
+
+
 @unittest.skipUnless(os.environ.get('ONAIR_INTEGRATION_TEST') == '1', 'Requires Redis')
 class DecisionApiTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -142,16 +146,21 @@ class DecisionApiTests(unittest.IsolatedAsyncioTestCase):
         # 지난 방송(at < 100)과 이번 방송 결정이 섞인 엔진 로그. 한 페이지 2건씩
         self.log = [decision(1, 50.0), decision(2, 60.0, 'wait'), decision(3, 101.0, quotes=['r1']),
                     decision(4, 102.0, 'wait'), decision(5, 103.0, 'glue')]
+        # 패널 이벤트 로그 — 지난 방송 1건, 이번 방송 2건
+        self.events = [event(1, 55.0, 'corner', '코너 진입 · 오프닝'), event(2, 101.0, 'input', '입력 라우팅 · 채팅 → 채팅 후보'),
+                       event(3, 102.5, 'generation', '생성 · 주제 토크 · LLM 1.2초 · 안전 검사 통과 · TTS 0.8초')]
         self.calls = []
 
         def engine(request):
-            self.calls.append(dict(request.url.params))
+            log = request.url.path.rsplit('/', 1)[-1]
+            self.calls.append((log, dict(request.url.params)))
             if self.down:
                 return httpx.Response(503)
+            rows = self.log if log == 'decisions' else self.events
             after = int(request.url.params.get('after', 0))
-            page = [d for d in self.log if d['id'] > after][:2]
-            more = any(d['id'] > (page[-1]['id'] if page else after) for d in self.log)
-            return httpx.Response(200, json={'decisions': page, 'next': page[-1]['id'] if more else None})
+            page = [d for d in rows if d['id'] > after][:2]
+            more = any(d['id'] > (page[-1]['id'] if page else after) for d in rows)
+            return httpx.Response(200, json={log: page, 'next': page[-1]['id'] if more else None})
         self.down = False
         self.app.state.engine_http = httpx.AsyncClient(transport=httpx.MockTransport(engine), base_url='http://engine')
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(self.app), base_url='http://test')
@@ -179,7 +188,31 @@ class DecisionApiTests(unittest.IsolatedAsyncioTestCase):
             # 새로 들어와도 지난 방송 구간(1~2)은 다시 읽지 않는다
             self.calls.clear()
             await self.client.get(self.path)
-            self.assertEqual(self.calls[0].get('after'), '2')
+            self.assertEqual(self.calls[0][1].get('after'), '2')
+        finally:
+            controls.DECISION_PAGE = page
+
+    async def test_events_only_this_broadcast_with_their_own_cursor(self):
+        import app.test_controls as controls
+        page, controls.DECISION_PAGE = controls.DECISION_PAGE, 2
+        events_path = f'/api/stations/{self.station}/events'
+        try:
+            await self.client.get(self.path)  # 결정 로그 읽기 위치(2)가 이벤트 로그에 섞이면 안 된다
+            body = (await self.client.get(events_path)).json()
+            self.assertEqual([e['id'] for e in body['events']], [2, 3])
+            self.assertEqual(body['events'][1]['summary'], '생성 · 주제 토크 · LLM 1.2초 · 안전 검사 통과 · TTS 0.8초')
+            self.assertEqual(set(body['events'][0]), {'id', 'at', 'kind', 'summary', 'data'})
+            self.assertEqual(body['next'], 3)
+
+            self.events.append(event(4, 104.0, 'aired', '송출 · 안녕하세요'))
+            self.assertEqual([e['id'] for e in (await self.client.get(events_path, params={'after': 3})).json()['events']], [4])
+
+            self.calls.clear()
+            await self.client.get(events_path)
+            self.assertEqual(self.calls[0], ('events', {'limit': '2', 'after': '1'}))
+
+            self.user = {'id': 'u1', 'kind': 'member'}
+            self.assertEqual((await self.client.get(events_path)).status_code, 403)
         finally:
             controls.DECISION_PAGE = page
 

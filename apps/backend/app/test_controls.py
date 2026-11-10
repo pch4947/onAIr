@@ -1,4 +1,4 @@
-"""테스트 화면 전용 — 어드민만. 방송을 끊지 않고 코너를 바꾸고, 엔진의 편성 결정을 보여준다."""
+"""테스트 화면 전용 — 어드민만. 방송을 끊지 않고 코너를 바꾸고, 엔진의 편성 결정과 판단 흐름(이벤트)을 보여준다."""
 import asyncio
 import json
 import time
@@ -103,10 +103,8 @@ def public_decision(entry):
     }
 
 
-@router.get('/stations/{station_id}/decisions')
-async def list_decisions(station_id: str, request: Request, user: Admin,
-                         after: Annotated[int | None, Query(ge=0)] = None):
-    """지금 방송의 편성 결정. after 없이 부르면 이 방송 시작부터, next를 after로 넘기면 그 뒤부터."""
+async def read_engine_log(request, user, station_id, after, log, keep, shape):
+    """엔진 로그(계약 6.1절)에서 이번 방송 것만 읽는다. after 없이 부르면 이 방송 시작부터, next를 after로 넘기면 그 뒤부터."""
     state = admin_station(user, request, station_id)
     try:
         async with asyncio.timeout(3):
@@ -114,25 +112,49 @@ async def list_decisions(station_id: str, request: Request, user: Admin,
     except (RedisError, TimeoutError):
         raise HTTPException(503, 'Redis unavailable') from None
     if not raw:
-        return {'decisions': [], 'next': after}
+        return [], after
     since = json.loads(raw)['created_at']
     # 엔진 로그는 같은 station_id의 지난 방송까지 쌓여 있다. 처음 읽은 위치를 기억해 매번 앞에서부터 넘기지 않는다
+    cursors = getattr(state, 'engine_log_cursors', None)
+    if cursors is None:
+        cursors = state.engine_log_cursors = {}
     cursor = after
     if cursor is None:
-        cached = getattr(state, 'decision_cursor', None)
+        cached = cursors.get(log)
         cursor = cached[1] if cached and cached[0] == since else None
     shown = []
     for _ in range(DECISION_PAGES_PER_CALL):
         params = {'limit': DECISION_PAGE} | ({'after': cursor} if cursor is not None else {})
-        page = await engine_call(request, 'GET', f'/v1/stations/{station_id}/decisions', params=params)
-        entries = page.get('decisions') or []
-        for entry in entries:
-            if entry['at'] >= since and entry['decision']['action'] in SHOWN_ACTIONS:
-                shown.append(public_decision(entry))
+        page = await engine_call(request, 'GET', f'/v1/stations/{station_id}/{log}', params=params)
+        entries = page.get(log) or []
+        shown += [shape(entry) for entry in entries if entry['at'] >= since and keep(entry)]
+        older = [entry['id'] for entry in entries if entry['at'] < since]
+        if after is None and older:  # 지난 방송의 마지막 위치 — 한 페이지에 이번 방송이 섞여 있어도 기억한다
+            cursors[log] = (since, older[-1])
         if entries:
             cursor = entries[-1]['id']
-            if after is None and entries[-1]['at'] < since:
-                state.decision_cursor = (since, cursor)
         if page.get('next') is None or len(entries) < DECISION_PAGE:
             break
+    return shown, cursor
+
+
+@router.get('/stations/{station_id}/decisions')
+async def list_decisions(station_id: str, request: Request, user: Admin,
+                         after: Annotated[int | None, Query(ge=0)] = None):
+    """지금 방송의 편성 결정 (무엇을 만들었는지만)."""
+    shown, cursor = await read_engine_log(request, user, station_id, after, 'decisions',
+                                          lambda entry: entry['decision']['action'] in SHOWN_ACTIONS, public_decision)
     return {'decisions': shown, 'next': cursor}
+
+
+def public_event(entry):
+    # 엔진이 패널용으로 만든 기록이라 내부 사용자 ID는 처음부터 없다 (#208)
+    return {key: entry.get(key) for key in ('id', 'at', 'kind', 'summary', 'data')}
+
+
+@router.get('/stations/{station_id}/events')
+async def list_events(station_id: str, request: Request, user: Admin,
+                      after: Annotated[int | None, Query(ge=0)] = None):
+    """지금 방송의 엔진 판단 흐름 — 입력 라우팅, 채팅 선별, 생성 단계, 코너, 화제 전환, 송출 등."""
+    shown, cursor = await read_engine_log(request, user, station_id, after, 'events', lambda entry: True, public_event)
+    return {'events': shown, 'next': cursor}
