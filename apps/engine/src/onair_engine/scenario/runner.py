@@ -28,6 +28,7 @@ from ..engine import EngineSettings, StationEngine
 from ..main import add_llm_args, apply_llm_args, load_env, load_profile
 from ..report import render, station_report
 from ..telemetry import _read
+from . import review
 from .sim import Played, SimBackend, SimTts
 from .spec import ScenarioSpec, TrackSpec, load_scenario
 
@@ -244,11 +245,23 @@ def _transcript(spec: ScenarioSpec, backend: SimBackend, reflected: dict[str, tu
     return "\n".join(lines) + "\n"
 
 
+def _played(backend: SimBackend, reflected: dict[str, tuple[str, float]], titles: dict[str, str]) -> list[dict]:
+    by_segment: dict[str, list[str]] = {}
+    for rid, (seg, _) in reflected.items():
+        by_segment.setdefault(seg, []).append(rid)
+    return [{"at": round(p.at, 2), "kind": p.kind, "sec": round(p.sec, 2), "segment_id": p.segment_id,
+             "corner_type": p.corner_type, "corner": titles.get(p.corner_type or "", p.corner_type),
+             "script": p.script, "text": p.text, "reflected": by_segment.get(p.segment_id or "", [])}
+            for p in sorted(backend.played, key=lambda p: p.at)]
+
+
 def _write_run(run_dir: Path, spec: ScenarioSpec, index: int, seed: int, args: argparse.Namespace,
                report: dict, backend: SimBackend, reflected: dict, db: Path, station_id: str) -> None:
     titles = backend.engine.telemetry.corner_titles if hasattr(backend.engine.telemetry, "corner_titles") else {}
     titles = titles or {name: c.title for name, c in backend.engine.scheduler.fmt.corners.items()}
     (run_dir / "transcript.md").write_text(_transcript(spec, backend, reflected, titles), encoding="utf-8")
+    (run_dir / "played.json").write_text(json.dumps(  # 대본 검토 페이지(review.py)의 원자료
+        {"played": _played(backend, reflected, titles)}, ensure_ascii=False), encoding="utf-8")
     (run_dir / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     text = render(report) if "generation" in report else "# 리포트 없음\n"
     sim = report["sim"]
@@ -386,5 +399,6 @@ def cli(argv: list[str] | None = None) -> int:
                 return 1
     out = args.out / time.strftime("%Y%m%d-%H%M%S")
     asyncio.run(run_all(specs, args, out))
-    print(f"결과: {out}")
+    review.write([out], out / "review.html")
+    print(f"결과: {out}\n대본 검토: {out / 'review.html'}")
     return 0
