@@ -16,9 +16,9 @@ import type {
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
 
-// 다중 방송(#238): 방송 ID가 있으면 방송별 경로, 없으면 기본 채널 경로 (테스트·마이페이지를 옮기기 전까지)
-function stationPath(stationId: string | undefined, path: string) {
-  return stationId ? `/api/stations/${encodeURIComponent(stationId)}${path}` : `/api${path}`
+// 다중 방송(#238): 방송별 경로만 쓴다. 방송 ID 없는 옛 경로(/api/stream/state 등)는 백엔드가 지운다
+function stationPath(stationId: string, path: string) {
+  return `/api/stations/${encodeURIComponent(stationId)}${path}`
 }
 
 export class ApiError extends Error {
@@ -40,7 +40,7 @@ export async function getStations(): Promise<{ stations: StationListItem[] }> {
   return res.json() as Promise<{ stations: StationListItem[] }>
 }
 
-export async function getBroadcastState(stationId?: string): Promise<BroadcastStateResponse> {
+export async function getBroadcastState(stationId: string): Promise<BroadcastStateResponse> {
   const path = stationPath(stationId, '/stream/state')
   const res = await fetch(`${API_BASE}${path}`)
   if (!res.ok) {
@@ -108,7 +108,7 @@ export async function sendPresenceHeartbeat(stationId: string, clientId: string)
 }
 
 export async function submitRequest(input: {
-  stationId?: string
+  stationId: string
   prompt: string
   listenerName?: string
   kind?: 'story' | 'message'
@@ -134,7 +134,7 @@ export async function submitRequest(input: {
   return res.json() as Promise<SubmitRequestResponse>
 }
 
-export async function getRequests(stationId?: string): Promise<{ requests: RequestRecord[] }> {
+export async function getRequests(stationId: string): Promise<{ requests: RequestRecord[] }> {
   const res = await fetch(`${API_BASE}${stationPath(stationId, '/requests')}`, {
     headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
   })
@@ -382,8 +382,9 @@ async function fetchReplayPage(
   return (await res.json()) as { replays: ReplaySession[]; total: number }
 }
 
-export const getMyStationReplays = (stationId: string, params: { offset?: number; limit?: number } = {}) =>
-  fetchReplayPage(`/api/stations/${stationId}/replays/mine`, params)
+// 다중 방송: 내가 진행한 방송의 다시듣기를 모든 채널에서 모아 최신순으로
+export const getMyReplays = (params: { offset?: number; limit?: number } = {}) =>
+  fetchReplayPage('/api/replays/mine', params)
 export const getBookmarkedReplays = (params: { offset?: number; limit?: number } = {}) =>
   fetchReplayPage('/api/replays/bookmarked', params)
 

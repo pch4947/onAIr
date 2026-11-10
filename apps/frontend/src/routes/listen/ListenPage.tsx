@@ -74,7 +74,8 @@ export function ListenPage({ testPanel, navActive, chatSince, stationId: station
   const navigate = useNavigate()
   // 다중 방송: 주소(/listen/:stationId)의 방송을 듣는다
   const { stationId: routeStationId } = useParams()
-  const requestedStationId = stationIdProp ?? routeStationId
+  // 라우트(/listen/:stationId)나 테스트 화면이 항상 넘긴다
+  const stationId = stationIdProp ?? routeStationId ?? ''
   const [isSurveyOpen, setIsSurveyOpen] = useState(false)
   const [isSongRequestOpen, setIsSongRequestOpen] = useState(false)
   const [isMessageOpen, setIsMessageOpen] = useState(false)
@@ -88,14 +89,14 @@ export function ListenPage({ testPanel, navActive, chatSince, stationId: station
   const connectionStatus = useRealtimeStore((state) => state.connectionStatus)
   const { data: currentUser } = useCurrentUser()
   const broadcastStateQuery = useQuery({
-    queryKey: ['broadcast-state', requestedStationId],
-    queryFn: () => getBroadcastState(requestedStationId),
+    queryKey: ['broadcast-state', stationId],
+    queryFn: () => getBroadcastState(stationId),
+    enabled: Boolean(stationId),
     refetchInterval: BROADCAST_STATE_POLL_INTERVAL_MS,
     // 없는 방송(404)은 다시 물어도 없다
     retry: (count, error) => !(error instanceof ApiError && error.status === 404) && count < 3,
   })
   const notFound = broadcastStateQuery.error instanceof ApiError && broadcastStateQuery.error.status === 404
-  const stationId = requestedStationId ?? broadcastStateQuery.data?.stationId
   const stationStatus = broadcastStateQuery.data?.stationStatus
   const stationFormat = broadcastStateQuery.data?.stationFormat
   // 음악·뉴스 형식은 엔진이 사연(message)을 방송에 반영하지 않는다
@@ -113,14 +114,14 @@ export function ListenPage({ testPanel, navActive, chatSince, stationId: station
   }, [stationId, presenceClientId])
   const requestsQuery = useQuery({
     // mine은 사용자마다 다르므로 계정이 바뀌면 이전 사용자의 목록을 다시 쓰지 않는다
-    queryKey: ['requests', requestedStationId, currentUser?.id],
-    queryFn: () => getRequests(requestedStationId),
-    enabled: Boolean(currentUser),
+    queryKey: ['requests', stationId, currentUser?.id],
+    queryFn: () => getRequests(stationId),
+    enabled: Boolean(currentUser && stationId),
     refetchInterval: REQUESTS_POLL_INTERVAL_MS,
   })
   const musicQueueQuery = useQuery({
     queryKey: ['music-queue', stationId],
-    queryFn: () => getMusicQueue(stationId!),
+    queryFn: () => getMusicQueue(stationId),
     enabled: Boolean(stationId),
     refetchInterval: REQUESTS_POLL_INTERVAL_MS,
   })
@@ -175,7 +176,7 @@ export function ListenPage({ testPanel, navActive, chatSince, stationId: station
     const trimmed = chatInput.trim()
     if (!trimmed) return
     submitRequestMutation.mutate({
-      stationId: requestedStationId, prompt: trimmed, listenerName: currentUser?.name, kind: 'story',
+      stationId, prompt: trimmed, listenerName: currentUser?.name, kind: 'story',
     })
     setChatInput('')
   }
@@ -552,7 +553,7 @@ export function ListenPage({ testPanel, navActive, chatSince, stationId: station
       )}
       {isMessageOpen && (
         <MessageModal
-          stationId={requestedStationId}
+          stationId={stationId}
           listenerName={currentUser?.name}
           onClose={() => setIsMessageOpen(false)}
           onSubmitted={() => { void requestsQuery.refetch() }}

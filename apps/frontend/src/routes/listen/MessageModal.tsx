@@ -8,7 +8,7 @@ import { isUnauthorizedError, LoginExpiredNotice } from '@/routes/listen/LoginEx
 const MESSAGE_MAX_LENGTH = 200
 
 interface MessageModalProps {
-  stationId?: string
+  stationId: string
   listenerName?: string
   onClose: () => void
   onSubmitted: () => void

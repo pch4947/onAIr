@@ -181,6 +181,7 @@ export interface LikeStatus {
 
 export interface ReplaySession {
   id: string
+  stationId: string
   startedAt: string
   endedAt: string | null
   durationSeconds: number
