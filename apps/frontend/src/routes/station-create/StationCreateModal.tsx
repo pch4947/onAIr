@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { DraftLoadingStep } from '@/routes/station-create/DraftLoadingStep'
 import { DraftSelectStep } from '@/routes/station-create/DraftSelectStep'
 import { FormatSelectStep } from '@/routes/station-create/FormatSelectStep'
@@ -21,6 +22,7 @@ interface StationCreateModalProps {
 
 export function StationCreateModal({ onClose }: StationCreateModalProps) {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [step, setStep] = useState<Step>('format')
   const [selectedFormat, setSelectedFormat] = useState<StationFormat>('talk')
   const [form, setForm] = useState<PersonaForm | null>(null)
@@ -31,6 +33,8 @@ export function StationCreateModal({ onClose }: StationCreateModalProps) {
   const [formErrors, setFormErrors] = useState<Record<string, string>>({})
   const [station, setStation] = useState<StationResult | null>(null)
   const [pollError, setPollError] = useState('')
+  // 409: 이미 진행 중인 내 방송 — 그 방송으로 안내한다
+  const [existingStationId, setExistingStationId] = useState<string | null>(null)
   const retry = useRef<{ body: string; key: string } | null>(null)
 
   useEffect(() => {
@@ -86,6 +90,7 @@ export function StationCreateModal({ onClose }: StationCreateModalProps) {
   const handleConfirm = async (persona: Persona) => {
     if (!stationInfo) return
     setSubmitError('')
+    setExistingStationId(null)
     setStep('submitting')
     try {
       const input = { ...stationInfo, persona }
@@ -93,8 +98,12 @@ export function StationCreateModal({ onClose }: StationCreateModalProps) {
       if (!retry.current || retry.current.body !== body) retry.current = { body, key: randomId() }
       setStation(await createStation(input, retry.current.key))
       setStep('waiting')
+      // 메인의 방송 목록과 "내 방송으로 가기"를 바로 맞춘다
+      void queryClient.invalidateQueries({ queryKey: ['stations'] })
+      void queryClient.invalidateQueries({ queryKey: ['my-station'] })
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : '방 만들기에 실패했어요, 잠시 후 다시 시도해주세요')
+      if (error instanceof StationApiError && error.status === 409 && error.stationId) setExistingStationId(error.stationId)
       setStep('edit')
     }
   }
@@ -158,6 +167,17 @@ export function StationCreateModal({ onClose }: StationCreateModalProps) {
             onBack={() => setStep('drafts')}
             onConfirm={handleConfirm}
           />
+        )}
+        {step === 'edit' && existingStationId && (
+          <div className="mt-3 flex justify-end">
+            <button
+              type="button"
+              onClick={() => { onClose(); navigate(`/listen/${existingStationId}`) }}
+              className="rounded-md bg-primary px-4.5 py-2.5 text-xs font-semibold text-white"
+            >
+              내 방송으로 가기
+            </button>
+          </div>
         )}
       </div>
     </div>
