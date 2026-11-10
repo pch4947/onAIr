@@ -84,12 +84,18 @@ class RequestStore:
         return self.merge(raw, state) if raw else None
 
     async def list(self):
+        """이 채널의 현재 방송(끝났으면 마지막 방송) 요청. 같은 채널의 지난 방송 요청은 뺀다 (#250)."""
         async with self.redis.pipeline(transaction=True) as pipe:
             pipe.hgetall(self.prefix + ':requests')
             pipe.hgetall(self.prefix + ':request-states')
-            requests, states = await pipe.execute()
-        return sorted((self.merge(raw, states.get(key)) for key, raw in requests.items()),
-                      key=lambda entry: (entry['createdAt'], entry['id']))
+            pipe.get(self.prefix + ':station')
+            requests, states, station = await pipe.execute()
+        # 요청은 방송이 started일 때만 받으므로 방송 생성 시각 이후 요청이 그 방송 것이다
+        since = json.loads(station).get('created_at') if station else None
+        entries = (self.merge(raw, states.get(key)) for key, raw in requests.items())
+        if since is not None:
+            entries = (entry for entry in entries if datetime.fromisoformat(entry['createdAt']).timestamp() >= since)
+        return sorted(entries, key=lambda entry: (entry['createdAt'], entry['id']))
 
     async def metrics(self):
         pending = [entry for entry in await self.list() if entry['status'] not in ('rejected', 'expired', 'played', 'failed')]

@@ -96,8 +96,11 @@ export function StationCreateModal({ onClose }: StationCreateModalProps) {
       const input = { ...stationInfo, persona }
       const body = JSON.stringify(input)
       if (!retry.current || retry.current.body !== body) retry.current = { body, key: randomId() }
-      setStation(await createStation(input, retry.current.key))
+      const created = await createStation(input, retry.current.key)
+      setStation(created)
       setStep('waiting')
+      // 같은 채널 지난 방송의 채팅 캐시가 청취 화면에 잠깐 보이지 않게 버린다
+      queryClient.removeQueries({ queryKey: ['requests', created.station_id] })
       // 메인의 방송 목록과 "내 방송으로 가기"를 바로 맞춘다
       void queryClient.invalidateQueries({ queryKey: ['stations'] })
       void queryClient.invalidateQueries({ queryKey: ['my-station'] })

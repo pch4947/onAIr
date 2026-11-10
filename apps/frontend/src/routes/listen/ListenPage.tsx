@@ -64,13 +64,11 @@ interface ListenPageProps {
   // 테스트 화면이 같은 방송 화면에 코너 변경·엔진 로그를 끼워 넣는다
   testPanel?: ReactNode
   navActive?: NavKey
-  // 테스트 화면: 이 시각(초) 뒤 채팅만 보인다. null이면 아직 몰라 비워 둔다
-  chatSince?: number | null
   // 테스트 화면처럼 주소에 방송 ID가 없을 때 넘긴다
   stationId?: string
 }
 
-export function ListenPage({ testPanel, navActive, chatSince, stationId: stationIdProp }: ListenPageProps = {}) {
+export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: ListenPageProps = {}) {
   const navigate = useNavigate()
   // 다중 방송: 주소(/listen/:stationId)의 방송을 듣는다
   const { stationId: routeStationId } = useParams()
@@ -140,8 +138,8 @@ export function ListenPage({ testPanel, navActive, chatSince, stationId: station
   const submitRequestMutation = useMutation({ mutationFn: submitRequest })
   const bookmarkLiveMutation = useMutation({ mutationFn: (sessionId: string) => bookmarkReplay(sessionId) })
 
-  const allRequests = (requestsQuery.data?.requests ?? []).filter((item) =>
-    chatSince === undefined || (chatSince !== null && Date.parse(item.createdAt) / 1000 >= chatSince))
+  // 서버가 이번 방송 요청만 준다 (#250)
+  const allRequests = requestsQuery.data?.requests ?? []
   const chatMessages = allRequests.map((item) => ({
     id: item.id,
     author: item.mine ? '나' : (item.listenerName || '익명'),
