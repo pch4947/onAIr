@@ -53,6 +53,9 @@ from ..transport import Transport
 
 _IDLE_SLEEP_SEC = 0.5
 _MAX_REQUEST_FAILURES = 2  # 인용이 빠진 요청은 한 번 다시 큐에 넣고, 또 빠지면 거절한다
+# 곡 소개는 버퍼가 target_buffer_sec의 이 비율로 줄었을 때 만든다. 기본 30초면 20초 —
+# 세그먼트 생성 P95 약 14초(2026-11-07 시나리오 실행)에 여유를 둔 값이다 [임시값]
+_SONG_INTRO_LEAD_RATIO = 2 / 3
 _TTS_BLOCKED_SLEEP_SEC = 5.0
 # 백엔드는 backpressure를 약 10초마다 보낸다. 세 번 연속 못 받으면 백엔드가 멈춘 것으로 보고 자체 추정으로 돌아간다
 _BACKEND_REPORT_TTL_SEC = 30.0
@@ -153,6 +156,7 @@ class Scheduler:
         self._next_pub = 0
         self._ready: dict[int, tuple[SegmentSubmission | None, int, Anchor | None]] = {}
         self._seq_run: dict[int, CornerRun] = {}  # 순번 → 그것을 편성한 코너 (코너 예산 — #220)
+        self._deferred: PlannedStep | None = None  # 만들 때를 기다리는 곡 소개 (#239)
         self._pub_lock = asyncio.Lock()
 
     @property
@@ -332,7 +336,7 @@ class Scheduler:
                 self.telemetry.log_decision(ctx, Decision(action="wait"))
                 await asyncio.sleep(_IDLE_SLEEP_SEC)
                 continue
-            planned = self._next_planned(ctx)
+            planned = self._deferred or self._next_planned(ctx)
             if planned is None:  # 엔딩까지 편성을 마쳤다 — 남은 생성이 끝나면 종료
                 self.telemetry.log_decision(ctx, Decision(action="idle"))
                 break
@@ -340,6 +344,15 @@ class Scheduler:
                 self.telemetry.log_decision(ctx, Decision(action="no_material"))
                 await asyncio.sleep(_NO_MATERIAL_SLEEP_SEC)
                 continue
+            if self._too_early_for_song_intro(planned, ctx):
+                self._deferred = planned
+                self.telemetry.log_decision(ctx, Decision(
+                    action="wait", corner_type=planned.corner.corner_type, step=planned.step.kind))
+                await asyncio.sleep(_IDLE_SLEEP_SEC)
+                continue
+            if self._deferred is not None:
+                self._deferred = None
+                self._refresh_track(planned)
             if planned.step.kind == "glue":
                 await self._publish_glue(ctx, planned)
             else:
@@ -362,6 +375,25 @@ class Scheduler:
             await self._mark_expired(leftovers)
 
     # ── 클락 · 코너 ──────────────────────────────────────────────────
+
+    def _too_early_for_song_intro(self, planned: PlannedStep, ctx: ScheduleContext) -> bool:
+        """곡 소개는 곡 앞의 마지막 인용 기회다 — 앞 멘트가 충분히 남았으면 아직 만들지 않는다 (#239).
+
+        미리 만들면 그 뒤에 온 채팅은 곡이 끝날 때까지(약 3.5분) 나갈 수 없다.
+        생성 중인 앞 멘트는 버퍼에 아직 안 잡히므로, 그때는 더 적게 남았을 때만 만든다.
+        """
+        if planned.step.kind != "music_intro":
+            return False
+        lead = self.target_buffer_sec * _SONG_INTRO_LEAD_RATIO
+        if ctx.inflight_generations:
+            lead /= 2
+        return ctx.generated_buffer_sec > lead
+
+    def _refresh_track(self, planned: PlannedStep) -> None:
+        """기다리는 동안 새 곡(신청곡)이 알려졌으면 그 곡을 소개한다 — 백엔드는 새 곡을 튼다."""
+        self.sources.tracks.put_back(planned.items[0])
+        if (track := self.sources.tracks.take()) is not None:
+            planned.items[0] = track
 
     def _next_planned(self, ctx: ScheduleContext):
         """다음 단계. 엔딩까지 끝났으면 None, 지금은 진입할 코너가 없으면 _WAIT."""
