@@ -211,6 +211,8 @@ class StationEngine:
         if not isinstance(track, dict) or not track.get("track_ref") or not track.get("title"):
             raise ValueError(f"track.queued에 곡 정보가 없다: {payload!r}"[:200])
         track = dict(track)
+        if payload.get("source") == "request":  # 신청곡은 곡 연속 방지로 미루지 않는다 (#228)
+            track["requested"] = True
         nickname = payload.get("nickname")
         if payload.get("source") == "request" and isinstance(nickname, str):
             # Untrusted requester names must pass the same input filter as chat.

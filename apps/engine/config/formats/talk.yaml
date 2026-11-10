@@ -7,6 +7,8 @@ guide: 채팅은 언제든 편하게 보내 주시고, 길게 들려주고 싶�
 host_corners: [story_corner, text_corner, topic_talk, dj_vs_listeners]
 default_main: [story_corner, topic_talk]   # 호스트가 고르지 않았을 때 — onair_schema DEFAULT_TALK_CORNERS와 같게
 cycle: [$main, music_intro, text_corner, music_intro, $main, music_intro]
+# 문자가 없어 text_corner가 빠지면 그 뒤 곡도 건너뛴다 — 곡 소개만 두고 곡이 이어지지 않게 (#228)
+songs_back_to_back: false
 
 corners:
   story_corner:
