@@ -54,6 +54,10 @@ def test_parse_at():
     {"controls": [{"at": 1, "type": "persona", "corner": "text_corner"}]},  # 모르는 조작
     {"expect": [{"type": "corner_entered", "control": "none"}]},  # 없는 조작
     {"expect": [{"type": "corner_entered"}]},  # control 없음
+    {"expect": [{"type": "min_reflected", "value": 1}]},  # kind 없음
+    {"expect": [{"type": "min_reflected", "kind": "message"}]},  # value 없음
+    {"inputs": [{"at": 1, "kind": "chat", "who": "a", "body": "x", "id": "d"}],
+     "board_stories": [{"body": "y", "id": "d"}]},  # 입력과 사연의 id 중복
     {"station": {"format": "talk", "unknown": 1}},  # 모르는 필드
 ])
 def test_invalid_scenarios_are_rejected(bad):
@@ -71,6 +75,41 @@ def test_controls_get_default_ids_and_can_be_expected():
         "name": "x", "controls": [{"at": "3:00", "corner": "text_corner"}],
         "expect": [{"type": "corner_entered", "control": "c0", "within_sec": 60}]})
     assert (spec.controls[0].id, spec.controls[0].at, spec.controls[0].type) == ("c0", 180, "corner_skip")
+
+
+def test_expect_counts_reflected_inputs_by_kind_and_finds_board_stories():
+    spec = ScenarioSpec.model_validate({
+        "name": "x",
+        "inputs": [{"at": 1, "kind": "message", "who": "a", "body": "문자", "id": "m"},
+                   {"at": 2, "kind": "message", "who": "b", "body": "문자", "id": "n"}],
+        "board_stories": [{"body": "사연", "id": "s"}, {"body": "사연", "at": "1:30"}],
+        "expect": [{"type": "reflected", "input": "s"},
+                   {"type": "min_reflected", "kind": "message", "value": 2},
+                   {"type": "min_reflected", "kind": "board_story", "value": 1},
+                   {"type": "min_reflected", "kind": "chat", "value": 2}],
+    })
+    assert spec.board_stories[1].id == "1" and spec.board_stories[1].at == 90
+    backend = argparse.Namespace(played=[])
+    reflected = {"in_m": ("seg", 1.0), "story_sim_s": ("seg", 1.0), "chatter_3": ("seg", 1.0)}
+    results = runner._check(spec, backend, {"sim": {}}, reflected)
+    assert [r["passed"] for r in results] == [True, False, True, False]
+    assert results[1]["target"] == "message" and results[1]["detail"] == "1건 반영"
+
+
+def test_board_stories_arrive_before_the_broadcast_and_during_it():
+    spec = ScenarioSpec.model_validate({"name": "x", "board_stories": [
+        {"body": "미리 쓴 글", "id": "early"}, {"body": "방송 중 글", "id": "live", "at": 0.05}]})
+    backend = _backend()
+
+    async def scenario():
+        await backend.notify_station("station.started", {})
+        await runner._inject(spec, backend, backend.engine, random.Random(1), backend.finished)
+
+    asyncio.run(scenario())
+    stories = [c[1][0] for c in backend.engine.calls if c[0] == "on_board_story"]
+    assert [s["story_id"] for s in stories] == ["story_sim_early", "story_sim_live"]
+    assert stories[0]["posted_at"] < stories[1]["posted_at"] - 3000
+    assert [p.kind for p in backend.played] == ["input"], "방송 중 글은 대본에도 입력으로 남는다"
 
 
 # ── TTS 흉내 ───────────────────────────────────────────────────────────
@@ -260,6 +299,57 @@ def test_corner_skip_keeps_everything_when_little_is_queued():
     asyncio.run(scenario())
     assert [name for name, _ in backend.engine.calls] == ["on_corner_skip"]
     assert backend.skips[0]["discarded"] == 0 and backend.skips[0]["play_sec"] is None
+
+
+def test_displaced_song_requests_are_kept_and_newest_goes_first():
+    backend = _backend()
+
+    def request(name):
+        return {"track": TrackSpec(title=name, artist="가수", sec=0.2), "request_id": name, "nickname": name}
+
+    def queued():
+        return backend.engine.calls[-1][1][0]
+
+    async def intro_taken():
+        await backend.publish_segment(_sub("s", music_ref=queued()["track"]["track_ref"]))
+
+    backend.queue_next_track()
+    for name in ("첫째", "둘째", "셋째"):
+        backend.queue_next_track(request(name))
+    order = [queued()["request_id"]]
+    for _ in range(2):
+        asyncio.run(intro_taken())  # 소개를 가져가면 밀린 신청곡부터
+        order.append(queued()["request_id"])
+    assert order == ["셋째", "둘째", "첫째"], "실제 백엔드처럼 최근 신청부터, 밀린 신청도 잃지 않는다"
+    asyncio.run(intro_taken())
+    assert queued()["track"]["title"] == "곡1" and "request_id" not in queued(), "신청곡이 다 나가면 플레이리스트"
+
+
+def test_corner_skip_keeps_song_requests_whose_intro_was_discarded():
+    backend = _backend(buffer_low_sec=0.5)
+    backend.engine = SkippableEngine()
+
+    def request(name):
+        return {"track": TrackSpec(title=name, artist="가수", sec=0.2), "request_id": name, "nickname": name}
+
+    def queued():
+        return next(args[0] for name, args in reversed(backend.engine.calls) if name == "on_track_queued")
+
+    async def scenario():
+        backend.queue_next_track(request("첫째"))  # sim:1
+        await backend.notify_station("station.started", {})
+        await backend.publish_segment(_sub("s1", ms=1000))
+        await backend.publish_segment(_sub("intro", ms=1000, music_ref="sim:1"))  # 다음 곡은 플레이리스트
+        backend.queue_next_track(request("둘째"))  # 소개가 대기열에 있는 동안 새 신청곡
+        await backend.skip_corner("text_corner")  # 첫째의 소개가 버려진다
+        order = [queued()["request_id"]]
+        await backend.publish_segment(_sub("intro2", music_ref=queued()["track"]["track_ref"]))
+        order.append(queued()["request_id"])
+        await backend.publish_segment(_sub("intro3", music_ref=queued()["track"]["track_ref"]))
+        return order
+
+    assert asyncio.run(scenario()) == ["첫째", "둘째"], "소개가 버려진 신청곡을 다시 알리고, 그 뒤 신청곡도 남는다"
+    assert queued()["track"]["title"] == "곡1" and "request_id" not in queued()
 
 
 def test_after_engine_finishes_the_queue_is_recorded_without_waiting():

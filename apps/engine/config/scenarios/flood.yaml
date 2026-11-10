@@ -1,14 +1,23 @@
-# 채팅 폭주 — 선별, 집계 언급, 부하가 걸릴 때 무음 (CORNER_DESIGN 5.7, 9.2절)
+# 입력 폭주 — 채팅뿐 아니라 사연 보내기·신청곡·게시판 사연이 몰려도 제대로 골라 대본이 되는지 (CORNER_DESIGN 5.7, 9.2절, #240)
+# 반영 건수 기준(min_reflected)은 30분 방송의 코너 수에서 잡은 초기값이다 — 실제 실행으로 보정한다
 name: flood
-description: 20명이 분당 15건. 선별과 집계 언급, 생성 지연과 무음을 본다.
+description: 20명이 분당 15건 채팅하는 가운데 사연 보내기 11건(1건은 전화번호), 신청곡 4건, 게시판 사연 10건(3건은 주제와 무관)이 몰린다. 입력 종류별 선별과 대본, 집계 언급, 생성 지연과 무음을 본다.
 station:
   format: talk
   corners: [topic_talk, text_corner, story_corner]
   intensity: mid
   topic: 겨울 간식
 board_stories:
-  - {body: "퇴근길에 붕어빵 세 개 사서 집까지 걸으면서 다 먹었어요.", nickname: 밤샘러}
-  - {body: "엄마가 군고구마를 구워 주셨어요.", nickname: 고구마}
+  - {id: bung, body: "퇴근길에 붕어빵 세 개 사서 집까지 걸으면서 다 먹었어요.", nickname: 밤샘러}
+  - {id: goguma, body: "엄마가 군고구마를 구워 주셨어요. 어릴 때 할머니 댁 생각이 났습니다.", nickname: 고구마}
+  - {id: hoppang, body: "호빵 데우다가 전자레인지에서 터져서 한참 닦았어요.", nickname: null}
+  - {id: hotteok, body: "시장 호떡집 아주머니가 제 얼굴을 기억해 주셔서 괜히 기분이 좋았어요.", nickname: 단골손님}
+  - {id: gyul, body: "귤을 너무 많이 먹어서 손이 노래졌다고 친구가 놀려요.", nickname: 귤손}
+  - {id: eomuk, body: "눈 오는 날 포장마차에서 어묵 국물 마시던 날이 제일 따뜻했어요.", nickname: 첫눈}
+  - {id: off_dog, body: "강아지가 산책을 너무 좋아해서 하루에 세 번 나가요.", nickname: 산책러}
+  - {id: off_stock, body: "요즘 주식이 계속 떨어져서 잠이 안 옵니다.", nickname: 개미}
+  - {id: live_food, at: "6:00", body: "방금 편의점에서 찐빵 샀는데 듣다 보니 너무 잘 샀다는 생각이 들어요.", nickname: 찐빵러}
+  - {id: off_tire, at: "16:00", body: "자동차 타이어를 갈았는데 비용이 생각보다 많이 들었어요.", nickname: 운전자}
 chatter:
   per_minute: 15
   people: 20
@@ -29,9 +38,36 @@ chatter:
     - 겨울엔 귤이죠
     - 귤 까먹으면서 듣는 중
 inputs:
-  - {at: "2:00", kind: message, who: m1, nickname: 퇴근길, body: "붕어빵 노점 아저씨가 하나 더 주셨어요.", id: msg1}
-  - {at: "8:00", kind: message, who: m2, nickname: 귤러버, body: "귤 한 박스 샀는데 벌써 반 먹었어요.", id: msg2}
+  # 사연 보내기 (kind: message) — 몰려서 들어온다. 도착 순으로 읽는다
+  - {at: "1:30", kind: message, who: m1, nickname: 퇴근길, body: "붕어빵 노점 아저씨가 하나 더 주셨어요.", id: msg1}
+  - {at: "1:50", kind: message, who: m2, nickname: 귤러버, body: "귤 한 박스 샀는데 벌써 반 먹었어요.", id: msg2}
+  - {at: "2:10", kind: message, who: m3, body: "시험 끝나고 친구랑 어묵 먹으러 가요.", id: msg3}
+  - {at: "2:30", kind: message, who: m4, nickname: 야근러, body: "야근하다가 호빵 하나 먹으니 살 것 같아요.", id: msg4}
+  - {at: "4:00", kind: message, who: bad, nickname: 연락주세요, body: "제 번호는 010-1234-5678이에요. 연락 주세요.", id: msg_phone}
+  - {at: "6:30", kind: message, who: m5, nickname: 호떡좋아, body: "회사 앞에 호떡 노점이 새로 생겼어요.", id: msg5}
+  - {at: "7:00", kind: message, who: m6, body: "군고구마 굽는 냄새 때문에 지하철역 앞에서 한참 서 있었어요.", id: msg6}
+  - {at: "10:00", kind: message, who: m7, nickname: 새벽반, body: "겨울 간식은 역시 밤에 먹어야 맛있는 것 같아요.", id: msg7}
+  - {at: "13:00", kind: message, who: m8, nickname: 붕세권, body: "우리 동네에 붕어빵 파는 곳이 세 군데나 있어요.", id: msg8}
+  - {at: "17:00", kind: message, who: m9, body: "오늘 처음 슈크림 호떡을 먹어 봤어요.", id: msg9}
+  - {at: "20:00", kind: message, who: m10, nickname: 늦은밤, body: "이 시간에 라면 끓이면 안 되겠죠.", id: msg10}
+  # 신청곡 — 앞의 두 건은 곡 하나 사이에 몰린다. 새 신청곡이 다음 곡이 되고, 밀린 신청곡도 나중에 나가야 한다
+  - {at: "3:00", kind: song_request, who: s1, nickname: 눈사람, title: 첫눈, artist: 가상의 가수, body: "첫눈 오는 날 들으면 좋을 것 같아서요", id: song1}
+  - {at: "3:40", kind: song_request, who: s2, nickname: 호떡장수, title: 겨울 골목, artist: 모의 밴드, body: "장사 끝나고 듣는 노래예요", id: song2}
+  - {at: "11:00", kind: song_request, who: s3, nickname: 난로곁, title: 난롯가에서, artist: 시뮬레이션 트리오, body: "손 녹이면서 듣고 싶어요", id: song3}
+  - {at: "19:00", kind: song_request, who: s4, nickname: 막차, title: 마지막 버스, artist: 테스트 오케스트라, body: "막차 타고 가는 중이에요", id: song4}
 expect:
-  - {type: reflected, input: msg1, note: 폭주 중에도 문자가 읽힌다}
+  - {type: reflected, input: msg1, note: 폭주 중에도 먼저 온 문자가 읽힌다}
+  - {type: reflected, input: msg2, note: 두 번째로 온 문자가 읽힌다}
+  - {type: min_reflected, kind: message, value: 5, note: 문자 5건 이상이 읽힌다}
+  - {type: not_aired, text: "1234", note: 전화번호를 적은 문자는 나가지 않는다}
+  - {type: reflected, input: song1, note: 밀린 신청곡도 나간다}
+  - {type: reflected, input: song2, note: 나중 신청곡이 먼저 나간다}
+  - {type: min_reflected, kind: song_request, value: 3, note: 신청곡 3건 이상이 나간다}
+  - {type: aired_contains, text: 호떡장수, note: 신청자 닉네임을 부른다}
+  - {type: min_reflected, kind: board_story, value: 2, note: 게시판 사연 2건 이상이 읽힌다}
+  - {type: not_aired, text: 강아지, note: 주제와 무관한 사연은 나가지 않는다}
+  - {type: not_aired, text: 주식, note: 주제와 무관한 사연은 나가지 않는다}
+  - {type: not_aired, text: 타이어, note: 방송 중에 올라온 무관한 사연도 나가지 않는다}
+  - {type: min_reflected, kind: chat, value: 2, note: 폭주 중에도 채팅이 인용된다}
   - {type: max_fallback, value: 0, note: 대체 멘트 없음}
   - {type: max_silence_sec, value: 10, note: 부하에서도 긴 무음 없음}
