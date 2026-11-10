@@ -154,6 +154,7 @@ async def run_one(spec: ScenarioSpec, index: int, run_dir: Path, args: argparse.
         "songs": sum(1 for p in backend.played if p.kind == "music"),
         "wall_sec": round(time.time() - started, 1),
         "tts_latency_sec": _mean(sim_tts.latencies) if sim_tts else None,
+        **_flow(backend.played),
         "error": error,
     }
     reflected = _reflections(db, station_id)
@@ -166,6 +167,28 @@ async def run_one(spec: ScenarioSpec, index: int, run_dir: Path, args: argparse.
 
 def _mean(values: list[float]) -> float | None:
     return round(sum(values) / len(values), 2) if values else None
+
+
+def _flow(played: list) -> dict:
+    """말과 곡의 흐름 (#222) — 말 비율, 곡 사이 토크 길이, 곡 소개만 사이에 두고 곡이 이어진 횟수."""
+    speech = sum(p.sec for p in played if p.kind == "speech")
+    music = sum(p.sec for p in played if p.kind == "music")
+    gaps: list[tuple[float, bool]] = []  # 곡과 곡 사이 — (말 길이, 곡 소개뿐인가)
+    gap: list | None = None  # 첫 곡 전(오프닝)과 마지막 곡 뒤(엔딩)는 곡 사이가 아니다
+    for p in sorted(played, key=lambda p: p.at):
+        if p.kind == "music":
+            if gap is not None:
+                gaps.append((sum(s.sec for s in gap), all(s.corner_type == "music_intro" for s in gap)))
+            gap = []
+        elif p.kind == "speech" and gap is not None:
+            gap.append(p)
+    talk = sorted(sec for sec, _ in gaps)
+    return {
+        "speech_sec": round(speech, 1), "music_sec": round(music, 1),
+        "talk_ratio": round(speech / (speech + music), 3) if speech + music else None,
+        "talk_between_songs_p50": talk[(len(talk) - 1) // 2] if talk else None,
+        "back_to_back_songs": sum(1 for _, intro_only in gaps if intro_only),
+    }
 
 
 def _reflections(db: Path, station_id: str) -> dict[str, tuple[str, float]]:
@@ -231,6 +254,10 @@ def _write_run(run_dir: Path, spec: ScenarioSpec, index: int, seed: int, args: a
     sim = report["sim"]
     text += (f"\n## 시뮬레이션\n\n- 무음: 합계 {sim['silence_total_sec']}초, 최대 {sim['silence_max_sec']}초, "
              f"{sim['silence_count']}번\n- 송출: 멘트 {sim['speech_segments']}개, 곡 {sim['songs']}곡\n"
+             f"- 말 비율: {_cell(sim['talk_ratio'])} (말 {sim['speech_sec']}초, 곡 {sim['music_sec']}초), "
+             f"곡 사이 토크 중앙값 {_cell(sim['talk_between_songs_p50'])}"
+             f"{'초' if sim['talk_between_songs_p50'] is not None else ''}, "
+             f"곡 소개만 두고 곡이 이어진 횟수 {sim['back_to_back_songs']}\n"
              f"- 실행 시간: {sim['wall_sec']}초\n- TTS 흉내 평균 지연: {sim['tts_latency_sec'] or '-'}초\n")
     if sim["error"]:
         text += f"- **오류**: {sim['error']}\n"
@@ -268,6 +295,11 @@ _SUMMARY_COLUMNS = [
     ("코너 대체율", lambda r: r.get("corner_rates", {}).get("fallback_rate")),
     ("세그먼트 생성 P95(초)", lambda r: r.get("generation", {}).get("job_sec", {}).get("p95")),
     ("화제 전환", lambda r: r.get("steer")),
+    ("말 비율", lambda r: r["sim"].get("talk_ratio")),
+    ("곡 사이 토크(초)", lambda r: r["sim"].get("talk_between_songs_p50")),
+    ("곡 연속", lambda r: r["sim"].get("back_to_back_songs")),
+    ("같은 첫머리", lambda r: r.get("scripts", {}).get("same_opening_rate")),
+    ("주제 소개", lambda r: r.get("scripts", {}).get("topic_intros")),
     ("기대 결과", lambda r: f"{sum(e['passed'] for e in r['expect'])}/{len(r['expect'])}" if r["expect"] else "-"),
 ]
 
