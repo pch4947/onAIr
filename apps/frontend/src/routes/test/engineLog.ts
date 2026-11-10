@@ -1,25 +1,18 @@
-// 엔진 로그 문구 — 값의 뜻은 docs/CORNER_DESIGN.md, docs/ENGINE_REDIS_CONTRACT.md 6.1·10.4절
+// 엔진 로그 문구 — 값의 뜻은 docs/CORNER_DESIGN.md, docs/DEMO_SCENARIO.md 3절, docs/ENGINE_REDIS_CONTRACT.md 6.1·10.4절
 import { cornerLabel } from '@/routes/test/corners'
-import type { DecisionInput, EngineDecision } from '@/shared/api'
+import type { EngineEvent } from '@/shared/api'
 import type { CornerInputMode, CurrentCorner, RequestRecord } from '@/shared/types'
 
 export interface LogEntry {
   id: string
   at: number // 초
-  tone: 'decision' | 'policy' | 'input' | 'control' | 'muted'
+  // decision 선별·생성 / reflect 화제 전환·회상·집계 / policy 코너·방송 / input 입력 / control 실패·대체·요청 / muted 소재
+  tone: 'decision' | 'reflect' | 'policy' | 'input' | 'control' | 'muted'
   title: string
   detail?: string
 }
 
-const STEP_LABEL: Record<string, string> = {
-  opening_greeting: '시작 인사', topic_intro: '주제 소개', corner_preview: '코너 예고', talk_open: '이야기 꺼내기',
-  talk: '이야기 잇기', artist_talk: '아티스트 이야기', music_intro: '곡 소개', story: '사연 읽기',
-  text_read: '문자 읽기', game_round: '투표 권하기', news_headline: '헤드라인', news_item: '기사 전달',
-  news_recap: '소식 정리', closing_lookback: '돌아보기', closing_farewell: '끝인사', filler: '브릿지',
-}
-
 const SITUATION_LABEL: Record<string, string> = { quiet: '조용함', normal: '보통', flood: '채팅 폭주' }
-const CRITERION_LABEL: Record<string, string> = { recency: '최근성 우선', relevance: '화제 관련성 우선', diversity: '다양한 사람 우선' }
 const CHAT_TYPE_LABEL: Record<string, string> = { reaction: '반응형', standalone: '독립형' }
 // 엔진 inputs/classify.py — 위에서부터 처음 맞는 규칙으로 유형을 정한다
 const RULE_LABEL: Record<string, string> = {
@@ -48,41 +41,39 @@ function quote(text: string | null | undefined, max = 24) {
   return `“${flat.length > max ? `${flat.slice(0, max)}…` : flat}”`
 }
 
-function inputLine(input: DecisionInput) {
-  const kind = INPUT_KIND_LABEL[input.kind ?? ''] ?? '입력'
-  const rule = input.rule ? `(${RULE_LABEL[input.rule] ?? input.rule})` : ''
-  const type = input.chat_type ? ` · ${CHAT_TYPE_LABEL[input.chat_type]}${rule}` : ''
-  return `${kind}${type} ${quote(input.body)}`
+const EVENT_TONE: Record<string, LogEntry['tone']> = {
+  generation: 'decision', selection: 'decision',
+  steer: 'reflect', callback: 'reflect', aggregate: 'reflect',
+  corner: 'policy', station: 'policy', topic_plan: 'policy',
+  input: 'input', aired: 'input',
+  track: 'muted', rss: 'muted', story_judge: 'muted',
+}
+// 생성이 실패하거나 대체·차단·인용 누락이면 눈에 띄게
+const TROUBLE = /대체 멘트|실패|차단|누락|LLM 거부|건너뜀|코너 대체/
+
+function text(value: unknown) {
+  return typeof value === 'string' ? value : null
 }
 
-export function describeDecision(decision: EngineDecision): LogEntry {
-  const base = { id: `d-${decision.id}`, at: decision.at }
-  const where = decision.corner ? cornerLabel(decision.corner) : '코너 밖'
-  if (decision.action === 'glue') return { ...base, tone: 'muted', title: `연결음 · ${where}` }
-  if (decision.action === 'no_material') return { ...base, tone: 'muted', title: `${where} · 낼 소재가 없어 기다림` }
-  if (decision.action === 'tts_blocked') return { ...base, tone: 'muted', title: '음성 합성 한도 초과 · 잠시 멈춤' }
-  if (decision.action === 'idle') return { ...base, tone: 'muted', title: '엔딩까지 편성을 마침' }
+// 엔진 문구(summary)는 그대로 두고, 원자료로 근거 한 줄을 덧붙인다
+function eventDetail(event: EngineEvent): string | undefined {
+  const data = event.data ?? {}
+  if (event.kind === 'input') {
+    const chatType = text(data.chat_type)
+    const rule = text(data.rule)
+    const type = chatType ? ` · ${CHAT_TYPE_LABEL[chatType] ?? chatType}${rule ? `(${RULE_LABEL[rule] ?? rule})` : ''}` : ''
+    return `${quote(text(data.body), 40)}${type}`
+  }
+  if (event.kind === 'selection') {
+    const situation = text(data.situation)
+    return situation ? `채팅 상황 ${SITUATION_LABEL[situation] ?? situation}` : undefined
+  }
+  return undefined
+}
 
-  const step = decision.step ? STEP_LABEL[decision.step] ?? decision.step : ''
-  const lines: string[] = []
-  if (decision.situation || decision.criterion) {
-    lines.push(`채팅 상황 ${SITUATION_LABEL[decision.situation ?? ''] ?? '-'} · 선별 기준 ${CRITERION_LABEL[decision.criterion ?? ''] ?? '-'}`)
-  }
-  if (decision.quotes.length) {
-    lines.push(...decision.quotes.map((input) => `✔ 인용 ${inputLine(input)}`))
-  }
-  const quoted = new Set(decision.quotes.map((input) => input.request_id))
-  const skipped = decision.pending.filter((input) => !quoted.has(input.request_id))
-  if (skipped.length) {
-    lines.push(...skipped.slice(0, 3).map((input) => `· 보류 ${inputLine(input)}`))
-    if (skipped.length > 3) lines.push(`· 그 밖에 ${skipped.length - 3}건 대기`)
-  }
-  return {
-    ...base,
-    tone: 'decision',
-    title: `멘트 생성 · ${where}${step ? ` / ${step}` : ''}${decision.quotes.length ? ` · 입력 ${decision.quotes.length}건 반영` : ''}`,
-    detail: lines.join('\n') || undefined,
-  }
+export function describeEvent(event: EngineEvent): LogEntry {
+  const tone = TROUBLE.test(event.summary) ? 'control' : EVENT_TONE[event.kind] ?? 'muted'
+  return { id: `e-${event.id}`, at: event.at, tone, title: event.summary, detail: eventDetail(event) }
 }
 
 export function describePolicy(corner: CurrentCorner): LogEntry {

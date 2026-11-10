@@ -62,38 +62,29 @@ export async function skipCorner(stationId: string, corner: string): Promise<{ c
   return res.json() as Promise<{ corner: string; discarded: number }>
 }
 
-export interface DecisionInput {
-  request_id: string
-  kind: string | null
-  body: string | null
-  chat_type: 'reaction' | 'standalone' | null
-  rule: string | null // 분류 근거 — pointing | anchor_keyword | short_reaction | default
-  state: string | null
-  nickname: string | null
-}
+// 엔진 패널용 이벤트 (#208) — summary는 엔진이 만든 한 줄, data는 종류별 원자료
+export type EngineEventKind =
+  | 'generation' | 'corner' | 'station' | 'input' | 'selection' | 'steer' | 'aggregate'
+  | 'story_judge' | 'topic_plan' | 'callback' | 'track' | 'rss' | 'aired'
 
-export interface EngineDecision {
+export interface EngineEvent {
   id: number
   at: number
-  action: 'generate' | 'glue' | 'no_material' | 'tts_blocked' | 'idle'
-  corner: string | null
-  step: string | null
-  situation: 'quiet' | 'normal' | 'flood' | null
-  criterion: 'recency' | 'relevance' | 'diversity' | null
-  quotes: DecisionInput[]
-  pending: DecisionInput[]
+  kind: EngineEventKind | string
+  summary: string
+  data: Record<string, unknown> | null
 }
 
-// 테스트 화면 — 어드민만. 엔진 편성 결정 중 무엇을 만들었는지만 (대기 판단은 백엔드가 뺀다)
-export async function getDecisions(stationId: string, after?: number | null): Promise<{ decisions: EngineDecision[]; next: number | null }> {
+// 테스트 화면 — 어드민만. 엔진의 판단 흐름(입력 라우팅·채팅 선별·생성 단계·코너·송출 등)
+export async function getEngineEvents(stationId: string, after?: number | null): Promise<{ events: EngineEvent[]; next: number | null }> {
   const query = after == null ? '' : `?after=${after}`
-  const res = await fetch(`${API_BASE}/api/stations/${encodeURIComponent(stationId)}/decisions${query}`, {
+  const res = await fetch(`${API_BASE}/api/stations/${encodeURIComponent(stationId)}/events${query}`, {
     headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
   })
   if (!res.ok) {
-    throw new Error(`GET decisions failed: ${res.status}`)
+    throw new Error(`GET events failed: ${res.status}`)
   }
-  return res.json() as Promise<{ decisions: EngineDecision[]; next: number | null }>
+  return res.json() as Promise<{ events: EngineEvent[]; next: number | null }>
 }
 
 export async function sendPresenceHeartbeat(stationId: string, clientId: string): Promise<void> {
