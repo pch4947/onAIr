@@ -23,7 +23,7 @@ export function TestPage() {
   const isAdmin = Boolean(currentUser?.isAdmin)
   const broadcastStateQuery = useQuery({
     queryKey: ['broadcast-state'],
-    queryFn: getBroadcastState,
+    queryFn: () => getBroadcastState(),
     refetchInterval: BROADCAST_STATE_POLL_INTERVAL_MS,
   })
   const voicesQuery = useQuery({ queryKey: ['voices'], queryFn: getVoices, enabled: isAdmin })
@@ -69,7 +69,7 @@ export function TestPage() {
   const failed = startMutation.isError || voicesQuery.isError
   const ended = opened && startMutation.isIdle
   if (state && busy) {
-    return <ListenPage navActive="test" testPanel={<TestPanel state={state} />} chatSince={chatSince} />
+    return <ListenPage navActive="test" stationId={state.stationId} testPanel={<TestPanel state={state} />} chatSince={chatSince} />
   }
 
   return (

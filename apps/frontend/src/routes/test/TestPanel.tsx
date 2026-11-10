@@ -88,7 +88,9 @@ export function TestPanel({ state }: { state: BroadcastStateResponse }) {
   }, [currentCorner])
 
   // 청취자 입력의 상태 변화 — 접수·대기·생성·방송·만료
-  const requestsQuery = useQuery({ queryKey: ['requests'], queryFn: getRequests, refetchInterval: REQUESTS_POLL_INTERVAL_MS })
+  const requestsQuery = useQuery({
+    queryKey: ['test-requests', stationId], queryFn: () => getRequests(stationId), refetchInterval: REQUESTS_POLL_INTERVAL_MS,
+  })
   const lastStatus = useRef<Map<string, string> | null>(null)
   const lastSince = useRef<number | null>(null)
   // 지난 방송 입력은 방송이 끝날 때 실패·만료로 바뀌는데, 이번 방송 로그에 섞이지 않게 시작 뒤 입력만 본다

@@ -147,7 +147,7 @@ export function StationCreateModal({ onClose }: StationCreateModalProps) {
               <p className="text-xs text-text-muted">첫 노래를 받지 못해서 첫 노래 없이 방송을 시작해요.</p>
             )}
             {pollError && <><p role="alert">{pollError}</p><button type="button" onClick={() => setStation({ ...station })}>상태 다시 확인</button></>}
-            {station.status === 'started' && station.hls_ready && <button type="button" onClick={() => { onClose(); navigate('/listen') }}>방송 듣기</button>}
+            {station.status === 'started' && station.hls_ready && <button type="button" onClick={() => { onClose(); navigate(`/listen/${station.station_id}`) }}>방송 듣기</button>}
           </div>
         )}
         {(step === 'edit' || step === 'submitting') && selected && (

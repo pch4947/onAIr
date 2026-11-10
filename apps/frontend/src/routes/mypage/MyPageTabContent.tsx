@@ -6,7 +6,7 @@ import { getBookmarkedReplays, getBroadcastState, getLikedBoardPosts, getMyBoard
 import type { MyPageTab } from '@/routes/mypage/mock'
 
 export function MyPageTabContent({ tab }: { tab: MyPageTab }) {
-  const broadcastStateQuery = useQuery({ queryKey: ['broadcast-state'], queryFn: getBroadcastState })
+  const broadcastStateQuery = useQuery({ queryKey: ['broadcast-state'], queryFn: () => getBroadcastState() })
   const stationId = broadcastStateQuery.data?.stationId
 
   switch (tab) {

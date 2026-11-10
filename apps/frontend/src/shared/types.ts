@@ -118,6 +118,20 @@ export interface Voice {
 }
 
 export type StationFormat = 'music' | 'talk' | 'news'
+
+// GET /api/stations 한 칸 — 끝난 방송과 빈 채널은 서버가 뺀다
+export interface StationListItem {
+  station_id: string
+  status: 'preparing' | 'started' | 'rejected' | 'draining' | 'stopping' | 'cleaning'
+  dj_name: string | null
+  topic: string | null
+  format: StationFormat
+  hls_url: string
+  hls_ready: boolean
+  listeners: number
+  created_at: number
+  mine: boolean
+}
 export type TalkCorner = 'story_corner' | 'text_corner' | 'topic_talk' | 'dj_vs_listeners'
 export type NewsSection = 'general' | 'economy' | 'it' | 'sports' | 'culture'
 export type Intensity = 'low' | 'mid' | 'high'
