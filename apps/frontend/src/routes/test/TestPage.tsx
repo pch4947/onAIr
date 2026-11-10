@@ -1,10 +1,11 @@
-// 테스트 화면 — 들어오면 바로 테스트 방송을 열고, 방송 화면에 코너 변경·엔진 로그를 붙여 보여준다 (#161 전에는 방송이 하나)
+// 테스트 화면 — 들어오면 바로 테스트 방송을 열고, 방송 화면에 코너 변경·엔진 로그를 붙여 보여준다
+// 다중 방송(#238): 진행 중인 내 방송이 있으면 그 방송, 없으면 새로 만든 방송을 쓴다
 
 import { useEffect, useRef, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Sidebar } from '@/app/Sidebar'
-import { createStation, getVoices } from '@/routes/station-create/api'
+import { createStation, getMyStation, getVoices } from '@/routes/station-create/api'
 import { StationApiError } from '@/routes/station-create/client'
 import { ListenPage } from '@/routes/listen/ListenPage'
 import { TestPanel } from '@/routes/test/TestPanel'
@@ -21,9 +22,19 @@ export function TestPage() {
   const cache = useQueryClient()
   const { data: currentUser } = useCurrentUser()
   const isAdmin = Boolean(currentUser?.isAdmin)
+  const myStationQuery = useQuery({
+    queryKey: ['my-station'],
+    queryFn: getMyStation,
+    enabled: isAdmin,
+    refetchInterval: BROADCAST_STATE_POLL_INTERVAL_MS,
+  })
+  // 끝난 방송은 내 방송에서 빠지므로, 마지막으로 연 방송 ID를 기억해 '끝났어요'를 보여준다
+  const [startedId, setStartedId] = useState<string | null>(null)
+  const stationId = myStationQuery.data?.station_id ?? startedId ?? undefined
   const broadcastStateQuery = useQuery({
-    queryKey: ['broadcast-state'],
-    queryFn: () => getBroadcastState(),
+    queryKey: ['broadcast-state', stationId],
+    queryFn: () => getBroadcastState(stationId!),
+    enabled: Boolean(stationId),
     refetchInterval: BROADCAST_STATE_POLL_INTERVAL_MS,
   })
   const voicesQuery = useQuery({ queryKey: ['voices'], queryFn: getVoices, enabled: isAdmin })
@@ -34,16 +45,19 @@ export function TestPage() {
   const stationQuery = useQuery({ ...testStationQuery(state?.stationId), enabled: isAdmin && busy && Boolean(state) })
   const chatSince = stationQuery.isSuccess ? stationQuery.data.created_at : stationQuery.isError ? 0 : null
 
-  const [opened, setOpened] = useState(false)
   const startMutation = useMutation({
     mutationFn: (voiceId: string) => createStation({
       ...TEST_STATION, intensity: 'mid', persona: { ...PERSONA_PRESETS[0].persona, voice: voiceId },
     }, randomId()),
-    onMutate: () => setOpened(true),
-    onSuccess: () => {
+    onSuccess: (station) => {
       // 새 방송이라 지난 방송 정보(시작 시각)를 버린다
       cache.removeQueries({ queryKey: [TEST_STATION_KEY] })
-      return cache.invalidateQueries({ queryKey: ['broadcast-state'] })
+      setStartedId(station.station_id)
+      return cache.invalidateQueries({ queryKey: ['my-station'] })
+    },
+    // 그새 다른 곳에서 내 방송이 열렸으면(409) 그 방송을 쓴다
+    onError: (error) => {
+      if (error instanceof StationApiError && error.status === 409 && error.stationId) setStartedId(error.stationId)
     },
   })
   const { reset } = startMutation
@@ -55,19 +69,20 @@ export function TestPage() {
 
   // 들어올 때 한 번만 연다. 콘솔에서 종료한 뒤에는 저절로 다시 열지 않는다
   const autoStarted = useRef(false)
+  const noStation = myStationQuery.isSuccess && !myStationQuery.data && !startedId
   useEffect(() => {
-    if (!isAdmin || !state || busy || !voice || autoStarted.current) return
+    if (!isAdmin || !noStation || !voice || autoStarted.current) return
     autoStarted.current = true
     startMutation.mutate(voice)
-  }, [isAdmin, state, busy, voice, startMutation])
+  }, [isAdmin, noStation, voice, startMutation])
 
   // 테스트 화면은 어드민만 쓴다. 메뉴는 숨겼지만 주소로 직접 들어와도 돌려보낸다
   if (currentUser && !currentUser.isAdmin) {
     return <Navigate to="/main" replace />
   }
 
-  const failed = startMutation.isError || voicesQuery.isError
-  const ended = opened && startMutation.isIdle
+  const failed = (startMutation.isError && !startedId) || voicesQuery.isError || myStationQuery.isError
+  const ended = Boolean(state) && !busy && startMutation.isIdle
   if (state && busy) {
     return <ListenPage navActive="test" stationId={state.stationId} testPanel={<TestPanel state={state} />} chatSince={chatSince} />
   }
@@ -84,25 +99,23 @@ export function TestPage() {
           </p>
         </header>
 
-        {state && (
-          <section className="flex flex-col items-center gap-3 rounded-lg border border-border bg-surface p-8 text-center">
-            <p className={`text-[13px] ${failed ? 'text-danger' : 'text-text-muted'}`}>
-              {failed
-                ? startMutation.error instanceof StationApiError ? startMutation.error.message : '테스트 방송을 열지 못했어요.'
-                : ended ? '테스트 방송이 끝났어요.'
-                  : '테스트 방송을 여는 중…'}
-            </p>
-            {voice && (failed || ended) && (
-              <button
-                type="button"
-                onClick={() => startMutation.mutate(voice)}
-                className="rounded-md bg-primary px-5 py-2.5 text-[13px] font-semibold text-white"
-              >
-                {failed ? '다시 시도' : '다시 시작하기'}
-              </button>
-            )}
-          </section>
-        )}
+        <section className="flex flex-col items-center gap-3 rounded-lg border border-border bg-surface p-8 text-center">
+          <p className={`text-[13px] ${failed ? 'text-danger' : 'text-text-muted'}`}>
+            {failed
+              ? startMutation.error instanceof StationApiError ? startMutation.error.message : '테스트 방송을 열지 못했어요.'
+              : ended ? '테스트 방송이 끝났어요.'
+                : '테스트 방송을 여는 중…'}
+          </p>
+          {voice && (failed || ended) && (
+            <button
+              type="button"
+              onClick={() => startMutation.mutate(voice)}
+              className="rounded-md bg-primary px-5 py-2.5 text-[13px] font-semibold text-white"
+            >
+              {failed ? '다시 시도' : '다시 시작하기'}
+            </button>
+          )}
+        </section>
       </main>
     </div>
   )
