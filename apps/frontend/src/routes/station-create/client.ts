@@ -15,16 +15,27 @@ export interface StationResult {
   config?: { format?: StationFormat; corners?: TalkCorner[] | null; persona?: { dj_name?: string } }
 }
 
+// 다중 방송(#161): 409는 진행 중인 내 방송이 있음(그 방송 ID를 함께 준다), 503 중 채널이 다 찬 경우는 따로 안내한다
+const CHANNELS_BUSY = 'All channels are busy'
+
 export class StationApiError extends Error {
   status: number
   errors: PersonaFieldError[]
-  constructor(status: number, errors: PersonaFieldError[] = []) {
+  stationId?: string
+  channelsBusy: boolean
+  constructor(status: number, errors: PersonaFieldError[] = [], detail?: unknown) {
+    const stationId = typeof detail === 'object' && detail !== null && 'station_id' in detail
+      ? String((detail as { station_id: unknown }).station_id) : undefined
+    const channelsBusy = status === 503 && detail === CHANNELS_BUSY
     super(status === 401 ? '로그인이 필요해요. 다시 로그인해주세요.'
-      : status === 409 ? '이미 생성된 방송이 있어요. 현재는 방송 하나만 만들 수 있어요.'
+      : status === 409 ? '이미 진행 중인 내 방송이 있어요. 한 사람당 방송은 하나만 열 수 있어요.'
       : status === 422 ? '입력 내용을 확인해주세요.'
+      : channelsBusy ? '지금은 모든 채널에서 방송 중이에요. 잠시 후 다시 시도해주세요.'
       : '요청을 완료하지 못했어요. 잠시 후 다시 시도해주세요.')
     this.status = status
     this.errors = errors
+    this.stationId = stationId
+    this.channelsBusy = channelsBusy
   }
 }
 
@@ -62,7 +73,7 @@ export function createStationClient(base: string, getToken: () => string | null)
         (Array.isArray(payload?.detail) ? payload.detail.map((item: { loc: (string | number)[]; msg: string }) => ({
           field: item.loc.filter((part) => part !== 'body').join('.'), reason: item.msg,
         })) : [])
-      throw new StationApiError(response.status, errors)
+      throw new StationApiError(response.status, errors, payload?.detail)
     }
     if (payload === null) throw new StationApiError(502)
     return payload as T
@@ -95,6 +106,10 @@ export function createStationClient(base: string, getToken: () => string | null)
         ...(input.format === 'talk' && input.corners ? { corners: input.corners } : {}),
         ...(input.format === 'news' && input.newsSections ? { news_sections: input.newsSections } : {}),
       }, key)).station
+    },
+    // 진행 중인 내 방송 (없으면 null) — 끝난 방송은 서버가 뺀다
+    async getMyStation(): Promise<StationResult | null> {
+      return (await request<{ station: StationResult | null }>('/stations/mine')).station
     },
     async getStation(id: string, signal?: AbortSignal): Promise<StationResult> {
       return (await request<{ station: StationResult }>(`/stations/${encodeURIComponent(id)}`, undefined, undefined, signal)).station

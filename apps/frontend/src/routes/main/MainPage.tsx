@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Sidebar } from '@/app/Sidebar'
 import { ViewIcon } from '@/routes/listen/icons'
+import { getMyStation } from '@/routes/station-create/api'
 import { StationCreateModal } from '@/routes/station-create/StationCreateModal'
 import { getStations } from '@/shared/api'
 import { useCurrentUser } from '@/shared/useCurrentUser'
@@ -93,6 +94,16 @@ export function MainPage() {
     refetchInterval: STATIONS_POLL_INTERVAL_MS,
   })
   const stations = stationsQuery.data?.stations ?? []
+  // 진행 중인 내 방송이 있으면 새로 만들지 않고 그 방송으로 돌아간다 (한 사람당 하나)
+  const myStationQuery = useQuery({
+    queryKey: ['my-station'],
+    queryFn: getMyStation,
+    enabled: canCreate,
+    refetchInterval: STATIONS_POLL_INTERVAL_MS,
+  })
+  const myStationId = myStationQuery.data?.station_id
+  const handleHostButton = () => (myStationId ? navigate(`/listen/${myStationId}`) : setIsCreateModalOpen(true))
+  const hostLabel = myStationId ? '내 방송으로 가기' : '방송 시작하기'
   const pageSize = useIsDesktop() ? DESKTOP_PAGE_SIZE : MOBILE_PAGE_SIZE
   const totalPages = Math.max(1, Math.ceil(stations.length / pageSize))
   // 화면 너비가 바뀌거나 방송이 끝나 페이지 수가 줄면 범위 안으로 맞춘다
@@ -112,10 +123,10 @@ export function MainPage() {
           {canCreate && (
             <button
               type="button"
-              onClick={() => setIsCreateModalOpen(true)}
+              onClick={handleHostButton}
               className="hidden shrink-0 items-center gap-1.5 rounded-md bg-primary px-4.5 py-2.5 text-xs font-semibold text-white md:flex"
             >
-              방송 시작하기
+              {hostLabel}
             </button>
           )}
         </header>
@@ -124,10 +135,10 @@ export function MainPage() {
           <div className="mb-5 flex items-center justify-end md:hidden">
             <button
               type="button"
-              onClick={() => setIsCreateModalOpen(true)}
+              onClick={handleHostButton}
               className="flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-4.5 py-2.5 text-xs font-semibold text-white"
             >
-              방송 시작하기
+              {hostLabel}
             </button>
           </div>
         )}

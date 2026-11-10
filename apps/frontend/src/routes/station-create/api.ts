@@ -1,7 +1,7 @@
 import { getAccessToken } from '@/shared/authToken'
 import { createStationClient } from './client'
 
-export const { getVoices, generatePersonaDrafts, checkPersonaDraft, createStation, getStation } =
+export const { getVoices, generatePersonaDrafts, checkPersonaDraft, createStation, getStation, getMyStation } =
   createStationClient(import.meta.env.VITE_API_BASE_URL ?? '', getAccessToken)
 
 // Team's provisional genre choices; the shared schema currently accepts strings.
