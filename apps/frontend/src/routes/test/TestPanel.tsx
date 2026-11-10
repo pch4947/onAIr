@@ -92,22 +92,16 @@ export function TestPanel({ state }: { state: BroadcastStateResponse }) {
   const requestsQuery = useQuery({
     queryKey: ['test-requests', stationId], queryFn: () => getRequests(stationId), refetchInterval: REQUESTS_POLL_INTERVAL_MS,
   })
+  // 서버가 이번 방송 요청만 준다 (#250). 처음 받은 목록은 이미 지난 일이라 기준으로만 쓴다
   const lastStatus = useRef<Map<string, string> | null>(null)
-  const lastSince = useRef<number | null>(null)
-  // 지난 방송 입력은 방송이 끝날 때 실패·만료로 바뀌는데, 이번 방송 로그에 섞이지 않게 시작 뒤 입력만 본다
-  const [mountedAt] = useState(() => Date.now() / 1000)
-  const since = stationQuery.isFetchedAfterMount ? (stationQuery.data?.created_at ?? mountedAt) : null
   useEffect(() => {
-    if (since === null) return
-    const requests = requestsQuery.data?.requests.filter((item) => Date.parse(item.createdAt) / 1000 >= since)
+    const requests = requestsQuery.data?.requests
     if (!requests) return
-    // 처음 받은 목록과, 방송 시작 시각을 알게 돼 범위가 바뀐 직후 목록은 기준으로만 쓴다
-    const previous = lastSince.current === since ? lastStatus.current : null
-    lastSince.current = since
+    const previous = lastStatus.current
     lastStatus.current = new Map(requests.map((item) => [item.id, item.status]))
     if (!previous) return
     push(requests.filter((item) => previous.get(item.id) !== item.status).map(describeInputChange))
-  }, [requestsQuery.data, since])
+  }, [requestsQuery.data])
 
   const skipMutation = useMutation({
     mutationFn: (corner: string) => skipCorner(stationId, corner),

@@ -10,7 +10,7 @@ import { StationApiError } from '@/routes/station-create/client'
 import { ListenPage } from '@/routes/listen/ListenPage'
 import { TestPanel } from '@/routes/test/TestPanel'
 import { PERSONA_PRESETS, TEST_STATION } from '@/routes/test/presets'
-import { TEST_STATION_KEY, testStationQuery } from '@/routes/test/testStation'
+import { TEST_STATION_KEY } from '@/routes/test/testStation'
 import { getBroadcastState } from '@/shared/api'
 import { randomId } from '@/shared/randomId'
 import { useCurrentUser } from '@/shared/useCurrentUser'
@@ -41,17 +41,16 @@ export function TestPage() {
   const voice = voicesQuery.data?.[0]?.id
   const state = broadcastStateQuery.data
   const busy = BUSY_STATUSES.has(state?.stationStatus ?? '')
-  // 채팅창은 이번 방송 채팅만 — 시작 시각을 받기 전에는 비워 둔다. 남의 방송이라 조회가 안 되면 다 보여준다
-  const stationQuery = useQuery({ ...testStationQuery(state?.stationId), enabled: isAdmin && busy && Boolean(state) })
-  const chatSince = stationQuery.isSuccess ? stationQuery.data.created_at : stationQuery.isError ? 0 : null
 
   const startMutation = useMutation({
     mutationFn: (voiceId: string) => createStation({
       ...TEST_STATION, intensity: 'mid', persona: { ...PERSONA_PRESETS[0].persona, voice: voiceId },
     }, randomId()),
     onSuccess: (station) => {
-      // 새 방송이라 지난 방송 정보(시작 시각)를 버린다
+      // 새 방송이라 지난 방송 정보(설정)와, 같은 채널 지난 방송의 채팅 캐시를 버린다
       cache.removeQueries({ queryKey: [TEST_STATION_KEY] })
+      cache.removeQueries({ queryKey: ['requests', station.station_id] })
+      cache.removeQueries({ queryKey: ['test-requests', station.station_id] })
       setStartedId(station.station_id)
       return cache.invalidateQueries({ queryKey: ['my-station'] })
     },
@@ -84,7 +83,7 @@ export function TestPage() {
   const failed = (startMutation.isError && !startedId) || voicesQuery.isError || myStationQuery.isError
   const ended = Boolean(state) && !busy && startMutation.isIdle
   if (state && busy) {
-    return <ListenPage navActive="test" stationId={state.stationId} testPanel={<TestPanel state={state} />} chatSince={chatSince} />
+    return <ListenPage navActive="test" stationId={state.stationId} testPanel={<TestPanel state={state} />} />
   }
 
   return (
