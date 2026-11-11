@@ -1,0 +1,30 @@
+# 검증용(holdout) 시나리오 — 설정값이나 프롬프트를 고칠 때는 돌리지 않는다. 채택하려는 변경이
+# 다른 주제·다른 입력에서도 통하는지만 본다 (docs/ENGINE_TUNING.md 3.4절).
+# 밀도는 sparse와 같고 주제와 문장이 다르다.
+name: commute
+description: 검증용. 청취자 3명이 가끔 보낸다. 채팅 5개, 문자 2개, 신청곡 1개, 게시판 사연 4개(1개는 주제와 무관).
+station:
+  format: talk
+  corners: [topic_talk, text_corner, story_corner]
+  intensity: mid
+  topic: 출근길 풍경
+board_stories:
+  - {body: "지하철에서 졸다가 내릴 역을 두 정거장이나 지나쳤어요. 그래도 지각은 안 했어요.", nickname: 두정거장}
+  - {body: "버스 기사님이 탈 때마다 좋은 아침이라고 인사해 주셔서 하루가 가벼워져요.", nickname: 첫차}
+  - {body: "자전거로 출근을 시작했는데 강바람이 생각보다 차서 장갑을 샀어요.", nickname: null}
+  - {body: "주말에 본 영화가 너무 재밌어서 두 번 봤어요.", nickname: 영화광}
+inputs:
+  - {at: "2:00", kind: chat, who: a, body: "오늘 지하철 진짜 붐볐어요", id: crowded}
+  - {at: "4:00", kind: message, who: b, nickname: 환승러, body: "환승 통로에서 매일 마주치는 분이 있는데 오늘은 서로 눈인사를 했어요.", id: transfer}
+  - {at: "5:30", kind: chat, who: c, body: "버스는 창가 자리가 최고죠"}
+  - {at: "8:00", kind: song_request, who: b, nickname: 환승러, title: 아침 일곱 시, artist: 가상의 가수, body: "출근길에 늘 듣는 노래예요", id: song}
+  - {at: "11:00", kind: chat, who: a, body: "DJ님은 출근할 때 뭐 들으세요?"}
+  - {at: "14:00", kind: message, who: c, nickname: 걸어서삼십분, body: "한 정거장 먼저 내려서 걸었더니 아침 공기가 달랐어요.", id: walk}
+  - {at: "19:00", kind: chat, who: c, body: "저는 아직 출근 중이에요"}
+  - {at: "24:00", kind: chat, who: a, body: "이 노래 좋네요"}
+expect:
+  - {type: reflected, input: transfer, note: 문자가 읽힌다}
+  - {type: reflected, input: walk, note: 두 번째 문자가 읽힌다}
+  - {type: not_aired, text: 영화, note: 주제와 무관한 사연은 나가지 않는다}
+  - {type: max_fallback, value: 0, note: 대체 멘트 없음}
+  - {type: max_silence_sec, value: 5, note: 긴 무음 없음}

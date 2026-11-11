@@ -1,6 +1,6 @@
 """시나리오 실행 — 회차마다 엔진 하나를 실시간으로 돌리고 결과를 파일로 남긴다.
 
-출력 (out/<실행 시각>/<시나리오>/):
+출력 (out/<실행 시각>/<시나리오>/ — 변형이 여럿이면 out/<실행 시각>/<변형>/<시나리오>/):
   run-N/transcript.md  송출 시각 순 대본 — 코너, 들어온 입력, 인용된 입력, 무음, 곡
   run-N/report.md      onair-report 지표 + 무음 지표 + 기대 결과 판정 (report.json은 원자료)
   run-N/run.json       재현 정보 — 시나리오 원문, seed, git 커밋, LLM, TTS
@@ -8,6 +8,12 @@
   run-N/broadcast.m3u  실제 TTS 회차의 멘트 오디오 재생 목록 (곡은 없다)
   summary.md           회차별 핵심 지표와 기대 결과 통과 수
   issues.csv           빈 문제 기록표
+실행마다 (out/<실행 시각>/):
+  session.json         무엇을 어떻게 돌렸나 — 명령, 커밋, 변형, 목적(--note)
+  worktree.diff        커밋하지 않은 엔진 변경 (있을 때만) — 프롬프트를 고쳐 보는 중의 실행도 재현된다
+  compare.md·json      변형이 여럿일 때 base 대비 지표 비교 (compare.py)
+  review.html          대본 검토 페이지 (review.py)
+그리고 out/ledger.jsonl에 변형 × 시나리오마다 한 줄씩 쌓는다 — 지금까지의 실행 전체를 훑는 장부다.
 """
 from __future__ import annotations
 
@@ -16,21 +22,28 @@ import asyncio
 import csv
 import json
 import random
+import re
 import shutil
-import subprocess
+import sqlite3
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
+
+from .. import provenance
 from .. import telemetry as telemetry_module
 from ..domain import StationConfig
 from ..engine import EngineSettings, StationEngine
+from ..inputs.rules import ChatRules
 from ..main import add_llm_args, apply_llm_args, load_env, load_profile
 from ..report import render, station_report
 from ..telemetry import _read
-from . import review
-from .sim import Played, SimBackend, SimTts
-from .spec import ScenarioSpec, TrackSpec, load_scenario
+from . import compare, review
+from .metrics import METRICS, aggregate
+from .sim import LoopLag, Played, SimBackend, SimTts, tune_dummy_llm
+from .spec import ScenarioSpec, SimSpec, TrackSpec, load_scenario
 
 ENGINE_ROOT = Path(__file__).resolve().parents[3]  # apps/engine
 CALLS_PER_MINUTE = 2.5  # 실제 LLM 확인 프롬프트의 추정치 — 2026-11-07 실측(호출 13회)과 말:곡 5:5 기준
@@ -40,12 +53,92 @@ def _clock(sec: float) -> str:
     return f"{int(sec // 60)}:{int(sec % 60):02d}"
 
 
-def _git_commit() -> str | None:
-    try:
-        return subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
-                              cwd=ENGINE_ROOT, timeout=5, check=False).stdout.strip() or None
-    except (OSError, subprocess.SubprocessError):
-        return None
+# ── 설정값 덮어쓰기 (--set, --sweep, --variant) ─────────────────────────
+# 이름 앞머리로 대상을 가린다: chat.(config/chat_rules.yaml, 앞머리가 없으면 이것), engine.(EngineSettings),
+# sim.(시나리오의 흉내 값). 엔진 설정은 방송 동작을 바꾸는 수치만 연다
+ENGINE_KEYS = {"target_buffer_sec": float, "max_concurrent_generations": int}
+# 회차의 루프 지연 P95가 이보다 크면 동시 실행이 타이밍 지표를 틀었다고 본다 [초기값] —
+# 2026-11-10 실측(flood, 더미 LLM): 30분 방송 동시 60회의 180~200ms에서는 세그먼트 생성 P95가 그대로였고
+# (12.21초 → 12.22초), 디스크 동기화를 켠 6분 방송 동시 30회의 1700ms에서는 20% 길어졌다 (ENGINE_TUNING_LOG T-001)
+LAG_WARN_MS = 250.0
+BASE = "base"
+_VARIANT_NAME = re.compile(r"^[\w.=+-]+$")
+
+
+@dataclass(frozen=True)
+class Variant:
+    """한 실행 안에서 견줄 설정 하나. base는 지금 설정(+ --set)이다."""
+
+    name: str = BASE
+    overrides: tuple[tuple[str, object], ...] = ()
+
+
+BASE_VARIANT = Variant()
+
+
+def parse_override(text: str) -> tuple[str, object]:
+    """"reaction_window_sec=90" → ("chat.reaction_window_sec", 90). 값은 YAML로 읽는다."""
+    key, sep, raw = text.partition("=")
+    key = key.strip()
+    if not sep or not key or not raw.strip():
+        raise ValueError(f"'이름=값' 형식이 아니다: {text!r}")
+    scope, _, name = key.rpartition(".")
+    scope = scope or "chat"
+    known = {"chat": ChatRules.model_fields, "engine": ENGINE_KEYS, "sim": SimSpec.model_fields}
+    if scope not in known or name not in known[scope]:
+        choices = ", ".join(sorted(known.get(scope, known)))
+        raise ValueError(f"모르는 설정: {key} (쓸 수 있는 것: {choices})")
+    return f"{scope}.{name}", yaml.safe_load(raw)
+
+
+def build_variants(sets: list[str], sweeps: list[str], named: list[str]) -> list[Variant]:
+    """--set은 모든 변형에 깔리고, --sweep의 값 하나와 --variant 하나가 각각 변형이 된다. base가 맨 앞이다."""
+    common = tuple(parse_override(s) for s in sets)
+    variants = [Variant(BASE, common)]
+    for sweep in sweeps:
+        key, sep, values = sweep.partition("=")
+        if not sep or not values.strip():
+            raise ValueError(f"'이름=값,값,…' 형식이 아니다: {sweep!r}")
+        for value in values.split(","):
+            pair = parse_override(f"{key}={value}")
+            variants.append(Variant(f"{pair[0].split('.', 1)[1]}={value.strip()}", (*common, pair)))
+    for item in named:
+        name, sep, body = item.partition(":")
+        if not sep or not _VARIANT_NAME.match(name):
+            raise ValueError(f"'이름:설정=값,설정=값' 형식이 아니다: {item!r}")
+        variants.append(Variant(name, (*common, *(parse_override(p) for p in body.split(",")))))
+    names = [v.name for v in variants]
+    if len(set(names)) != len(names):
+        raise ValueError(f"변형 이름이 겹친다: {names}")
+    for variant in variants:  # 30분을 돌린 뒤가 아니라 지금 틀린 값을 잡는다
+        _apply_overrides(_blank_settings(), ScenarioSpec(name="check"), variant, None)
+    return variants
+
+
+def _blank_settings() -> EngineSettings:
+    return EngineSettings(chat_rules_path=ENGINE_ROOT / "config" / "chat_rules.yaml")
+
+
+def _apply_overrides(settings: EngineSettings, spec: ScenarioSpec, variant: Variant,
+                     run_dir: Path | None) -> ScenarioSpec:
+    """변형의 값을 엔진 설정과 시나리오에 넣는다. chat 값은 회차 폴더에 고친 chat_rules.yaml을 써서 넘긴다."""
+    grouped: dict[str, dict[str, object]] = {"chat": {}, "engine": {}, "sim": {}}
+    for key, value in variant.overrides:
+        scope, name = key.split(".", 1)
+        grouped[scope][name] = value
+    if grouped["chat"]:
+        rules = yaml.safe_load(Path(settings.chat_rules_path).read_text(encoding="utf-8"))
+        rules.update(grouped["chat"])
+        ChatRules.model_validate(rules)
+        if run_dir is not None:
+            path = run_dir / "chat_rules.yaml"
+            path.write_text(yaml.safe_dump(rules, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            settings.chat_rules_path = path
+    for name, value in grouped["engine"].items():
+        setattr(settings, name, ENGINE_KEYS[name](value))
+    if grouped["sim"]:
+        spec = spec.model_copy(update={"sim": SimSpec.model_validate({**spec.sim.model_dump(), **grouped["sim"]})})
+    return spec
 
 
 def _settings(args: argparse.Namespace, run_dir: Path) -> EngineSettings:
@@ -108,9 +201,28 @@ async def _inject(spec: ScenarioSpec, backend: SimBackend, engine: StationEngine
 _KINDS = {"chat": "채팅", "message": "문자", "song_request": "신청곡"}
 
 
-async def run_one(spec: ScenarioSpec, index: int, run_dir: Path, args: argparse.Namespace) -> dict:
+def _unsynced_metrics_db(path: Path) -> None:
+    """회차의 계측 DB를 디스크 동기화 없이 미리 만든다.
+
+    엔진은 기록마다 커밋하고 SQLite는 커밋마다 디스크를 기다린다. 방송 하나에서는 티가 안 나지만
+    한 프로세스에서 수십 회차를 돌리면 그 대기가 이벤트 루프를 막아 모든 회차의 타이머가 밀린다
+    (2026-11-10 실측: 동시 30회에서 루프 지연 P95 1.7초). 회차 DB는 끝나면 읽고 마는 파일이라 동기화가 필요 없다.
+    """
+    db = sqlite3.connect(str(path))
+    try:
+        db.execute("PRAGMA synchronous=OFF")
+        db.executescript(telemetry_module._SCHEMA)
+        db.commit()
+    finally:
+        db.close()
+
+
+async def run_one(spec: ScenarioSpec, index: int, run_dir: Path, args: argparse.Namespace,
+                  variant: Variant = BASE_VARIANT) -> dict:
     run_dir.mkdir(parents=True, exist_ok=True)
-    seed = spec.sim.seed + index
+    settings = _settings(args, run_dir)
+    spec = _apply_overrides(settings, spec, variant, run_dir)
+    seed = spec.sim.seed + index  # 변형이 달라도 같은 회차는 같은 seed다 — 짝지어 비교한다 (compare.py)
     rng = random.Random(seed)
     station_id = f"sim_{spec.name}_{index + 1}"
     st = spec.station
@@ -120,10 +232,13 @@ async def run_one(spec: ScenarioSpec, index: int, run_dir: Path, args: argparse.
                            broadcast_minutes=args.minutes or st.broadcast_minutes, format=st.format,
                            corners=st.corners, intensity=st.intensity, topic=st.topic,
                            voice=st.voice if args.tts == "gemini" else None)
-    settings = _settings(args, run_dir)
     backend = SimBackend(sim=spec.sim, tracks=spec.tracks, rng=random.Random(seed * 7919))
+    _unsynced_metrics_db(settings.sqlite_path)
     engine = StationEngine(config, settings, backend)
+    engine.telemetry._db.execute("PRAGMA synchronous=OFF")
     backend.engine = engine
+    # 더미 LLM이면 실측에 맞춘 지연을 넣는다 — 파이프라인·사연 판정·갈래 계획이 같은 객체를 쓴다
+    llm_delays = tune_dummy_llm(engine.scheduler.pipeline.llm, spec.sim, seed)
     sim_tts = None
     if args.tts == "sim":
         sim_tts = SimTts(spec.sim, random.Random(seed * 104729))
@@ -139,9 +254,11 @@ async def run_one(spec: ScenarioSpec, index: int, run_dir: Path, args: argparse.
         finally:
             finished.set()  # 엔진 계측이 닫혔다 — 가짜 백엔드는 더 알리지 않는다
 
+    lag = LoopLag()
     tasks = [asyncio.create_task(broadcast()), asyncio.create_task(backend.play(finished)),
              asyncio.create_task(backend.report_backpressure(finished)),
-             asyncio.create_task(_inject(spec, backend, engine, rng, finished))]
+             asyncio.create_task(_inject(spec, backend, engine, rng, finished)),
+             asyncio.create_task(lag.watch(finished))]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     error = next((repr(r) for r in results if isinstance(r, BaseException)), None)
 
@@ -155,12 +272,15 @@ async def run_one(spec: ScenarioSpec, index: int, run_dir: Path, args: argparse.
         "songs": sum(1 for p in backend.played if p.kind == "music"),
         "wall_sec": round(time.time() - started, 1),
         "tts_latency_sec": _mean(sim_tts.latencies) if sim_tts else None,
+        "llm_latency_sec": _mean(llm_delays) if llm_delays else None,  # 더미 LLM의 흉내 지연
+        # 이 회차가 도는 동안 실행기의 타이머가 얼마나 늦게 깨어났나 — 크면 동시 실행이 지표를 틀었다
+        "loop_lag_ms_p95": lag.percentile(95), "loop_lag_ms_max": lag.percentile(100),
         **_flow(backend.played),
         "error": error,
     }
     reflected = _reflections(db, station_id)
     report["expect"] = _check(spec, backend, report, reflected)
-    _write_run(run_dir, spec, index, seed, args, report, backend, reflected, db, station_id)
+    _write_run(run_dir, spec, index, seed, args, report, backend, reflected, db, station_id, variant)
     if args.tts == "sim":
         shutil.rmtree(settings.audio_dir, ignore_errors=True)  # 무음 파일 — 남길 이유가 없다
     return report
@@ -256,7 +376,8 @@ def _played(backend: SimBackend, reflected: dict[str, tuple[str, float]], titles
 
 
 def _write_run(run_dir: Path, spec: ScenarioSpec, index: int, seed: int, args: argparse.Namespace,
-               report: dict, backend: SimBackend, reflected: dict, db: Path, station_id: str) -> None:
+               report: dict, backend: SimBackend, reflected: dict, db: Path, station_id: str,
+               variant: Variant = BASE_VARIANT) -> None:
     titles = backend.engine.telemetry.corner_titles if hasattr(backend.engine.telemetry, "corner_titles") else {}
     titles = titles or {name: c.title for name, c in backend.engine.scheduler.fmt.corners.items()}
     (run_dir / "transcript.md").write_text(_transcript(spec, backend, reflected, titles), encoding="utf-8")
@@ -271,7 +392,10 @@ def _write_run(run_dir: Path, spec: ScenarioSpec, index: int, seed: int, args: a
              f"곡 사이 토크 중앙값 {_cell(sim['talk_between_songs_p50'])}"
              f"{'초' if sim['talk_between_songs_p50'] is not None else ''}, "
              f"곡 소개만 두고 곡이 이어진 횟수 {sim['back_to_back_songs']}\n"
-             f"- 실행 시간: {sim['wall_sec']}초\n- TTS 흉내 평균 지연: {sim['tts_latency_sec'] or '-'}초\n")
+             f"- 실행 시간: {sim['wall_sec']}초\n- TTS 흉내 평균 지연: {sim['tts_latency_sec'] or '-'}초\n"
+             + (f"- LLM 흉내 평균 지연: {sim['llm_latency_sec']}초 (더미 대본)\n" if sim["llm_latency_sec"] else ""))
+    if variant.overrides:
+        text += f"- 덮어쓴 설정 ({variant.name}): " + ", ".join(f"{k}={v}" for k, v in variant.overrides) + "\n"
     if sim["error"]:
         text += f"- **오류**: {sim['error']}\n"
     if report["expect"]:
@@ -280,8 +404,10 @@ def _write_run(run_dir: Path, spec: ScenarioSpec, index: int, seed: int, args: a
                         f"{e['note'] or ''} | {e['detail']} |\n" for e in report["expect"])
     (run_dir / "report.md").write_text(text, encoding="utf-8")
     (run_dir / "run.json").write_text(json.dumps({
-        "scenario": spec.model_dump(), "run": index + 1, "seed": seed, "git": _git_commit(),
-        "llm": {"kind": args.llm or "openai", "model": args.llm_model or "gpt-6-luna"},
+        # 재현 정보 — 보고서 근거는 이 파일로 되짚는다. scenario에는 덮어쓴 흉내 값이 반영돼 있다
+        "scenario": spec.model_dump(), "run": index + 1, "seed": seed, **provenance.snapshot(),
+        "variant": variant.name, "overrides": dict(variant.overrides),
+        "llm": _llm_meta(args),
         "tts": args.tts, "persona": args.persona or spec.station.persona,
         "minutes": args.minutes or spec.station.broadcast_minutes,
     }, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
@@ -296,23 +422,14 @@ def _write_run(run_dir: Path, spec: ScenarioSpec, index: int, seed: int, args: a
             "\n".join(str((audio_root / r).resolve()) for r in refs) + "\n", encoding="utf-8")
 
 
+def _llm_meta(args: argparse.Namespace) -> dict:
+    kind = args.llm or "openai"
+    return {"kind": kind, "model": None if kind == "dummy" else args.llm_model or "gpt-6-luna"}
+
+
+# 지표 정의는 metrics.py에 있다 — 비교(compare.py)와 장부가 같은 목록을 쓴다
 _SUMMARY_COLUMNS = [
-    ("생성", lambda r: r.get("generation", {}).get("jobs")),
-    ("대체 멘트", lambda r: r.get("generation", {}).get("outcomes", {}).get("fallback")),
-    ("무음 합계(초)", lambda r: r["sim"]["silence_total_sec"]),
-    ("최대 무음(초)", lambda r: r["sim"]["silence_max_sec"]),
-    ("반응형 반영률", lambda r: r.get("reflection", {}).get("reaction_reflection_rate")),
-    ("독립형 반영률", lambda r: r.get("reflection", {}).get("standalone_reflection_rate")),
-    ("문자 반영률", lambda r: r.get("reflection", {}).get("message_reflection_rate")),
-    ("반영 시간 중앙값(초)", lambda r: r.get("reflection", {}).get("age_net_sec", {}).get("p50")),
-    ("코너 대체율", lambda r: r.get("corner_rates", {}).get("fallback_rate")),
-    ("세그먼트 생성 P95(초)", lambda r: r.get("generation", {}).get("job_sec", {}).get("p95")),
-    ("화제 전환", lambda r: r.get("steer")),
-    ("말 비율", lambda r: r["sim"].get("talk_ratio")),
-    ("곡 사이 토크(초)", lambda r: r["sim"].get("talk_between_songs_p50")),
-    ("곡 연속", lambda r: r["sim"].get("back_to_back_songs")),
-    ("같은 첫머리", lambda r: r.get("scripts", {}).get("same_opening_rate")),
-    ("주제 소개", lambda r: r.get("scripts", {}).get("topic_intros")),
+    *((m.label, m.get) for m in METRICS if m.summary),
     ("기대 결과", lambda r: f"{sum(e['passed'] for e in r['expect'])}/{len(r['expect'])}" if r["expect"] else "-"),
 ]
 
@@ -351,22 +468,75 @@ def _cell(value) -> str:
     return str(value)
 
 
-async def run_all(specs: list[ScenarioSpec], args: argparse.Namespace, out: Path) -> dict[str, list[dict]]:
-    slots = asyncio.Semaphore(args.parallel)
-    results: dict[str, list[dict | None]] = {s.name: [None] * args.repeat for s in specs}
+def variant_root(out: Path, variant: Variant, variants: list[Variant]) -> Path:
+    """변형이 하나면 예전 그대로 <out>/<시나리오>, 여럿이면 <out>/<변형>/<시나리오>."""
+    return out / variant.name if len(variants) > 1 else out
 
-    async def one(spec: ScenarioSpec, i: int) -> None:
+
+async def run_all(specs: list[ScenarioSpec], args: argparse.Namespace, out: Path,
+                  variants: list[Variant] | None = None) -> dict[str, dict[str, list[dict]]]:
+    """변형 × 시나리오 × 회차를 한 번에 돌린다. 돌려주는 값은 {변형: {시나리오: [회차 리포트]}}."""
+    variants = variants or [BASE_VARIANT]
+    slots = asyncio.Semaphore(args.parallel)
+    results: dict[str, dict[str, list[dict | None]]] = {
+        v.name: {s.name: [None] * args.repeat for s in specs} for v in variants}
+
+    launch = asyncio.Lock()
+
+    async def one(variant: Variant, spec: ScenarioSpec, i: int) -> None:
         async with slots:
-            print(f"시작 · {spec.name} {i + 1}/{args.repeat}", flush=True)
-            results[spec.name][i] = await run_one(spec, i, out / spec.name / f"run-{i + 1}", args)
-            sim = results[spec.name][i]["sim"]
-            print(f"끝 · {spec.name} {i + 1}/{args.repeat} · 무음 {sim['silence_total_sec']}초"
+            async with launch:  # 한꺼번에 띄우면 방송 준비(접착 문구 렌더링)가 겹쳐 서로의 타이머를 민다
+                await asyncio.sleep(args.stagger)
+            tag = f"{spec.name} {i + 1}/{args.repeat}" + (f" [{variant.name}]" if len(variants) > 1 else "")
+            print(f"시작 · {tag}", flush=True)
+            run_dir = variant_root(out, variant, variants) / spec.name / f"run-{i + 1}"
+            report = results[variant.name][spec.name][i] = await run_one(spec, i, run_dir, args, variant)
+            sim = report["sim"]
+            print(f"끝 · {tag} · 무음 {sim['silence_total_sec']}초"
                   + (f" · 오류 {sim['error']}" if sim["error"] else ""), flush=True)
 
-    await asyncio.gather(*(one(s, i) for s in specs for i in range(args.repeat)))
-    for spec in specs:
-        write_summary(out / spec.name, spec, results[spec.name])
+    # 짝이 되는 회차(같은 시나리오·seed)를 붙여서 띄운다 — 변형끼리 같은 부하에서 돈다
+    await asyncio.gather(*(one(v, s, i) for s in specs for i in range(args.repeat) for v in variants))
+    for variant in variants:
+        for spec in specs:
+            write_summary(variant_root(out, variant, variants) / spec.name, spec, results[variant.name][spec.name])
     return results
+
+
+def worst_lag(results: dict[str, dict[str, list[dict]]]) -> float | None:
+    """회차별 루프 지연 P95 중 가장 큰 값 — LAG_WARN_MS를 넘으면 --parallel을 줄여 다시 돌린다."""
+    lags = [r["sim"].get("loop_lag_ms_p95") for by_scenario in results.values()
+            for reports in by_scenario.values() for r in reports]
+    return max((lag for lag in lags if lag is not None), default=None)
+
+
+def _iso(at: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(at))
+
+
+def write_session(out: Path, args: argparse.Namespace, specs: list[ScenarioSpec], variants: list[Variant],
+                  results: dict[str, dict[str, list[dict]]], started: float, command: list[str]) -> None:
+    """실행 한 번의 기록 — session.json(무엇을 어떻게 돌렸나), worktree.diff(커밋 안 한 변경),
+    그리고 실행 폴더들 옆의 ledger.jsonl에 변형 × 시나리오마다 한 줄 (평균·표준편차)."""
+    common = {"session": out.name, "started_at": _iso(started), **provenance.snapshot(),
+              "llm": _llm_meta(args), "tts": args.tts, "persona": args.persona, "note": args.note}
+    session = {**common, "finished_at": _iso(time.time()), "command": command, "repeat": args.repeat,
+               "parallel": args.parallel, "minutes": args.minutes, "scenarios": [s.name for s in specs],
+               "variants": {v.name: dict(v.overrides) for v in variants},
+               "loop_lag_ms_p95_worst": worst_lag(results)}
+    (out / "session.json").write_text(json.dumps(session, ensure_ascii=False, indent=2, default=str),
+                                      encoding="utf-8")
+    provenance.write_diff(out)
+    with open(out.parent / "ledger.jsonl", "a", encoding="utf-8") as ledger:
+        for variant in variants:
+            for spec in specs:
+                reports = results[variant.name][spec.name]
+                clean = [r for r in reports if not r["sim"]["error"]]
+                ledger.write(json.dumps({
+                    **common, "variant": variant.name, "overrides": dict(variant.overrides),
+                    "scenario": spec.name, "minutes": args.minutes or spec.station.broadcast_minutes,
+                    "runs": len(clean), "errors": len(reports) - len(clean), "metrics": aggregate(clean),
+                }, ensure_ascii=False, default=str) + "\n")
 
 
 def cli(argv: list[str] | None = None) -> int:
@@ -374,31 +544,63 @@ def cli(argv: list[str] | None = None) -> int:
     parser.add_argument("scenarios", nargs="+", type=Path, help="시나리오 파일 (config/scenarios/*.yaml)")
     parser.add_argument("--repeat", type=int, default=5, help="시나리오마다 회차 수")
     parser.add_argument("--parallel", type=int, default=10, help="동시에 돌릴 회차 수")
+    parser.add_argument("--stagger", type=float, default=1.0, metavar="초",
+                        help="회차를 이 간격으로 하나씩 띄운다 (기본 1초) — 준비 작업이 겹치지 않게 한다")
     parser.add_argument("--minutes", type=int, default=None, help="방송 길이를 덮어쓴다 (점검용)")
     parser.add_argument("--persona", default=None, help="persona 파일을 덮어쓴다 (페르소나 비교용)")
     parser.add_argument("--tts", choices=["sim", "gemini"], default="sim",
                         help="sim: 흉내(무료, 기본) / gemini: 실제 TTS (한도 사용)")
     parser.add_argument("--out", type=Path, default=ENGINE_ROOT / "var" / "scenario")
     parser.add_argument("--yes", action="store_true", help="실제 LLM·TTS 확인을 건너뛴다")
+    tune = parser.add_argument_group(
+        "설정값 비교", "이름은 chat_rules.yaml의 항목, 또는 engine.target_buffer_sec, sim.llm_quote_miss_rate처럼 쓴다. "
+                      "지금 설정(base)과 변형을 같은 seed로 함께 돌리고 compare.md에 차이를 남긴다")
+    tune.add_argument("--set", action="append", default=[], metavar="이름=값", dest="sets",
+                      help="모든 회차에 적용할 값 (반복 지정)")
+    tune.add_argument("--sweep", action="append", default=[], metavar="이름=값,값", dest="sweeps",
+                      help="값마다 변형을 하나씩 만든다 (지금 값은 base로 따로 돈다)")
+    tune.add_argument("--variant", action="append", default=[], metavar="이름:설정=값,설정=값", dest="variants",
+                      help="여러 값을 함께 바꾼 변형 (반복 지정)")
+    parser.add_argument("--note", default=None, help="이 실행의 목적 — session.json과 장부(ledger.jsonl)에 남는다")
     add_llm_args(parser)
     args = parser.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
     load_env()
     specs = [load_scenario(p) for p in args.scenarios]
-    runs = len(specs) * args.repeat
+    try:
+        variants = build_variants(args.sets, args.sweeps, args.variants)
+    except ValueError as exc:  # pydantic ValidationError도 ValueError다
+        print(f"설정값 오류: {exc}", file=sys.stderr)
+        return 1
+    runs = len(specs) * args.repeat * len(variants)
     minutes = max(args.minutes or s.station.broadcast_minutes for s in specs)
+    plan = f"{runs}회 실행 · 동시 {args.parallel}회 · 예상 시간 약 {-(-runs // args.parallel) * (minutes + 2)}분"
+    if len(variants) > 1:
+        plan += f" · 변형 {len(variants)}개 ({', '.join(v.name for v in variants)})"
     if (args.llm or "openai") != "dummy" or args.tts == "gemini":
-        calls = sum((args.minutes or s.station.broadcast_minutes) * CALLS_PER_MINUTE for s in specs) * args.repeat
-        print(f"{runs}회 실행 · 동시 {args.parallel}회 · 예상 시간 약 {-(-runs // args.parallel) * (minutes + 2)}분 · "
-              f"예상 LLM 호출 약 {calls:.0f}회" + (" · 실제 TTS 사용" if args.tts == "gemini" else ""))
+        calls = (sum((args.minutes or s.station.broadcast_minutes) * CALLS_PER_MINUTE for s in specs)
+                 * args.repeat * len(variants))
+        print(f"{plan} · 예상 LLM 호출 약 {calls:.0f}회" + (" · 실제 TTS 사용" if args.tts == "gemini" else ""))
         if not args.yes:
             if not sys.stdin.isatty():
                 print("실제 LLM·TTS를 쓰려면 --yes가 필요합니다", file=sys.stderr)
                 return 1
             if input("진행할까요? [y/N] ").strip().lower() != "y":
                 return 1
+    else:
+        print(plan)
+    started = time.time()
     out = args.out / time.strftime("%Y%m%d-%H%M%S")
-    asyncio.run(run_all(specs, args, out))
-    review.write([out], out / "review.html")
+    results = asyncio.run(run_all(specs, args, out, variants))
+    write_session(out, args, specs, variants, results, started,
+                  list(argv) if argv is not None else sys.argv[1:])
+    roots = [variant_root(out, v, variants) for v in variants]
+    review.write(roots, out / "review.html", [v.name for v in variants] if len(variants) > 1 else None)
     print(f"결과: {out}\n대본 검토: {out / 'review.html'}")
+    if table := compare.write_variants(out, [v.name for v in variants]):
+        print(f"설정값 비교: {table}")
+    lag = worst_lag(results)
+    if lag is not None and lag > LAG_WARN_MS:
+        print(f"경고: 실행기 루프 지연 P95가 {lag:.0f}ms입니다 ({LAG_WARN_MS:.0f}ms 초과). 동시에 도는 회차가 많아 "
+              "생성 시간·반영 시간이 실제보다 길게 재졌을 수 있습니다 — --parallel을 줄여 다시 돌리세요.", file=sys.stderr)
     return 0

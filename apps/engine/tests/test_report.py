@@ -67,8 +67,8 @@ def test_render_has_every_section(broadcast):
 def test_outcomes_and_rates_from_synthetic_log(tmp_path):
     telemetry = Telemetry(tmp_path / "m.sqlite", "st_x")
     for job, stages in {
-        "ok": [("llm", "ok", 1.0), ("l2", "ok", 0.0), ("tts", "ok", 2.0)],
-        "blocked": [("llm", "ok", 1.0), ("l2", "reject", 0.0)],
+        "ok": [("llm", "ok", 1.0), ("quote", "ok", 0.0), ("l2", "ok", 0.0), ("tts", "ok", 2.0)],
+        "blocked": [("llm", "ok", 1.0), ("quote", "missing", 0.0), ("l2", "reject", 0.0)],
         "filler": [("llm", "error", 5.0), ("fallback", "filler", 0.0), ("tts", "ok", 0.5)],
     }.items():
         for stage, result, sec in stages:
@@ -84,6 +84,7 @@ def test_outcomes_and_rates_from_synthetic_log(tmp_path):
     assert gen["outcomes"] == {"ok": 1, "fallback": 1, "reject": 1, "incomplete": 0, "error": 1}
     assert gen["fallback_rate"] == pytest.approx(0.333)
     assert gen["job_sec"] == {"count": 1, "p50": 3.0, "p95": 3.0}, "대체·거부는 지연에 넣지 않는다"
+    assert (gen["quote_checks"], gen["quote_missing_rate"]) == (2, 0.5), "넣으라고 준 글이 대본에서 빠진 비율"
     assert report["corner_rates"] == {"turns": 3, "skip_rate": 0.333, "fallback_rate": 0.333}
     assert report["corners"]["topic_talk"]["produced_sec"]["p50"] == 60.0
 

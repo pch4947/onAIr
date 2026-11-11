@@ -182,7 +182,8 @@ python -m onair_engine.eval --llm openai --llm-base-url https://api.groq.com/ope
 python -m onair_engine.eval --persona config/personas/dodo.yaml --llm claude --judge --judge-model claude-sonnet-5-5
 ```
 
-- 결과: `var/eval/<시각>/report.md` (요약표, 코너별 발화 시간, 경고 붙은 멘트, 전체 대본), `results.jsonl` (멘트 단위 원자료)
+- 결과: `var/eval/<시각>/report.md` (요약표, 코너별 발화 시간, 경고 붙은 멘트, 전체 대본), `results.jsonl` (멘트 단위 원자료), `run.json` (재현 정보 — 커밋, LLM, 사례 파일), `worktree.diff` (커밋하지 않은 변경이 있을 때)
+- 프롬프트를 고치기 전·후의 결과는 `onair-pairwise`로 견줍니다 (아래 "튜닝 도구")
 - 자동 지표: L1 거부·L2 차단·대체 횟수, 사연 판정 오류(과잉 거부/거부 누락), 금지 문자열 노출(인젝션 성공·개인정보), 말투 이탈 문장(존댓말/반말 종결 어미), 길이·문장 수 초과, 기호·영어·숫자 누출, 상투어, 입버릇·이름 언급 빈도, 직전 멘트 유사도·첫마디 중복, 지연
 - `--judge`: 캐릭터(설정·예시와 같은 사람인가)·자연스러움·과제 수행을 1~5점으로 매기고, 캐릭터 2점 이하 비율을 **캐릭터 이탈률**(persona.md 7절)로 냅니다.
 - 자동 지표는 의심 신호입니다. 경고가 붙은 멘트와 전체 대본을 직접 읽고 판단하세요. 청취자 입력단 L0는 거치지 않습니다(L1·L2를 직접 시험하기 위해).
@@ -225,26 +226,39 @@ python -m onair_engine.scenario config/scenarios/quiet.yaml config/scenarios/spa
 python -m onair_engine.scenario config/scenarios/demo.yaml --llm dummy --minutes 8 --repeat 1  # 도구 점검, 무료
 python -m onair_engine.scenario config/scenarios/sparse.yaml --persona config/personas/dodo.yaml  # 페르소나 비교
 python -m onair_engine.scenario config/scenarios/demo.yaml --tts gemini --repeat 1 --yes  # 실제 TTS
+# 설정값 비교 — 지금 값(base)과 30·120을 같은 seed로 함께 돌린다. 더미 LLM이라 무료
+python -m onair_engine.scenario config/scenarios/sparse.yaml config/scenarios/flood.yaml --llm dummy `
+  --sweep standalone_window_sec=300,900 --repeat 10 --parallel 60 --note "독립형 창 비교"
 ```
 
 - **흉내 내는 것**
   - 백엔드: 실제 길이만큼 재생하고 PUBLISHED·`segment.started`(방송 지연 포함)를 보낸다. 남은 분량을 보고하고, 다음 곡과 신청곡을 알린다
   - TTS: 글자 수에 비례하는 무음. 지연은 2026-11-02 Gemini 실측(오디오 4초 → 약 7초, 25초 → 약 14초)을 잇는 식이다
+  - LLM(`--llm dummy`일 때): 단계별 고정 대본. 지연은 2026-11-07·10 실측(gpt-6-luna low, 호출 456건: 평균 1.5~1.6초, 표준편차 0.4초)에 맞춥니다. 더미는 넣으라는 채팅을 항상 인용하므로 반영률이 실제보다 높게 나옵니다 — 같은 실측에서 채팅 인용 38건 중 19건이 빠졌습니다. 이 누락을 흉내 내려면 `--set sim.llm_quote_miss_rate=0.5`를 씁니다
   - Redis, HLS 플레이어 지연, 실제 발음은 흉내 내지 않습니다
 - **시나리오 파일** (`config/scenarios/*.yaml`)
   - 방송 설정, 흉내 값(`sim`), 시각별 입력(`inputs`), 배경 채팅(`chatter`), 게시판 사연을 적습니다
   - 기대 결과(`expect`)를 적으면 회차마다 통과 여부를 판정합니다: `reflected`, `aired_contains`, `not_aired`, `max_silence_sec`, `max_fallback`
-- **출력** (`var/scenario/<실행 시각>/<시나리오>/`)
+  - `config/scenarios/holdout/`은 검증용입니다. 설정값이나 프롬프트를 고칠 때는 돌리지 않고, 채택하려는 변경이 다른 주제·입력에서도 통하는지 볼 때만 돌립니다
+- **설정값 비교** (`--set`, `--sweep`, `--variant`): 코드를 고치지 않고 값을 바꿔 돌립니다
+  - 이름은 `config/chat_rules.yaml`의 항목(`flood_threshold`), 엔진 설정(`engine.target_buffer_sec`, `engine.max_concurrent_generations`), 흉내 값(`sim.llm_quote_miss_rate`)입니다. 틀린 이름과 범위 밖 값은 실행 전에 거절합니다
+  - `--set 이름=값`은 모든 회차에, `--sweep 이름=값,값`은 값마다 변형을 하나씩, `--variant 이름:설정=값,설정=값`은 여러 값을 함께 바꾼 변형을 만듭니다. 지금 설정은 `base`라는 변형으로 항상 같이 돕니다
+  - 변형이 달라도 같은 회차 번호는 같은 seed입니다(입력 도착 시각, TTS·LLM 흉내 지연, 더미 대본이 같습니다). 그래서 회차끼리 짝지어 차이를 봅니다
+  - 선별 기준, 인용 창(`reaction_window_sec`), 집계 언급은 사용자 실험의 조건입니다(CORNER_DESIGN 10절). 값을 훑어보는 것은 괜찮지만 한 값으로 굳히지 않습니다
+- **출력** (`var/scenario/<실행 시각>/<시나리오>/` — 변형이 여럿이면 `<실행 시각>/<변형>/<시나리오>/`)
   - `run-N/transcript.md`: 송출 시각 순 대본. 코너, 들어온 입력, 반영된 입력, 무음, 곡을 함께 보여 줍니다
   - `run-N/report.md`: `onair-report` 지표, 무음, 말과 곡의 흐름, 기대 결과
     - 말 비율: 말 시간 ÷ (말 + 곡)
     - 곡 사이 토크: 곡과 곡 사이 멘트 길이의 중앙값. 첫 곡 전 오프닝과 마지막 곡 뒤 엔딩은 넣지 않습니다
     - 곡 연속: 곡 소개만 사이에 두고 곡이 이어진 횟수
-  - `run-N/run.json`: 재현 정보 — 시나리오, seed, git 커밋, LLM
+  - `run-N/run.json`: 재현 정보 — 시나리오(덮어쓴 흉내 값 포함), seed, git 커밋과 커밋하지 않은 변경 여부, 변형과 덮어쓴 설정, LLM. 규칙을 덮어썼으면 그 회차가 쓴 `chat_rules.yaml`도 같이 남습니다
   - `summary.md`: 회차별 핵심 지표, 기대 결과 통과 회차
   - `issues.csv`: 빈 문제 기록표
   - `--tts gemini`: 회차마다 멘트 오디오 재생 목록 `broadcast.m3u` (곡은 없습니다)
   - `review.html`: 대본 검토 페이지 (아래)
+  - `session.json`: 실행 한 번의 기록 — 명령, 커밋, 변형, 목적(`--note`). 커밋하지 않은 엔진 변경이 있으면 `worktree.diff`로 같이 남깁니다
+  - `compare.md`, `compare.json`: 변형이 여럿일 때 `base` 대비 지표 비교 (아래 "튜닝 도구")
+  - `var/scenario/ledger.jsonl`: 실행할 때마다 변형 × 시나리오마다 한 줄(지표 평균·표준편차, 커밋, 설정)을 덧붙이는 장부
 - **대본 검토 페이지** (`onair-review`, 관리자용): 실행기는 무음·반영·기대 결과처럼 형식만 판정합니다. 같은 말 반복, 흐름 단절, 청취자 글 오해, 지어낸 사실처럼 읽어야 아는 문제는 사람이 이 페이지에서 잡습니다
   - 실행이 끝나면 `<실행 시각>/review.html`이 만들어집니다. 서버 없이 브라우저로 엽니다
   - 수정 전·후처럼 여러 실행을 한 페이지에 모으려면: `onair-review var/scenario/<전> var/scenario/<후> --label 수정전 --label 수정후 -o review.html`. `played.json`이 없는 예전 회차는 `transcript.md`를 읽습니다
@@ -252,7 +266,37 @@ python -m onair_engine.scenario config/scenarios/demo.yaml --tts gemini --repeat
   - **비교**: 블라인드로 같은 시나리오에서 출처가 다른 두 회차를 무작위로 나란히 보여 줍니다. 더 자연스러운 쪽을 고르면 직전 쌍을 공개하고 다음 쌍으로 넘어갑니다. 지표가 좋아져도 귀로는 나빠졌을 수 있는 변경(말이 짧아지는 변경 등)을 판단할 때 씁니다
   - 표시는 그 브라우저(localStorage)에만 저장됩니다. **표시 CSV**(issues.csv 형식, 같은 시나리오의 재현 회차 수 포함)와 **비교 CSV**로 내보내고, 다른 사람과는 **백업**·**불러오기**로 나눕니다
 - **비용**: 실제 LLM을 쓰면 시작 전에 예상 호출 수를 보여 주고 확인을 받습니다(`--yes`로 생략). 30분 방송 1회의 LLM 비용은 약 1~2센트로 추정합니다(2026-11-07 실측: 호출당 입력 약 630~930, 출력 약 130토큰)
-- **한계**: 회차가 실시간으로 돌기 때문에 30분 방송은 30분 걸립니다. 동시 실행 수(`--parallel`)를 늘리면 전체 시간이 줄어듭니다. 엔진이 끝난 뒤 대기열에 남은 송출은 기다리지 않고 기록만 합니다
+- **한계**: 회차가 실시간으로 돌기 때문에 30분 방송은 30분 걸립니다. 동시 실행 수(`--parallel`)를 늘리면 전체 시간이 줄어듭니다. 엔진이 끝난 뒤 대기열에 남은 송출은 기다리지 않고 기록만 합니다. 그래서 `--minutes`로 짧게 줄인 방송은 도구 점검에만 씁니다 — `--minutes 6`은 곡 두 개로 분량이 차서 1분쯤에 끝납니다
+- **동시 실행**: 모든 회차가 한 프로세스의 이벤트 루프에서 돕니다. 루프가 밀리면 엔진의 타이머가 늦게 깨어나 생성 시간과 반영 시간이 길게 재집니다
+  - 회차의 계측 DB는 디스크 동기화 없이 쓰고(동기화를 켠 채 동시 30회를 돌리면 루프 지연 P95가 1.7초였습니다), 회차를 `--stagger`초(기본 1초) 간격으로 띄웁니다
+  - 회차마다 루프 지연을 재서 `report.json`의 `sim.loop_lag_ms_p95`와 요약 표에 남깁니다. 250ms를 넘으면 실행 끝에 경고합니다 — `--parallel`을 줄여 다시 돌립니다
+  - 2026-11-10 실측: 더미 LLM으로 flood 30분 방송을 동시 60회 돌리면 루프 지연 P95가 180~200ms이고, 같은 seed의 세그먼트 생성 P95는 동시 4회와 같았습니다(12.21초, 12.22초). 입력이 많은 시나리오는 60회를 넘기지 않습니다
+  - 실제 LLM 실행은 한 번에 하나만, 동시 35회 이하로 돌립니다. 2026-11-11에 두 실행을 동시 70회씩 겹쳐 돌리자 시작 뒤 5분 동안 LLM 호출의 절반이 5초를 넘었고, 그 묶음의 세그먼트 생성 P95가 2.4~4.2초 길게 재졌습니다(루프 지연 경고는 뜨지 않았습니다). 동시 35회 단독 실행은 루프 지연 P95 62ms 이하였습니다 (docs/ENGINE_TUNING_LOG.md T-004)
+  - 실제 TTS는 Gemini 한도가 동시 실행 수를 정합니다
+
+### 튜닝 도구 (`onair-compare`, `onair-pairwise`)
+
+설정값·프롬프트·코드를 바꿀 때의 절차와 판정 기준은 [docs/ENGINE_TUNING.md](../../docs/ENGINE_TUNING.md)에, 실험 기록은 [docs/ENGINE_TUNING_LOG.md](../../docs/ENGINE_TUNING_LOG.md)에 있습니다. 여기는 명령만 적습니다.
+
+```powershell
+python -m onair_engine.scenario.compare var/scenario/<시각>                 # 회차 간 편차 — 무엇이 노이즈인가
+python -m onair_engine.scenario.compare var/scenario/<전> var/scenario/<후>   # 수정 전·후
+python -m onair_engine.scenario.compare var/scenario/<--sweep 실행>           # base 대비 변형마다
+
+python -m onair_engine.eval.pairwise var/eval/<전> var/eval/<후>              # 가려진 쌍 만들기
+python -m onair_engine.eval.pairwise --tally var/pairwise/<시각>              # votes.csv를 채운 뒤 집계
+python -m onair_engine.eval.pairwise var/eval/<전> var/eval/<후> --judge-llm claude --judge-model claude-sonnet-5-5
+```
+
+- **`onair-compare`**: 같은 회차 번호(같은 seed)끼리 짝지어 지표 차이를 봅니다
+  - 차이의 평균이 회차 간 흔들림을 넘을 때만 개선·악화로 적습니다(짝 t 검정, 양쪽 95%, 3쌍 이상). 좋아지는 방향이 없는 지표(말 비율, 화제 전환 수)는 참고로만 나옵니다
+  - 폴더 하나만 주면 지표별 평균·표준편차와 "구분되는 차이"(같은 회차 수로 두 조건을 견줄 때 이만큼은 달라져야 우연과 구분된다)를 보여 줍니다. 회차 수는 이 값을 보고 정합니다
+  - `-o`로 마크다운을, `--json`으로 원자료를 파일로 씁니다. 표는 실험 기록에 그대로 붙일 수 있게 출처(폴더, 커밋, LLM, 덮어쓴 설정)를 머리에 적습니다
+- **`onair-pairwise`**: 같은 persona·회차·단계의 대본 두 개를 어느 쪽이 고친 뒤인지 가린 채 보여 주고 나은 쪽을 고르게 합니다
+  - `pairs.md`(읽을 것), `votes.csv`(가 / 나 / 같음을 적을 것), `key.json`(어느 쪽이 고친 뒤인지 — 고르기 전에 열지 않습니다)을 만듭니다. `--tally`가 선택을 되돌려 세고 `report.md`를 씁니다
+  - 판정은 같음을 뺀 선택이 한쪽으로 치우쳤는지 봅니다(부호 검정, p < 0.05, 6쌍 이상). 먼저 보인 쪽을 고른 비율도 같이 나옵니다 — 50%에서 멀면 심사가 순서에 끌린 것입니다
+  - `--judge-llm`을 주면 LLM이 고릅니다. 생성에 쓴 모델과 다른 모델을 씁니다. 사람이 고른 결과와 어긋나는지 가끔 확인합니다
+  - 쌍 비교는 자연스러움만 봅니다. 길이 초과·말투 이탈 같은 규칙 위반은 `report.md`의 자동 지표 표(전·후)로 따로 확인합니다
 
 ### 오디오 파일 관리
 
