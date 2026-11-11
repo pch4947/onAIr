@@ -22,6 +22,8 @@ class Settings:
     fallback_audio: Path | None = None
     fallback_mode: str = "silence"
     buffer_low_seconds: float = 15
+    # 다음 멘트가 아직 없을 때 채우는 무음 조각 길이. 짧을수록 멘트가 빨리 이어지지만 조각·경계가 늘어난다
+    fill_chunk_seconds: float = 2
     broadcast_delay_seconds: float = 12
     station_id: str = "st_local_dev"
     # 다중 방송 채널 (ONAIR_STATION_IDS). 비어 있으면 station_id 하나만 쓴다
@@ -82,6 +84,12 @@ def load_settings() -> Settings:
             raise ValueError(f"{name} must be finite and at least 1")
         return value
 
+    def fill_chunk_seconds() -> float:
+        value = float(os.environ.get("ONAIR_FILL_CHUNK_SECONDS", "2"))
+        if not math.isfinite(value) or not 0.25 <= value <= 4:
+            raise ValueError("ONAIR_FILL_CHUNK_SECONDS must be between 0.25 and 4")
+        return value
+
     station_ids = parse_station_ids(os.environ.get("ONAIR_STATION_IDS", ""))
     station_id = station_ids[0] if station_ids else os.environ.get("ONAIR_STATION_ID", "st_local_dev")
     if not re.fullmatch(STATION_ID_PATTERN, station_id):
@@ -99,6 +107,7 @@ def load_settings() -> Settings:
     return Settings(host=os.environ.get("HOST", "127.0.0.1"), port=port,
                     fallback_mode=fallback_mode, fallback_audio=Path(fallback).resolve() if fallback else None,
                     buffer_low_seconds=positive_seconds("ONAIR_BUFFER_LOW_SECONDS", "15"),
+                    fill_chunk_seconds=fill_chunk_seconds(),
                     broadcast_delay_seconds=positive_seconds("ONAIR_BROADCAST_DELAY_SECONDS", "12"),
                     buffer_target_seconds=positive_seconds("STREAM_BUFFER_TARGET_SECONDS", "45"),
                     response_window_seconds=positive_seconds("REQUEST_RESPONSE_WINDOW_SECONDS", "90"),
