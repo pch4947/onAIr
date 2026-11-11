@@ -9,9 +9,12 @@ import pytest
 from pydantic import ValidationError
 
 from onair_engine.audio import measure_duration_ms
-from onair_engine.domain import SegmentKind, SegmentSubmission
+from onair_engine.domain import Prompt, SegmentKind, SegmentSubmission
+from onair_engine.inputs.rules import load_chat_rules
+from onair_engine.pipeline.llm import DummyLlmClient
+from onair_engine.prompt_data import CHAT, data_block
 from onair_engine.scenario import runner
-from onair_engine.scenario.sim import Played, SimBackend, SimTts
+from onair_engine.scenario.sim import Played, SimBackend, SimTts, tune_dummy_llm
 from onair_engine.scenario.spec import ScenarioSpec, SimSpec, TrackSpec, load_scenario, parse_at
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -22,6 +25,16 @@ ROOT = Path(__file__).resolve().parent.parent
 @pytest.mark.parametrize("path", sorted((ROOT / "config" / "scenarios").glob("*.yaml")), ids=lambda p: p.stem)
 def test_bundled_scenarios_load(path):
     assert load_scenario(path).name == path.stem
+
+
+def test_holdout_scenarios_differ_from_the_tuning_scenarios():
+    tuning = [load_scenario(p) for p in sorted((ROOT / "config" / "scenarios").glob("*.yaml"))]
+    holdout = sorted((ROOT / "config" / "scenarios" / "holdout").glob("*.yaml"))
+    assert holdout, "검증용 시나리오가 있어야 한다 (docs/ENGINE_TUNING.md 3.4절)"
+    for path in holdout:
+        spec = load_scenario(path)
+        assert spec.name == path.stem and spec.name not in {s.name for s in tuning}
+        assert spec.station.topic not in {s.station.topic for s in tuning}, "튜닝에 쓴 주제로는 검증이 안 된다"
 
 
 def test_parse_at():
@@ -61,6 +74,61 @@ def test_sim_tts_length_and_latency(tmp_path, monkeypatch):
     assert duration == 10_000
     assert measure_duration_ms(tmp_path / "a.wav") == pytest.approx(10_000, abs=5), "방송 시간은 파일 길이를 잰다"
     assert slept == [pytest.approx(5.5 + 0.33 * 10)], "Gemini 실측 식: 4초 → 약 7초, 25초 → 약 14초"
+
+
+def test_dummy_llm_gets_measured_latency_and_can_drop_quotes(monkeypatch):
+    slept = []
+
+    async def fake_sleep(sec):
+        slept.append(sec)
+
+    monkeypatch.setattr("onair_engine.pipeline.llm.asyncio.sleep", fake_sleep)
+    llm = DummyLlmClient()
+    delays = tune_dummy_llm(llm, SimSpec(llm_latency_sec=2, llm_jitter=0.5, llm_quote_miss_rate=1), seed=3)
+    prompt = Prompt(system="", user=data_block(CHAT, "붕어빵은 팥이죠"))
+    text = asyncio.run(llm.generate(prompt)).text
+    assert slept == delays and 1 <= delays[0] <= 3, "지연은 실측 평균 주변에서 흔들린다"
+    assert "붕어빵은 팥이죠" not in text, "인용 누락 흉내 — 실제 LLM은 넣으라는 채팅을 빠뜨리기도 한다"
+    llm.quote_miss_rate = 0
+    assert "붕어빵은 팥이죠" in asyncio.run(llm.generate(prompt)).text
+    assert tune_dummy_llm(object(), SimSpec(), seed=1) is None, "실제 LLM은 건드리지 않는다"
+
+
+# ── 설정값 덮어쓰기 ────────────────────────────────────────────────────
+
+def test_overrides_parse_into_variants():
+    variants = runner.build_variants(["flood_threshold=6"], ["reaction_window_sec=30,90"],
+                                     ["tight:engine.target_buffer_sec=20,sim.llm_quote_miss_rate=0.5"])
+    assert [v.name for v in variants] == ["base", "reaction_window_sec=30", "reaction_window_sec=90", "tight"]
+    assert variants[0].overrides == (("chat.flood_threshold", 6),), "--set은 기준에도 깔린다"
+    assert variants[2].overrides == (("chat.flood_threshold", 6), ("chat.reaction_window_sec", 90))
+    assert dict(variants[3].overrides)["sim.llm_quote_miss_rate"] == 0.5
+
+
+@pytest.mark.parametrize("sets, sweeps, named", [
+    (["nope=1"], [], []),  # 없는 설정
+    (["reaction_window_sec=0"], [], []),  # 범위 밖 — 30분을 돌리기 전에 잡는다
+    (["engine.api_port=1"], [], []),  # 방송 동작과 무관한 엔진 설정은 열지 않는다
+    (["flood_threshold"], [], []),  # 값 없음
+    ([], ["reaction_window_sec="], []),
+    ([], [], ["a b:flood_threshold=5"]),  # 폴더 이름으로 못 쓰는 변형 이름
+    ([], ["flood_threshold=5"], ["flood_threshold=5:flood_threshold=6"]),  # 이름 겹침
+])
+def test_bad_overrides_are_rejected_before_running(sets, sweeps, named):
+    with pytest.raises(ValueError):
+        runner.build_variants(sets, sweeps, named)
+
+
+def test_overrides_reach_settings_rules_and_sim(tmp_path):
+    variant = runner.Variant("v", (("chat.reaction_window_sec", 90), ("engine.target_buffer_sec", 20),
+                                   ("sim.llm_latency_sec", 0.5)))
+    settings = runner._blank_settings()
+    spec = runner._apply_overrides(settings, ScenarioSpec(name="x"), variant, tmp_path)
+    assert settings.target_buffer_sec == 20.0 and spec.sim.llm_latency_sec == 0.5
+    assert settings.chat_rules_path == tmp_path / "chat_rules.yaml", "고친 규칙 파일을 회차 폴더에 남긴다"
+    rules = load_chat_rules(settings.chat_rules_path)
+    assert rules.reaction_window_sec == 90
+    assert rules.flood_threshold == load_chat_rules(ROOT / "config" / "chat_rules.yaml").flood_threshold
 
 
 # ── 가짜 백엔드 ────────────────────────────────────────────────────────
@@ -181,8 +249,9 @@ def test_run_one_with_dummy_llm(tmp_path, monkeypatch):
         "expect": [{"type": "max_fallback", "value": 0}, {"type": "not_aired", "text": "절대없는문구"}],
     })
     args = argparse.Namespace(llm="dummy", llm_model=None, llm_base_url=None, llm_reasoning_effort=None,
-                              minutes=None, persona=None, tts="sim", repeat=1, parallel=1)
-    report = asyncio.run(asyncio.wait_for(runner.run_one(spec, 0, tmp_path / "run-1", args), timeout=120))
+                              minutes=None, persona=None, tts="sim", repeat=1, parallel=1, note="점검")
+    variant = runner.Variant("fast", (("chat.flood_threshold", 5), ("sim.llm_latency_sec", 0.1)))
+    report = asyncio.run(asyncio.wait_for(runner.run_one(spec, 0, tmp_path / "run-1", args, variant), timeout=120))
     assert report["sim"]["error"] is None
     assert report["generation"]["jobs"] > 0
     assert [e["passed"] for e in report["expect"]] == [True, True]
@@ -192,10 +261,25 @@ def test_run_one_with_dummy_llm(tmp_path, monkeypatch):
     first = next(p for p in played if p["kind"] == "speech")
     assert first["corner"] == "오프닝" and first["script"], "검토 페이지가 코너 이름과 대본을 쓴다"
     assert "**[오프닝]**" in (tmp_path / "run-1" / "transcript.md").read_text(encoding="utf-8")
-    assert json.loads((tmp_path / "run-1" / "run.json").read_text(encoding="utf-8"))["seed"] == 1
+    meta = json.loads((tmp_path / "run-1" / "run.json").read_text(encoding="utf-8"))
+    assert meta["seed"] == 1 and meta["variant"] == "fast" and "git_dirty" in meta
+    assert meta["overrides"] == {"chat.flood_threshold": 5, "sim.llm_latency_sec": 0.1}, "재현 정보에 덮어쓴 값이 남는다"
+    assert meta["scenario"]["sim"]["llm_latency_sec"] == 0.1 and meta["llm"] == {"kind": "dummy", "model": None}
+    assert load_chat_rules(tmp_path / "run-1" / "chat_rules.yaml").flood_threshold == 5
+    assert report["sim"]["llm_latency_sec"] == pytest.approx(0.1, abs=0.05)
     assert not (tmp_path / "run-1" / "audio").exists(), "흉내 TTS의 무음 파일은 지운다"
 
     runner.write_summary(tmp_path, spec, [report, report])
     summary = (tmp_path / "summary.md").read_text(encoding="utf-8")
     assert "| 1 |" in summary and "| 2 |" in summary and "최소 / 평균 / 최대" in summary
+    assert "인용 누락률" in summary, "요약 표와 비교 표가 같은 지표 목록을 쓴다 (metrics.py)"
     assert (tmp_path / "issues.csv").exists()
+
+    out = tmp_path / "session"
+    out.mkdir()
+    runner.write_session(out, args, [spec], [variant], {"fast": {"t": [report, report]}}, 0.0, ["t.yaml"])
+    session = json.loads((out / "session.json").read_text(encoding="utf-8"))
+    assert session["variants"] == {"fast": meta["overrides"]} and session["note"] == "점검"
+    row = json.loads((tmp_path / "ledger.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert (row["session"], row["variant"], row["scenario"], row["runs"]) == ("session", "fast", "t", 2)
+    assert row["metrics"]["fallback"]["mean"] == 0 and row["metrics"]["jobs"]["n"] == 2

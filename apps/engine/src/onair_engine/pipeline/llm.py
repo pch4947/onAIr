@@ -172,20 +172,27 @@ class DummyLlmClient:
     """단계별 고정 대본 반환 — API 키 없이 파이프라인 관통·청취 테스트·발표장 폴백용."""
 
     def __init__(self, delay_sec: float = 0.2, seed: int | None = None):
+        # 숫자, 또는 호출마다 지연(초)을 돌려주는 함수 — 시나리오 실행기가 실측 분포를 넣는다 (scenario/sim.py)
         self.delay_sec = delay_sec
+        # 채팅 인용을 빠뜨릴 확률 — 실제 LLM의 인용 누락 흉내. 기본은 항상 인용한다
+        self.quote_miss_rate = 0.0
         self._rng = random.Random(seed)
 
+    async def _wait(self) -> None:
+        await asyncio.sleep(self.delay_sec() if callable(self.delay_sec) else self.delay_sec)
+
     async def generate(self, prompt: Prompt) -> Script:
-        await asyncio.sleep(self.delay_sec)  # 생성 지연 흉내
+        await self._wait()  # 생성 지연 흉내
         step = detect_step(prompt.user) or "filler"
         text = self._rng.choice(_TEMPLATES[step]).format_map(_slots(prompt))
-        if m := _CHAT_RE.search(prompt.user):
+        m = _CHAT_RE.search(prompt.user)
+        if m and (not self.quote_miss_rate or self._rng.random() >= self.quote_miss_rate):
             quote = m["body"].split("\n", 1)[0].strip()[:60]
             text = _QUOTE_TEMPLATE.format(quote=quote) + text
         return Script(text=text)
 
     async def complete(self, prompt: Prompt, *, max_tokens: int) -> str:
-        await asyncio.sleep(self.delay_sec)
+        await self._wait()
         from ..inputs import story_judge, topic_plan
         if story_judge.MARKER in prompt.user:
             return story_judge.dummy_judgement_json(prompt)

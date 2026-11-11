@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..domain import SegmentSubmission
+from ..pipeline.llm import DummyLlmClient
 from .spec import SimSpec, TrackSpec
 
 _BACKPRESSURE_POLL_SEC = 2.0
@@ -52,6 +53,53 @@ class SimTts:
             w.setframerate(self.RATE)
             w.writeframes(b"\x80" * int(self.RATE * audio_sec))
         return int(audio_sec * 1000)
+
+
+def tune_dummy_llm(llm: object, sim: SimSpec, seed: int) -> list[float] | None:
+    """엔진이 만든 더미 LLM에 실측에 맞춘 지연과 인용 누락을 넣는다. 실제 LLM이면 건드리지 않는다.
+
+    더미 대본의 문장 고르기도 seed로 고정한다 — 같은 seed의 회차끼리 짝지어 비교하기 위해서다.
+    돌려주는 목록에는 호출마다 낸 지연이 쌓인다.
+    """
+    if not isinstance(llm, DummyLlmClient):
+        return None
+    delays: list[float] = []
+    rng = random.Random(seed * 15485863)
+
+    def delay() -> float:
+        delays.append(sim.llm_latency_sec * rng.uniform(1 - sim.llm_jitter, 1 + sim.llm_jitter))
+        return delays[-1]
+
+    llm.delay_sec = delay
+    llm.quote_miss_rate = sim.llm_quote_miss_rate
+    llm._rng = random.Random(seed * 32452843)
+    return delays
+
+
+class LoopLag:
+    """실행기 이벤트 루프의 지연을 잰다 — 회차를 한 프로세스에서 동시에 돌리는 값이다.
+
+    엔진의 인용 창·버퍼 판단·TTS 흉내는 모두 타이머로 돈다. 동시에 도는 회차가 많아 루프가 밀리면
+    타이머가 늦게 깨어나고, 그만큼 생성 시간과 반영 시간이 길게 재진다. 그런 실행은 비교에 쓰면 안 된다.
+    """
+
+    INTERVAL_SEC = 0.5
+
+    def __init__(self) -> None:
+        self.samples_ms: list[float] = []
+
+    async def watch(self, finished: asyncio.Event) -> None:
+        loop = asyncio.get_running_loop()
+        while not finished.is_set():
+            before = loop.time()
+            await asyncio.sleep(self.INTERVAL_SEC)
+            self.samples_ms.append(max(0.0, loop.time() - before - self.INTERVAL_SEC) * 1000)
+
+    def percentile(self, pct: int) -> float | None:
+        if not self.samples_ms:
+            return None
+        ordered = sorted(self.samples_ms)
+        return round(ordered[max(0, -(-pct * len(ordered) // 100) - 1)], 1)
 
 
 @dataclass

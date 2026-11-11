@@ -183,11 +183,14 @@ def station_report(sqlite_path: str | Path, station_id: str, run: int = -1) -> d
     jobs: dict[str, dict] = {}
     stages: dict[str, list[float]] = {}
     outcomes = {"ok": 0, "fallback": 0, "reject": 0, "incomplete": 0, "error": 0}
+    quotes = {"ok": 0, "missing": 0}  # 넣으라고 준 청취자 글이 대본에 들어갔는가 (파이프라인 인용 검사)
     for job_id, stage, started_at, finished_at, result in q(
             "SELECT job_id, stage, started_at, finished_at, result FROM generation_log "
             "WHERE station_id = ? {w} ORDER BY rowid", "started_at"):
         elapsed = finished_at - started_at
         job = jobs.setdefault(job_id, {"total": 0.0, "outcome": "incomplete"})
+        if stage == "quote" and result in quotes:
+            quotes[result] += 1
         if stage in ("llm", "l2", "tts") and result == "ok":
             job["total"] += elapsed
             stages.setdefault(stage, []).append(elapsed)
@@ -207,6 +210,9 @@ def station_report(sqlite_path: str | Path, station_id: str, run: int = -1) -> d
         "fallback_rate": _ratio(outcomes["fallback"], len(jobs)),
         "stage_sec": {s: _spread(v) for s, v in sorted(stages.items())},
         "job_sec": _spread([j["total"] for j in jobs.values() if j["outcome"] == "ok"]),
+        # 인용 누락 — 빠진 입력은 한 번 되돌렸다가 또 빠지면 거절된다. 실제 LLM에서만 생긴다
+        "quote_checks": sum(quotes.values()),
+        "quote_missing_rate": _ratio(quotes["missing"], sum(quotes.values())),
         # 이야기 단계가 무엇을 소재로 말했는지 — chat·callback·angle·topic (CORNER_DESIGN 7.7절, #226)
         "talk_material": dict(q(
             "SELECT json_extract(decision_json, '$.material') AS m, COUNT(*) FROM decision_log "
@@ -297,7 +303,8 @@ def render(report: dict) -> str:
     rows = [*gen["stage_sec"].items(), ("세그먼트 합계", gen["job_sec"])]
     lines += [f"| {name} | {s['count']} | {_fmt(s['p50'])} | {_fmt(s['p95'])} |" for name, s in rows]
     material = ", ".join(f"{_MATERIALS.get(k, k)} {n}" for k, n in sorted(gen["talk_material"].items())) or "-"
-    lines += ["", f"이야기 단계 소재: {material}"]
+    lines += ["", f"이야기 단계 소재: {material}",
+              f"인용 검사: {gen.get('quote_checks', 0)}건 · 누락 {_pct(gen.get('quote_missing_rate'))}"]
 
     sc = r["scripts"]
     lines += ["", "## 멘트", "", "| 지표 | 값 |", "|---|---|",

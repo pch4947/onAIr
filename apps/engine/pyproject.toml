@@ -17,6 +17,8 @@ onair-eval = "onair_engine.eval.runner:cli"
 onair-report = "onair_engine.report:cli"
 onair-scenario = "onair_engine.scenario.runner:cli"
 onair-review = "onair_engine.scenario.review:cli"
+onair-compare = "onair_engine.scenario.compare:cli"
+onair-pairwise = "onair_engine.eval.pairwise:cli"
 
 [build-system]
 requires = ["setuptools>=69"]

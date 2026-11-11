@@ -1,0 +1,38 @@
+# 검증용(holdout) 시나리오 — 설정값이나 프롬프트를 고칠 때는 돌리지 않는다 (docs/ENGINE_TUNING.md 3.4절).
+# 밀도는 flood에 가깝고 주제와 문장이 다르다.
+name: rain
+description: 검증용. 18명이 분당 12건. 폭주 때의 선별과 집계 언급, 문자 반영을 다른 주제로 본다.
+station:
+  format: talk
+  corners: [topic_talk, text_corner, story_corner]
+  intensity: mid
+  topic: 비 오는 날
+board_stories:
+  - {body: "우산을 버스에 두고 내렸는데 다음 날 같은 기사님이 챙겨 두셨다가 돌려주셨어요.", nickname: 노란우산}
+  - {body: "비 오는 날이면 엄마가 부쳐 주던 김치전 냄새가 생각나요.", nickname: 빗소리}
+chatter:
+  per_minute: 12
+  people: 18
+  lines:
+    - 비 오는 날엔 파전이죠
+    - 빗소리 들으면서 듣는 중이에요
+    - 우산 또 잃어버렸어요
+    - 장마는 싫은데 소나기는 좋아요
+    - 비 냄새 좋아요
+    - 오늘 신발 다 젖었어요
+    - 창밖 보는 중
+    - 따뜻한 차 생각나네요
+    - 우산 같이 쓰면 좋죠
+    - 빗길 조심하세요
+    - 노래 좋다
+    - ㅎㅎㅎㅎ
+    - 저도 비 좋아해요
+    - 비 오면 졸려요
+    - 칼국수 먹고 싶다
+inputs:
+  - {at: "3:00", kind: message, who: m1, nickname: 장화, body: "새 장화를 사 놓고 비를 기다리다가 오늘 드디어 신었어요.", id: boots}
+  - {at: "10:00", kind: message, who: m2, nickname: 창가, body: "카페 창가에서 빗방울을 세다가 커피가 다 식었어요.", id: window}
+expect:
+  - {type: reflected, input: boots, note: 폭주 중에도 문자가 읽힌다}
+  - {type: max_fallback, value: 0, note: 대체 멘트 없음}
+  - {type: max_silence_sec, value: 10, note: 부하에서도 긴 무음 없음}

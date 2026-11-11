@@ -37,6 +37,13 @@ class SimSpec(_Spec):
     tts_latency_base_sec: float = Field(default=5.5, ge=0)  # 오디오 4초 → 약 7초, 25초 → 약 14초
     tts_latency_per_audio_sec: float = Field(default=0.33, ge=0)
     tts_jitter: float = Field(default=0.2, ge=0, lt=1)  # 지연에 곱하는 흔들림 (±비율)
+    # --llm dummy일 때의 LLM 흉내. 지연은 2026-11-07·10 시나리오 실행 실측이다
+    # (gpt-6-luna low, 호출 456건: 평균 1.5~1.6초, 표준편차 0.4초). 실제 LLM을 쓰면 무시한다
+    llm_latency_sec: float = Field(default=1.5, ge=0)
+    llm_jitter: float = Field(default=0.45, ge=0, lt=1)  # ±비율 — 균등분포의 표준편차가 실측과 비슷해진다
+    # 채팅 인용을 빠뜨릴 확률. 기본 0은 "항상 인용"이라 반영률이 실제보다 높게 나온다.
+    # 같은 실측에서 채팅 인용 38건 중 19건이 빠졌다(문자 낭독 24건은 모두 들어갔다) — 표본이 작아 기본값으로 두지 않았다
+    llm_quote_miss_rate: float = Field(default=0.0, ge=0, le=1)
     broadcast_delay_sec: float = Field(default=12.0, ge=0)  # 백엔드 ONAIR_BROADCAST_DELAY_SECONDS
     buffer_low_sec: float = Field(default=15.0, ge=0)  # 백엔드 buffer_low_seconds
     seed: int = 1  # 회차마다 seed + 회차 번호

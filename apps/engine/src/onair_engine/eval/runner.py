@@ -5,7 +5,9 @@
 시나리오의 sequence는 단계 유형(corners/steps.py)의 순서다 — 코너·클락은 거치지 않는다.
 단, 청취자 입력단(L0)은 거치지 않는다 — 사연 픽스처로 L1·L2를 직접 시험하기 위해서다.
 
-결과: {out}/{시각}/report.md(사람이 읽는 요약 + 전체 대본), results.jsonl(멘트 단위 원자료)
+결과: {out}/{시각}/report.md(사람이 읽는 요약 + 전체 대본), results.jsonl(멘트 단위 원자료),
+run.json(재현 정보 — 커밋, LLM, 사례 파일), worktree.diff(커밋 안 한 변경이 있을 때)
+프롬프트를 고치기 전·후의 results.jsonl은 onair-pairwise로 쌍 비교한다 (eval/pairwise.py).
 """
 from __future__ import annotations
 
@@ -22,6 +24,7 @@ from pathlib import Path
 
 import yaml
 
+from .. import provenance
 from ..catalog import Track
 from ..corners.steps import STEP_KINDS, build_prompt
 from ..domain import (
@@ -457,6 +460,13 @@ async def evaluate(args: argparse.Namespace) -> Path:
                 f.write(json.dumps({"persona_file": name, **r}, ensure_ascii=False) + "\n")
     report = render_report(by_persona, meta, ranges)
     (out_dir / "report.md").write_text(report, encoding="utf-8")
+    # 재현 정보 — 쌍 비교(onair-pairwise)와 튜닝 기록이 어느 코드의 대본인지 여기서 읽는다
+    (out_dir / "run.json").write_text(json.dumps({
+        "started_at": started.strftime("%Y-%m-%dT%H:%M:%S"), **provenance.snapshot(),
+        "llm": meta["LLM"], "judge": meta["judge"], "cases": str(args.cases), "repeat": args.repeat,
+        "personas": [Path(p).stem for p in personas],
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    provenance.write_diff(out_dir)
     print("\n" + report.split("## 코너별")[0])
     print(f"리포트: {out_dir / 'report.md'}")
     return out_dir
