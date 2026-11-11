@@ -4,9 +4,12 @@ import sqlite3
 import time
 from pathlib import Path
 
+import pytest
+
 from onair_engine.domain import ChatType, RequestState, StationConfig, StationProfile
 from onair_engine.engine import EngineSettings, StationEngine
 from onair_engine.manager import EngineManager, config_from_created
+from onair_engine.pipeline.pipeline import quote_match, quoted
 from onair_engine.telemetry import Telemetry, reflection_summary
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -118,6 +121,23 @@ def _quoted_run(tmp_path, body="저는 새벽에 컵라면이요", **config):
     req = asyncio.run(scenario())
     segment = next(s for s in transport.segments if s.request_ref == req.request_id)
     return engine, req, segment
+
+
+def test_quote_check_keeps_chat_and_script(tmp_path):
+    # 인용 검사마다 채팅·대본·일치 비율을 남긴다 — 누락의 원인을 대본으로 가르기 위해서다 (#258)
+    engine, req, _ = _quoted_run(tmp_path)
+    engine.telemetry.close()
+    rows = _rows(tmp_path, "SELECT request_ref, kind, result, match_ratio, chat, script, step FROM quote_log")
+    _, kind, result, match, chat, script, step = next(r for r in rows if r[0] == req.request_id)
+    assert (kind, result, match, chat) == ("chat", "ok", 1.0, req.body)
+    assert req.body in script and step
+
+
+def test_quote_match_is_share_of_chat_bigrams():
+    assert quote_match("붕어빵은 팥이죠", "붕어빵은 팥이라고 하신 분이 있네요") == pytest.approx(5 / 6)
+    assert quote_match("저도 퇴근 중이에요", "퇴근 중이시라는 분이 있네요") < 0.5, "끝말이 바뀌면 짧은 채팅은 기준에 못 미친다"
+    assert quote_match("!!", "아무 말") == 1.0 and quoted("!!", "아무 말"), "묶을 글자가 없으면 인용된 것으로 본다"
+    assert not quoted("ㅋㅋㅋ", "웃음이 나네요"), "자음만 있는 채팅은 대본에 그대로 나와야 통과한다"
 
 
 def test_played_event_confirms_reflection_and_metrics(tmp_path):

@@ -213,6 +213,12 @@ def station_report(sqlite_path: str | Path, station_id: str, run: int = -1) -> d
         # 인용 누락 — 빠진 입력은 한 번 되돌렸다가 또 빠지면 거절된다. 실제 LLM에서만 생긴다
         "quote_checks": sum(quotes.values()),
         "quote_missing_rate": _ratio(quotes["missing"], sum(quotes.values())),
+        # 빠진 인용의 채팅과 대본 — 건너뛴 것인지, 풀어 말해서 검사가 못 알아본 것인지 읽어서 가른다 (#258)
+        "quote_missing": [
+            {"corner_type": corner, "step": step, "kind": kind, "match": match, "chat": chat, "script": script}
+            for corner, step, kind, match, chat, script in q(
+                "SELECT corner_type, step, kind, match_ratio, chat, script FROM quote_log "
+                "WHERE station_id = ? {w} AND result = 'missing' ORDER BY rowid")],
         # 이야기 단계가 무엇을 소재로 말했는지 — chat·callback·angle·topic (CORNER_DESIGN 7.7절, #226)
         "talk_material": dict(q(
             "SELECT json_extract(decision_json, '$.material') AS m, COUNT(*) FROM decision_log "
@@ -305,6 +311,9 @@ def render(report: dict) -> str:
     material = ", ".join(f"{_MATERIALS.get(k, k)} {n}" for k, n in sorted(gen["talk_material"].items())) or "-"
     lines += ["", f"이야기 단계 소재: {material}",
               f"인용 검사: {gen.get('quote_checks', 0)}건 · 누락 {_pct(gen.get('quote_missing_rate'))}"]
+    for miss in gen.get("quote_missing") or []:
+        lines += [f"- 누락 · {miss['corner_type']} · 일치 {miss['match']:.2f} · \"{miss['chat']}\"",
+                  f"  > {miss['script']}"]
 
     sc = r["scripts"]
     lines += ["", "## 멘트", "", "| 지표 | 값 |", "|---|---|",

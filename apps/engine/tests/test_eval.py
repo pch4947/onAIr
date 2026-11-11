@@ -5,7 +5,14 @@ from pathlib import Path
 from onair_engine.catalog import Track
 from onair_engine.domain import StationProfile
 from onair_engine.eval import checks
-from onair_engine.eval.runner import RecordingLlm, Scenario, parse_judge, run_scenario, summarize
+from onair_engine.eval.runner import (
+    RecordingLlm,
+    Scenario,
+    parse_judge,
+    render_quotes,
+    run_scenario,
+    summarize,
+)
 from onair_engine.pipeline.llm import DummyLlmClient
 from onair_engine.sources.rss import FeedItem
 
@@ -76,3 +83,41 @@ def test_run_scenario_with_dummy(tmp_path):
 def test_scenario_file_steps_are_known():
     scenario = Scenario.load(Path(__file__).resolve().parent.parent / "config" / "eval_cases.yaml")
     assert "talk+chat" in scenario.sequence and scenario.topic
+
+
+def test_chat_cases_record_quote_check(tmp_path):
+    # chats가 있으면 +chat 단계는 사연이 아니라 짧은 채팅을 꺼낸다 — 곡 소개에도 붙일 수 있다 (#258)
+    scenario = Scenario(
+        sequence=["talk+chat", "music_intro+chat", "story"],
+        tracks=[Track("t1", "밤편지", "아이유", "calm", 1000)], news=[],
+        stories=[{"id": "s1", "body": "시험 공부 중이에요", "expect": "air"}],
+        chats=[{"id": "c1", "type": "on_topic", "body": "저는 김치찌개 끓였어요"},
+               {"id": "c2", "type": "dj_question", "body": "DJ님은 뭐 드셨어요?"}],
+    )
+    llm = RecordingLlm(DummyLlmClient(delay_sec=0, seed=0))
+    records = asyncio.run(run_scenario(PROFILE, scenario, llm, rules=RULES, recent_segments=4,
+                                       workdir=tmp_path, run=0))
+    talk, intro, story = records
+    assert (talk["chat"], talk["chat_type"], talk["quote"]) == ("저는 김치찌개 끓였어요", "on_topic", "ok")
+    assert intro["corner"] == "music_intro+chat" and intro["chat_type"] == "dj_question"
+    assert talk["quote_match"] == 1.0, "더미는 채팅을 그대로 인용한다"
+    assert story["case"] == "s1" and "quote" not in story, "채팅을 넣지 않은 멘트는 검사하지 않는다"
+    assert summarize(records)["인용 누락"] == "0/2"
+
+    intro.update(quote="missing", quote_match=0.2)  # 실제 LLM이 풀어 말한 경우
+    text = "\n".join(render_quotes({"p": records}))
+    assert "| on_topic | 0/1 | - | 0/1 |" in text and "| dj_question | - | 1/1 | 1/1 |" in text
+    assert "| 합계 | 0/1 | 1/1 | 1/2 |" in text
+    assert "DJ님은 뭐 드셨어요?" in text and intro["text"] in text
+    assert render_quotes({"p": [story]}) == []
+
+
+def test_chat_case_file_covers_both_steps():
+    scenario = Scenario.load(Path(__file__).resolve().parent.parent / "config" / "eval_cases_chat.yaml")
+    chat_steps = [s for s in scenario.sequence if s.endswith("+chat")]
+    assert len(chat_steps) == len(scenario.chats), "채팅이 남거나 모자라지 않는다"
+    by_step: dict[str, set] = {}
+    for step, chat in zip(chat_steps, scenario.chats, strict=True):
+        by_step.setdefault(step, set()).add(chat["type"])
+    assert by_step["talk+chat"] == by_step["music_intro+chat"], "유형마다 두 단계에 모두 들어간다"
+    assert sum(s.startswith("music_intro") for s in chat_steps) <= len(scenario.tracks)

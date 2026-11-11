@@ -37,7 +37,7 @@ from ..domain import (
 )
 from ..main import add_llm_args, apply_llm_args, load_config, load_env, load_profile
 from ..pipeline.llm import REJECT, LlmClient, LlmError, make_llm
-from ..pipeline.pipeline import GenerationPipeline
+from ..pipeline.pipeline import QUOTE_MATCH, GenerationPipeline, quote_match
 from ..pipeline.safety import SafetyChecker
 from ..pipeline.tts import make_tts
 from ..prompt_data import data_block
@@ -76,9 +76,11 @@ class RecordingLlm:
         return script
 
 
-# 사연 픽스처를 꺼내 쓰는 단계 — story(게시판 사연 낭독)·text_read(문자 낭독)는 항목으로,
-# talk+chat은 채팅 인용으로 넣는다 (같은 사연으로 두 경로의 L1·인용 검사를 시험한다)
-_STORY_STEPS = ("story", "text_read", "talk+chat")
+# 사연 픽스처를 꺼내 쓰는 단계 — story(게시판 사연 낭독)·text_read(문자 낭독)는 항목으로 넣는다.
+# 단계 이름에 +chat을 붙이면 채팅 인용을 넣는다. 사례 파일에 chats가 있으면 거기서, 없으면 stories에서 꺼낸다
+# (stories를 쓰면 같은 사연으로 낭독과 인용 두 경로의 L1을 시험한다)
+_STORY_STEPS = ("story", "text_read")
+CHAT_SUFFIX = "+chat"
 _TRACK_STEPS = ("music_intro", "closing_farewell")
 
 
@@ -88,6 +90,7 @@ class Scenario:
     tracks: list[Track]
     news: list[FeedItem]
     stories: list[dict]
+    chats: list[dict] = field(default_factory=list)  # 짧은 채팅 — {id, body, type?, expect?}
     cliches: list[str] = field(default_factory=list)
     topic: str = "오늘 하루 어땠나요"
     guide: str = "채팅은 언제든 편하게 보내 주세요."
@@ -99,11 +102,15 @@ class Scenario:
                   for i, t in enumerate(raw.get("tracks", []))]
         news = [FeedItem(n["title"], n["summary"], n["source_url"]) for n in raw.get("news", [])]
         sequence = raw["sequence"]
-        unknown = [s for s in sequence if s.removesuffix("+chat") not in STEP_KINDS]
+        unknown = [s for s in sequence if s.removesuffix(CHAT_SUFFIX) not in STEP_KINDS]
         if unknown:
             raise SystemExit(f"{path}: 알 수 없는 단계 {unknown} (corners/steps.py STEP_KINDS)")
+        unquotable = [s for s in sequence if s.endswith(CHAT_SUFFIX)
+                      and not STEP_KINDS[s.removesuffix(CHAT_SUFFIX)].quotable]
+        if unquotable:
+            raise SystemExit(f"{path}: 채팅을 인용하지 않는 단계에 +chat을 붙였다 {unquotable}")
         return cls(sequence=sequence, tracks=tracks, news=news,
-                   stories=raw.get("stories", []), cliches=raw.get("cliches", []),
+                   stories=raw.get("stories", []), chats=raw.get("chats", []), cliches=raw.get("cliches", []),
                    topic=raw.get("topic", cls.topic), guide=raw.get("guide", cls.guide))
 
 
@@ -176,21 +183,24 @@ async def run_scenario(profile: StationProfile, scenario: Scenario, llm: Recordi
         telemetry.close()  # Windows는 열린 sqlite 파일이 있으면 임시 폴더를 못 지운다
 
 
-def _material(entry: str, scenario: Scenario, stories, tracks, news) -> tuple[Material, dict] | None:
+def _material(entry: str, scenario: Scenario, stories, chats, tracks, news) -> tuple[Material, dict] | None:
     """시나리오 한 줄의 소재. 꺼낼 픽스처가 떨어졌으면 None — 그 줄은 건너뛴다."""
-    kind = entry.removesuffix("+chat")
+    kind = entry.removesuffix(CHAT_SUFFIX)
     m = Material(topic=scenario.topic)
     case: dict = {}
-    if entry in _STORY_STEPS:
-        case = next(stories, None)
+    if entry.endswith(CHAT_SUFFIX):
+        case = next(chats if scenario.chats else stories, None)
         if case is None:
             return None
-        if entry == "talk+chat":
-            m.quotes = [ListenerRequest(request_id=f"req_{case['id']}", kind="story",
-                                        body=case["body"], requester_ref="eval",
-                                        received_at=time.time())]
-        else:
-            m.items = [{"nickname": "평가", "body": case["body"]}]
+        m.quotes = [ListenerRequest(request_id=f"req_{case['id']}", kind="chat" if scenario.chats else "story",
+                                    body=case["body"], requester_ref="eval",
+                                    received_at=time.time())]
+    if kind in _STORY_STEPS:
+        story = next(stories, None)
+        if story is None:
+            return None
+        case = case or story
+        m.items = [{"nickname": "평가", "body": story["body"]}]
     elif kind in _TRACK_STEPS or kind == "artist_talk":
         track = next(tracks, None)
         if track is None:
@@ -217,11 +227,12 @@ async def _run_steps(profile: StationProfile, scenario: Scenario,
                      pipeline: GenerationPipeline, safety: SafetyChecker, llm: RecordingLlm,
                      run: int) -> list[dict]:
     stories, tracks, news = iter(scenario.stories), iter(scenario.tracks), iter(scenario.news)
+    chats = iter(scenario.chats)
     records: list[dict] = []
     aired: list[str] = []
     for step, entry in enumerate(scenario.sequence):
-        kind = entry.removesuffix("+chat")
-        got = _material(entry, scenario, stories, tracks, news)
+        kind = entry.removesuffix(CHAT_SUFFIX)
+        got = _material(entry, scenario, stories, chats, tracks, news)
         if got is None:
             continue
         material, case = got
@@ -247,6 +258,11 @@ async def _run_steps(profile: StationProfile, scenario: Scenario,
             "latency": round(last.latency, 2), "attempts": len(calls),
             "prompt_user": prompt_user,
         }
+        if material.quotes and outcome == "aired":
+            # 방송과 같은 검사 — 누락이면 엔진은 그 채팅을 되돌리고, 두 번 빠지면 거절한다
+            match = quote_match(material.quotes[0].body, text)
+            rec.update(chat=material.quotes[0].body, chat_type=case.get("type"),
+                       quote_match=round(match, 3), quote="ok" if match >= QUOTE_MATCH else "missing")
         if outcome == "l2_reject":
             rec["l2_rule"] = safety.check_l2(text)
         if outcome == "aired":
@@ -339,6 +355,7 @@ def summarize(records: list[dict]) -> dict:
         "대체(실패)": sum(r["outcome"] == "fallback" for r in records),
         "판정 오류": sum(any(f.startswith(("과잉 거부", "거부 누락")) for f in r["flags"])
                        for r in records),
+        "인용 누락": _quote_missing(aired),
         "금지 문자열 노출": sum(any(f.startswith("금지 문자열") for f in r["flags"])
                           for r in records),
         "말투 이탈 문장": f"{sum(r['level_violations'] for r in aired)}/{sents}",
@@ -361,6 +378,35 @@ def summarize(records: list[dict]) -> dict:
         "캐릭터 이탈률(judge)": (_pct(sum(j["character"] <= JUDGE_OFF_CHARACTER for j in judged),
                                  len(judged)) if judged else "-"),
     }
+
+
+def _quote_missing(records: list[dict], chat_type: str | None = None) -> str:
+    """채팅을 넣은 멘트 가운데 인용 검사에서 빠진 것 — 방송에서는 그 채팅이 되돌아간다."""
+    checked = [r for r in records if r.get("quote") and (chat_type is None or r.get("chat_type") == chat_type)]
+    return f"{sum(r['quote'] == 'missing' for r in checked)}/{len(checked)}" if checked else "-"
+
+
+def render_quotes(by_persona: dict[str, list[dict]]) -> list[str]:
+    """누락이 어느 채팅 유형·어느 단계에 몰리는지와 누락된 대본 — 프롬프트를 고치기 전·후를 여기서 견준다."""
+    checked = [r for recs in by_persona.values() for r in recs if r.get("quote")]
+    if not checked:
+        return []
+    types = list(dict.fromkeys(r.get("chat_type") for r in checked))
+    steps = list(dict.fromkeys(r["corner"] for r in checked))
+    rows = [[t or "-"] + [_quote_missing([r for r in checked if r["corner"] == s and r.get("chat_type") == t])
+                          for s in steps]
+            + [_quote_missing([r for r in checked if r.get("chat_type") == t])] for t in types]
+    rows.append(["합계"] + [_quote_missing([r for r in checked if r["corner"] == s]) for s in steps]
+                + [_quote_missing(checked)])
+    lines = ["## 인용 누락 (누락/검사)", "", _table(["채팅 유형"] + steps + ["합계"], rows), "",
+             "### 누락된 대본", ""]
+    for name, recs in by_persona.items():
+        for r in recs:
+            if r.get("quote") == "missing":
+                head = (f"- **{name} #{r['run']}-{r['step']} {r['corner']}** · 일치 {r['quote_match']:.2f} · "
+                        f"\"{r['chat']}\"")
+                lines += [head, f"  > {r['text']}"]
+    return [*lines, ""]
 
 
 def _table(header: list[str], rows: list[list[str]]) -> str:
@@ -387,7 +433,7 @@ def render_report(by_persona: dict[str, list[dict]], meta: dict,
             secs = [r["est_sec"] for r in recs if r["corner"] == c and r["outcome"] == "aired"]
             row.append(f"{_mean(secs)} ({ranges[c][0]}~{ranges[c][1]})" if secs else "-")
         rows.append(row)
-    lines += [_table(["persona"] + corners, rows), "", "## 경고가 붙은 멘트", ""]
+    lines += [_table(["persona"] + corners, rows), "", *render_quotes(by_persona), "## 경고가 붙은 멘트", ""]
     for name, recs in by_persona.items():
         for r in recs:
             if r["flags"]:
@@ -443,7 +489,7 @@ async def evaluate(args: argparse.Namespace) -> Path:
                     await judge_records(judge, profile, records)
                 by_persona[name] += records
 
-    ranges = {entry: STEP_KINDS[entry.removesuffix("+chat")].seconds
+    ranges = {entry: STEP_KINDS[entry.removesuffix(CHAT_SUFFIX)].seconds
               for entry in dict.fromkeys(scenario.sequence)}
     meta = {
         "started": started.strftime("%Y-%m-%d %H:%M"),
