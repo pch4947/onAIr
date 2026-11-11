@@ -140,6 +140,24 @@ def test_quote_match_is_share_of_chat_bigrams():
     assert not quoted("ㅋㅋㅋ", "웃음이 나네요"), "자음만 있는 채팅은 대본에 그대로 나와야 통과한다"
 
 
+def test_attributed_paraphrase_counts_as_quote():
+    # 2026-11-12 평가의 실제 대본들 — 누락 58건 중 44건이 청취자의 말이라고 밝히며 풀어 말한 것이었다 (#258)
+    assert quoted("저는 오늘 김치찌개 끓였어요", "김치찌개를 끓였다는 분이 있네요. 든든한 저녁이었겠어요.")
+    assert quoted("DJ님 요리 잘하세요?", "요리 잘하냐고 물어보신 분이 있네요. 잘한다고 하긴 어렵지만요.")
+    assert quoted("배고파요", "배고프다고 하신 분이 있네요. 일단 냉장고부터 열어보자.")
+    # DJ를 부르는 말은 되읽지 않는다 — 풀어서 한 인용을 볼 때는 빼고 센다
+    assert quoted("DJ님은 오늘 저녁 뭐 드셨어요?", "저녁 뭐 먹었냐고 물어본 분이 있네. 나는 아직 못 정했어.")
+
+
+def test_answer_without_attribution_is_not_a_quote():
+    # 답만 하면 청취자는 자기 채팅인 줄 알 수 없다 — 되돌려서 다시 인용하게 한다
+    assert not quoted("DJ님은 매운 거 잘 드세요?", "매운 음식은 잘 못 먹지만, 얼큰한 국물은 가끔 생각나요.")
+    assert not quoted("DJ님은 오늘 저녁 뭐 드셨어요?", "저는 오늘 저녁에 달걀찜을 먹었어요. 부드러운 한 숟갈이 좋더라고요.")
+    # 청취자를 말해도 채팅의 낱말이 남지 않았으면 인용이 아니다
+    assert not quoted("배고파요", "벌써 출출해졌다고 하신 분이 있네요.")
+    assert not quoted("붕어빵은 팥이죠", "오늘도 많은 분이 계시네요. 겨울밤 이야기를 이어가 볼게요.")
+
+
 def test_played_event_confirms_reflection_and_metrics(tmp_path):
     engine, req, segment = _quoted_run(tmp_path)
     telemetry = _reopen_telemetry(engine, tmp_path)

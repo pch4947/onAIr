@@ -37,7 +37,7 @@ from ..domain import (
 )
 from ..main import add_llm_args, apply_llm_args, load_config, load_env, load_profile
 from ..pipeline.llm import REJECT, LlmClient, LlmError, make_llm
-from ..pipeline.pipeline import QUOTE_MATCH, GenerationPipeline, quote_match
+from ..pipeline.pipeline import GenerationPipeline, quote_match, quoted
 from ..pipeline.safety import SafetyChecker
 from ..pipeline.tts import make_tts
 from ..prompt_data import data_block
@@ -260,9 +260,9 @@ async def _run_steps(profile: StationProfile, scenario: Scenario,
         }
         if material.quotes and outcome == "aired":
             # 방송과 같은 검사 — 누락이면 엔진은 그 채팅을 되돌리고, 두 번 빠지면 거절한다
-            match = quote_match(material.quotes[0].body, text)
-            rec.update(chat=material.quotes[0].body, chat_type=case.get("type"),
-                       quote_match=round(match, 3), quote="ok" if match >= QUOTE_MATCH else "missing")
+            chat = material.quotes[0].body
+            rec.update(chat=chat, chat_type=case.get("type"), quote_match=round(quote_match(chat, text), 3),
+                       quote="ok" if quoted(chat, text) else "missing")
         if outcome == "l2_reject":
             rec["l2_rule"] = safety.check_l2(text)
         if outcome == "aired":
