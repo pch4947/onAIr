@@ -18,6 +18,7 @@ from ..sources.rss import RssCollector, source_name
 from .steps import STEP_KINDS
 
 if TYPE_CHECKING:  # topic_plan → pipeline.llm → corners.steps 순환을 피한다
+    from ..domain import BlockScript
     from ..inputs.topic_plan import Angle
 
 
@@ -27,14 +28,15 @@ class Thread:
 
     keywords는 화제 관련성 계산(M4 QuoteSelector, 키워드 겹침 — U1)에 쓴다.
     angle은 이번 진입에 쓰는 이야기 갈래다(inputs/topic_plan.py). 채팅이 화제를 바꾸면 사라진다.
-    꺼내기 단계가 갈래의 첫 말할 거리를 쓰고, 이야기 단계가 나머지를 하나씩 쓴다(points_used).
+    꺼내기 단계가 갈래의 말할 거리 하나를 쓰고, 이야기 단계가 points_left번까지 하나씩 더 꺼낸다.
+    남은 말할 거리는 다음 진입이 잇는다(TopicPlan이 어디까지 썼는지 안다).
     갈래가 없으면 주제만으로 free_points번 이야기한다 — 소재가 떨어지면 단계를 끝낸다 (CORNER_DESIGN 7.7절).
     """
 
     topic: str | None = None
     keywords: list[str] = field(default_factory=list)
     angle: Angle | None = None
-    points_used: int = 0
+    points_left: int = 2
     free_points: int = 1
 
 
@@ -164,11 +166,16 @@ class CornerRun:
     """코너 1회. 단계를 차례로 내놓고, 항목이 떨어지거나 예산을 넘으면 그 단계를 끝낸다."""
 
     def __init__(self, entry: ClockEntry, *, sources: MaterialSources, intensity: Intensity,
-                 thread: Thread, again: bool = False):
+                 thread: Thread, again: bool = False, continues: bool = False, after_song: bool = False):
         self.spec = entry.corner
         self.label = entry.label
         self.thread = thread
         self.again = again  # 같은 방송에서 이 코너에 이미 들어온 적이 있다 — 단계의 again을 쓴다
+        # 지난번 말 코너도 이 코너였다 — 사이에 곡만 있었다. "다시 …로 돌아왔어요"를 틀지 않는다 (#262)
+        self.continues = continues
+        self.after_song = after_song  # 곡이 끝나고 들어온 코너 — 꺼내는 멘트가 곡 뒤를 잇는다
+        self.block: BlockScript | None = None  # 이번 진입을 한 번에 쓴 이야기 덩어리
+        self.block_next = 0  # 다음에 낼 문단 번호
         # 이 코너가 낸 멘트 길이 — 예산 기준 (#220). 방송 누적량으로 재면 앞 코너에서 소개한 곡이
         # 이 코너가 편성된 뒤에 제출되면서 곡 길이가 이 코너 몫으로 잡힌다
         self.spent_ms = 0

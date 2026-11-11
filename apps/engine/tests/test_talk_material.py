@@ -7,7 +7,7 @@ from onair_engine.corners.steps import CALLBACK_RULE, build_prompt
 from onair_engine.domain import ListenerRequest, Material
 from onair_engine.format.clock import ClockEntry
 from onair_engine.inputs.callbacks import CallbackStore
-from onair_engine.inputs.topic_plan import Angle
+from onair_engine.inputs.topic_plan import Angle, TopicPlan
 from onair_engine.pipeline.llm import detect_step
 from onair_engine.prompt_data import CALLBACK, COVERED_ANGLES
 from onair_engine.report import render, station_report
@@ -55,14 +55,18 @@ def test_lookback_spreads_over_the_broadcast():
 def _scheduler_run(tmp_path, angle: Angle | None):
     engine, _ = _engine(tmp_path, corners=["topic_talk"], topic="겨울 간식")
     scheduler = engine.scheduler
+    scheduler.topic_plan = plan = TopicPlan(None, "겨울 간식", count=1, violates=lambda text: None)
+    if angle is not None:  # 꺼내는 단계가 첫 말할 거리를 이미 썼다
+        plan._angles = [angle]
+        plan.take(1)
     run = CornerRun(ClockEntry(scheduler.fmt.corner("topic_talk")), sources=scheduler.sources,
-                    intensity=scheduler.intensity, thread=Thread(topic="겨울 간식", angle=angle, points_used=1))
+                    intensity=scheduler.intensity, thread=Thread(topic="겨울 간식", angle=angle))
     scheduler._run = run
     return scheduler, run
 
 
 def test_talk_points_prefer_chat_then_callback_then_angle(tmp_path):
-    scheduler, run = _scheduler_run(tmp_path, Angle("호빵", ("데우는 법", "팥과 야채", "편의점 풍경")))
+    scheduler, run = _scheduler_run(tmp_path, Angle("호빵", ("데우는 법", "팥과 야채", "편의점 풍경", "남은 한 개")))
     scheduler.callbacks.min_age_sec = 0
     scheduler.callbacks.add(_req("message", "퇴근길 붕어빵"), aired_at=0)
     scheduler.callbacks.add(_req("message", "호떡 좋아요", rid="r2"), aired_at=0)
@@ -73,7 +77,8 @@ def test_talk_points_prefer_chat_then_callback_then_angle(tmp_path):
     assert point["source"] == "callback" and point["callback"].body == "퇴근길 붕어빵"
     assert [scheduler._talk_point(run) for _ in range(3)] == [
         {"source": "angle", "point": "팥과 야채"}, {"source": "angle", "point": "편의점 풍경"}, None,
-    ], "다시 꺼내기는 코너당 1번, 꺼내기가 쓴 첫 말할 거리는 빼고, 떨어지면 끝"
+    ], "다시 꺼내기는 코너당 1번, 꺼내기가 쓴 첫 말할 거리는 빼고, 한 번 들어와서 둘까지만 더 쓴다"
+    assert scheduler.topic_plan.more() == ("남은 한 개",), "남은 말할 거리는 다음에 들어와서 잇는다 (#262)"
 
 
 def test_without_an_angle_topic_talk_gets_one_free_point(tmp_path):

@@ -34,14 +34,23 @@ class Capture:
         self.station_events.append((event_type, payload))
 
 
-def _engine(tmp_path, dummy_tracks: bool = True, **config) -> tuple[StationEngine, Capture]:
+def short_talk(engine: StationEngine) -> StationEngine:
+    """조용한 방송에서도 이야기를 한 번에 쓰지 않게 한다 — 멘트 하나씩 만드는 흐름을 보는 테스트용 (#262)."""
+    scheduler = engine.scheduler
+    scheduler.chat_rules = scheduler.chat_rules.model_copy(update={"block_parts": 1})
+    return engine
+
+
+def _engine(tmp_path, dummy_tracks: bool = True, block: bool = False,
+            **config) -> tuple[StationEngine, Capture]:
     cfg = StationConfig(station_id="st_test", profile=PROFILE,
                         broadcast_minutes=config.pop("broadcast_minutes", 30), **config)
     settings = EngineSettings(audio_dir=tmp_path / "audio", sqlite_path=tmp_path / "metrics.sqlite",
                               safety_rules_path=RULES, target_buffer_sec=1e9,
                               dummy_tracks=dummy_tracks)
     transport = Capture()
-    return StationEngine(cfg, settings, transport), transport
+    engine = StationEngine(cfg, settings, transport)
+    return (engine if block else short_talk(engine)), transport
 
 
 def _glue(sub: SegmentSubmission) -> bool:

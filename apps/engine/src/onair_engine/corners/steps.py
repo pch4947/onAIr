@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -45,6 +46,18 @@ CALLBACK_RULE = ("아래 앞서 방송에서 소개한 청취자 이야기를 '�
                  "내용을 지어내거나 뜻을 바꾸지 않고, 닉네임은 블록에 있을 때만 부른다.")
 # 시간 맥락은 화제를 꺼내는 단계에만 붙인다 — 매 멘트에 붙이면 "벌써 자정이네요"가 되풀이된다
 TIME_RULE = "아래 지금 시각은 이야기와 어울릴 때만 짧게 쓰고, 꼭 말하지 않아도 된다."
+# 답이 없는 방송에서 계속 묻지 않는다 — 조용한 방송의 이야기 멘트 75%가 질문으로 끝났다 (2026-11-11 기준선, #262)
+NO_QUESTION_RULE = "청취자에게 질문하지 않는다. 묻는 대신 DJ가 생각을 풀어 가고, 질문으로 끝내지 않는다."
+# 곡 뒤에 고정 문구("다시 …로 돌아왔어요")를 틀지 않는다 — 그 자리는 이 멘트가 잇는다
+AFTER_SONG_RULE = "곡이 끝나고 다시 말을 잇는 자리다. 새로 인사하거나 돌아왔다고 말하지 않는다."
+BACK_ANNOUNCE_RULE = "먼저 아래 방금 나간 곡을 한마디로 받고, 거기서 이야기로 넘어간다. 곡을 다시 소개하지는 않는다."
+ANGLE_CONTINUE_RULE = "아래 이번 갈래는 앞에서 하던 이야기다. 처음 꺼내듯 말하지 않고 하던 이야기를 이어 간다."
+ANGLE_HANDOFF_RULE = ("아래 다룬 갈래 가운데 마지막 것이 바로 앞에서 한 이야기다. "
+                      "그 이야기에서 자연스럽게 넘어오며 이번 갈래를 꺼낸다.")
+# 이야기 덩어리 — 곡 사이 말을 한 번에 쓴다. 문단 하나가 세그먼트 하나로 합성된다 (pipeline._write_block)
+BLOCK_STEP = "talk_block"
+BLOCK_MARKER = "이야기 한 덩어리"
+PREV_TRACK = "방금 나간 곡"
 
 
 def track_line(track: dict) -> str:
@@ -88,11 +101,36 @@ def _angle(m: Material) -> str:
     return "\n" + data_block(ANGLE, angle.text()) if angle else ""
 
 
+def _question(m: Material) -> str:
+    if m.extra.get("question"):
+        return " 끝에 청취자에게 가볍게 질문을 하나 던진다."
+    return f" {NO_QUESTION_RULE}" if m.extra.get("no_question") else ""
+
+
+def _after_song(m: Material) -> tuple[str, str]:
+    """곡 뒤에 말을 잇는 자리의 지시와 데이터 블록. 곡 뒤가 아니면 둘 다 빈 문자열."""
+    track = m.extra.get("after_song")
+    if not track:
+        return "", ""
+    if m.extra.get("back_announce"):
+        return f" {AFTER_SONG_RULE} {BACK_ANNOUNCE_RULE}", "\n" + data_block(PREV_TRACK, track_line(track))
+    return f" {AFTER_SONG_RULE}", ""
+
+
+def _angle_rule(m: Material, fresh: str) -> str:
+    """이번 갈래를 어떻게 꺼낼지 — 하던 갈래면 잇고, 새 갈래면 앞 갈래에서 넘어온다."""
+    if not m.extra.get("angle"):
+        return ""
+    if m.extra.get("angle_state") == "continue":
+        return f" {ANGLE_CONTINUE_RULE}"
+    if m.extra.get("covered_angles"):
+        return f" {ANGLE_HANDOFF_RULE}"
+    return fresh
+
+
 def _opener_context(m: Material) -> str:
     """화제를 꺼내는 단계의 덧붙임 — 질문, 이미 다룬 갈래, 지금 시각."""
-    text = ""
-    if m.extra.get("question"):
-        text += " 끝에 청취자에게 가볍게 질문을 하나 던진다."
+    text = _question(m)
     if covered := m.extra.get("covered_angles"):
         text += (" 아래 이미 다룬 갈래는 되풀이하지 않는다.\n"
                  + data_block(COVERED_ANGLES, "\n".join(f"- {t}" for t in covered)))
@@ -103,30 +141,99 @@ def _opener_context(m: Material) -> str:
 
 def _talk_open(m: Material) -> str:
     text = "오늘의 주제로 이야기를 꺼내는 멘트를 3문장 이내로 작성하라."
-    if m.extra.get("angle"):
-        # 오프닝(topic_intro)이 주제를 이미 소개했다 — 2026-11-07 실행에서 바로 뒤에 한 번 더 소개했다
-        text += " 주제는 오프닝에서 이미 소개했으니 다시 소개하지 않고, 아래 이번 갈래로 바로 시작한다."
-    return _with_topic(text + _opener_context(m), m) + _angle(m)
+    # 오프닝(topic_intro)이 주제를 이미 소개했다 — 2026-11-07 실행에서 바로 뒤에 한 번 더 소개했다
+    text += _angle_rule(m, " 주제는 오프닝에서 이미 소개했으니 다시 소개하지 않고, 아래 이번 갈래로 바로 시작한다.")
+    rule, block = _after_song(m)
+    return _with_topic(text + rule + _opener_context(m), m) + _angle(m) + block
 
 
 def _talk_resume(m: Material) -> str:
-    # 직전에 접착 문구(resume)가 "다시 … 돌아왔어요"를 이미 말했다
+    # 다른 말 코너를 거쳐 왔으면 직전에 접착 문구(resume)가 "다시 … 돌아왔어요"를 이미 말했다
     text = ("다른 순서를 지나 다시 오늘의 이야기로 돌아온 멘트를 3문장 이내로 작성하라. "
             "주제를 처음 소개하듯 말하지 않고, 돌아왔다는 말도 하지 않는다.")
-    text += (" 아래 이번 갈래로 화제를 옮긴다." if m.extra.get("angle")
-             else " 앞에서 한 말과 다른 면을 꺼낸다.")
-    return _with_topic(text + _opener_context(m), m) + _angle(m)
+    text += _angle_rule(m, " 아래 이번 갈래로 화제를 옮긴다.") or " 앞에서 한 말과 다른 면을 꺼낸다."
+    rule, block = _after_song(m)
+    return _with_topic(text + rule + _opener_context(m), m) + _angle(m) + block
 
 
 def _talk(m: Material) -> str:
     # 소재 하나로 한 멘트 — 편성 관리자가 채팅·다시 꺼낼 이야기·갈래의 말할 거리 중 하나를 골라 넣는다 (7.7절)
-    text = ("지금 화제로 이야기를 이어가는 멘트를 3문장 이내로 작성하라. 직전 멘트와 같은 말을 되풀이하지 않고, "
-            "질문으로 끝내지 않아도 된다.")
+    text = "지금 화제로 이야기를 이어가는 멘트를 3문장 이내로 작성하라. 직전 멘트와 같은 말을 되풀이하지 않는다."
+    text += f" {NO_QUESTION_RULE}" if m.extra.get("no_question") else " 질문으로 끝내지 않아도 된다."
     if callback := m.extra.get("callback"):
         return _with_topic(f"{text} {CALLBACK_RULE}", m) + "\n" + data_block(CALLBACK, callback.text())
     if m.extra.get("angle"):
         text += " 아래 이번 갈래의 말할 거리로 이야기한다."
     return _with_topic(text, m) + _angle(m)
+
+
+def _talk_block(m: Material) -> str:
+    """곡과 곡 사이 말 전체를 한 번에 — 채팅이 없는 동안의 DJ 주도 진행 (CORNER_DESIGN 7.7.1절)."""
+    parts = int(m.extra.get("parts", 3))
+    text = (f"곡과 곡 사이에 DJ가 혼자 이어 말할 {BLOCK_MARKER}를 쓴다. 문단 {parts}개로 나누고, 문단마다 2~3문장을 쓰고, "
+            "문단 사이는 빈 줄로 띄운다. 한 사람이 한 호흡으로 말하듯 문단이 앞 문단을 받아 이어져야 한다. "
+            "문단마다 새로 인사하거나 주제를 다시 소개하지 않고, 같은 말을 되풀이하지 않는다.")
+    rule, blocks = _after_song(m)
+    text += rule
+    if song := m.extra.get("song_story"):
+        # 주제 이야기만 되풀이하지 않게 가끔 곡 이야기로 쉬어 간다. 곡 소개는 바로 뒤 단계가 따로 한다
+        text += (" 이번에는 주제 이야기를 잠시 쉬고, 아래 이어서 나갈 곡의 분위기나 그 가수에게서 떠오르는 이야기를 한다. "
+                 "곡 제목은 아직 말하지 않고 곡을 틀겠다는 말로 끝내지도 않는다 — 곡 소개는 바로 뒤에 따로 나간다. "
+                 "수상·발매 시기·일화처럼 확인할 수 없는 사실은 말하지 않는다. "
+                 "오늘 주제와 닿는 데가 있으면 가볍게 잇는다.")
+        blocks += "\n" + data_block(TRACK, track_line(song))
+    elif m.extra.get("angle"):
+        text += _angle_rule(m, " 주제는 이미 소개했으니 다시 소개하지 않고, 아래 이번 갈래로 바로 시작한다.")
+        text += " 이번 갈래의 말할 거리를 문단에 차례로 풀어 쓴다."
+    else:
+        text += " 오늘 주제에서 아직 하지 않은 말을 풀어 간다."
+    if callback := m.extra.get("callback"):
+        text += f" 문단 하나에서는 {CALLBACK_RULE}"
+        blocks += "\n" + data_block(CALLBACK, callback.text())
+    if m.extra.get("question"):
+        text += " 마지막 문단 끝에만 청취자에게 가볍게 질문을 하나 던진다. 다른 문단에서는 묻지 않는다."
+    else:
+        text += f" {NO_QUESTION_RULE}"
+    if covered := m.extra.get("covered_angles"):
+        text += " 아래 이미 다룬 갈래는 되풀이하지 않는다."
+        blocks += "\n" + data_block(COVERED_ANGLES, "\n".join(f"- {t}" for t in covered))
+    if now := m.extra.get("now"):
+        text += f" {TIME_RULE}"
+        blocks += "\n" + data_block(NOW, now)
+    return _with_topic(text, m) + ("" if m.extra.get("song_story") else _angle(m)) + blocks
+
+
+_PARAGRAPH_RE = re.compile(r"\n\s*\n")
+_SENTENCE_RE = re.compile(r"(?<=[.?!…])\s+")
+
+
+def split_block(raw: str, parts: int) -> list[str]:
+    """덩어리 대본을 문단으로 — 문단 하나가 세그먼트 하나다. 거부면 [REJECT], 쓸 문단이 없으면 [].
+
+    LLM이 빈 줄 없이 한 문단으로 쓰면 문장 수로 고르게 나눈다. 계획보다 많이 나온 문단은 마지막 문단에 붙인다.
+    """
+    # 순환 import 회피 — llm이 이 모듈을 쓴다
+    from ..pipeline.llm import REJECT, LlmError, clean_script
+
+    def clean(text: str) -> str | None:
+        try:
+            return clean_script(text)
+        except LlmError:  # 기호뿐인 문단
+            return None
+
+    whole = clean(raw)
+    if whole is None:
+        return []
+    if whole == REJECT:
+        return [REJECT]
+    texts = [t for t in (clean(p) for p in _PARAGRAPH_RE.split(raw.strip())) if t and t != REJECT]
+    if len(texts) < 2 and parts > 1:
+        sentences = [s for s in _SENTENCE_RE.split(whole) if s]
+        size = max(2, -(-len(sentences) // parts))
+        texts = [" ".join(sentences[i:i + size]) for i in range(0, len(sentences), size)]
+    if len(texts) > parts:
+        texts = [*texts[:parts - 1], " ".join(texts[parts - 1:])]
+    return texts
 
 
 def _artist_talk(m: Material) -> str:
@@ -223,6 +330,8 @@ STEP_KINDS: dict[str, StepKind] = {
     "talk_open": StepKind("이야기를 꺼내는", _talk_open, (10, 30), quotable=True),
     "talk_resume": StepKind("다시 오늘의 이야기로 돌아온", _talk_resume, (10, 30), quotable=True),
     "talk": StepKind("이야기를 이어가는", _talk, (15, 45), quotable=True),
+    # 덩어리의 문단 하나가 세그먼트 하나다 — 길이 기준은 문단에 건다. 채팅은 덩어리 뒤의 이야기 단계가 인용한다
+    BLOCK_STEP: StepKind(BLOCK_MARKER, _talk_block, (8, 25)),
     "artist_talk": StepKind("아티스트나 장르", _artist_talk, (10, 30), quotable=True),
     "music_intro": StepKind("다음 곡을 소개", _music_intro, (10, 25), quotable=True),
     "story": StepKind("사연을 읽고", _story, (20, 60), quotable=True),

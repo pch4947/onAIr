@@ -121,3 +121,67 @@ def test_cli_makes_blind_pairs_then_tallies_filled_votes(tmp_path, capsys):
 
     assert pairwise.cli(["--tally", str(tmp_path)]) == 1
     assert pairwise.cli([str(a), str(a), "--out", str(tmp_path / "same")]) == 1, "대본이 전부 같으면 견줄 것이 없다"
+
+
+# ── 곡 사이 덩어리 ─────────────────────────────────────────────────────
+
+def _scenario_run(root, scenario, index, played):
+    run = root / scenario / f"run-{index}"
+    run.mkdir(parents=True)
+    (run / "played.json").write_text(json.dumps({"played": played}, ensure_ascii=False), encoding="utf-8")
+    (run / "run.json").write_text(json.dumps({"scenario": {"station": {
+        "format": "talk", "topic": "겨울 간식", "persona": "config/personas/saebyeok.yaml"}}}), encoding="utf-8")
+
+
+def _speech(script, corner="topic_talk"):
+    return {"kind": "speech", "corner_type": corner, "script": script, "text": None}
+
+
+def _song(title):
+    return {"kind": "music", "corner_type": "music_intro", "script": None, "text": title}
+
+
+def test_blocks_are_what_the_dj_says_between_two_songs(tmp_path):
+    _scenario_run(tmp_path, "quiet", 1, [
+        _speech("오프닝 인사"), _speech("주제 소개"), _speech("곡 소개 하나", "music_intro"), _song("첫 곡 - 가수"),
+        _speech(None), _speech("이야기 하나"), _speech("이야기 둘"), _speech("곡 소개 둘", "music_intro"),
+        _song("둘째 곡 - 가수"), _speech("혼자 남은 멘트"), _song("셋째 곡 - 가수"), _speech("엔딩 하나"), _speech("엔딩 둘")])
+    blocks = pairwise.load_blocks(tmp_path)
+    assert sorted(blocks) == [("quiet", 1, 0), ("quiet", 1, 1), ("quiet", 1, 3)], "멘트 하나뿐인 자리는 뺀다"
+    middle = blocks[("quiet", 1, 1)]
+    assert middle["lines"] == ["(고정 문구)", "이야기 하나", "이야기 둘", "곡 소개 둘"], "계측 DB가 없으면 문구는 표시만"
+    assert (middle["after"], middle["topic"], middle["persona_file"]) == ("첫 곡 - 가수", "겨울 간식", "saebyeok")
+
+
+def test_block_pairs_match_scenario_run_and_spot(tmp_path):
+    def blocks(tag, spots):
+        return {("quiet", run, spot): {"lines": [f"{tag} {run}-{spot}", "둘째 줄"], "after": "곡", "topic": "주제",
+                                       "persona_file": "saebyeok"} for run in (1, 2) for spot in spots}
+
+    a, b = blocks("옛", (0, 1, 2)), blocks("새", (1, 2, 3))
+    b[("quiet", 1, 1)]["lines"] = a[("quiet", 1, 1)]["lines"]
+    pairs, first_is, skipped = pairwise.make_block_pairs(a, b, random.Random(1))
+    assert skipped == {"A에만 있음": 2, "B에만 있음": 2, "말이 같음": 1, "뽑지 않음": 0} and len(pairs) == 3
+    for p in pairs:
+        old, new = (p["first"], p["second"]) if first_is[p["id"]] == "A" else (p["second"], p["first"])
+        assert old.startswith("옛") and new.startswith("새") and old.split()[1] == new.split()[1]
+        assert p["corner"] == "quiet" and p["label"] == "곡과 곡 사이에 이어서 한 말"
+    few, _, skipped = pairwise.make_block_pairs(a, b, random.Random(1), limit=2)
+    assert len(few) == 2 and skipped["뽑지 않음"] == 1
+
+
+def test_cli_pairs_blocks_from_two_scenario_runs(tmp_path, capsys):
+    for name, tag in (("a", "옛"), ("b", "새")):
+        _scenario_run(tmp_path / name, "quiet", 1, [
+            _speech(f"{tag} 오프닝"), _speech(f"{tag} 주제"), _song("첫 곡"), _speech(f"{tag} 이야기 하나"),
+            _speech(f"{tag} 이야기 둘"), _song("둘째 곡")])
+    out = tmp_path / "pairs"
+    assert pairwise.cli([str(tmp_path / "a"), str(tmp_path / "b"), "--blocks", "--out", str(out)]) == 0
+    key = json.loads((out / "key.json").read_text(encoding="utf-8"))
+    assert key["blocks"] is True and len(key["first_is"]) == 2
+    text = (out / "pairs.md").read_text(encoding="utf-8")
+    assert "말이 앞뒤로 이어지는가" in text and "옛 이야기 하나" in text and "새 이야기 둘" in text
+    (out / "votes.csv").write_text("id,선택,메모\nb001,가,\nb002,나,\n", encoding="utf-8")
+    assert pairwise.cli(["--tally", str(out)]) == 0
+    report = (out / "report.md").read_text(encoding="utf-8")
+    assert "## 시나리오별" in report and "| quiet |" in report and "자동 지표" not in report

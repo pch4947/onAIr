@@ -20,7 +20,7 @@ from typing import Protocol
 
 from .. import __version__
 from ..catalog import mood_ko
-from ..corners.steps import STEP_KINDS
+from ..corners.steps import BLOCK_MARKER, BLOCK_STEP, STEP_KINDS
 from ..domain import Prompt, Script
 from ..prompt_data import CHAT, STORY, TOPIC
 
@@ -82,6 +82,14 @@ _TEMPLATES: dict[str, list[str]] = {
         "이 이야기 조금 더 해 볼게요. 생각해 보면 정답이 있는 문제는 아닌 것 같아요.",
         "저는 요즘 이런 생각을 자주 해요. 너무 잘하려고 애쓰지 않아도 괜찮다는 거요.",
     ],
+    # 덩어리(talk_block)의 문단 — 요청한 문단 수만큼 차례로 쓴다 (DummyLlmClient.complete)
+    "talk_block": [
+        "오늘 이야기 조금 더 이어가 볼게요. {topic}, 생각할수록 할 말이 많은 주제예요.",
+        "저는 이런 얘기를 할 때 서두르지 않는 편이 좋더라고요. 천천히 떠올려 보면 장면이 하나씩 나오거든요.",
+        "누구에게나 비슷한 기억이 하나쯤은 있을 거예요. 그게 꼭 대단한 일이 아니어도 괜찮고요.",
+        "그래서 오늘은 정답을 찾기보다 그냥 같이 떠올려 보려고 해요. 그걸로 충분한 밤이니까요.",
+        "이야기는 여기서 잠깐 쉬어 갈게요. 음악 듣는 동안에도 이 생각은 이어 가 보세요.",
+    ],
     "artist_talk": [
         "다음 곡은 {artist}의 노래예요. 목소리만 들어도 분위기가 확 달라지는 아티스트죠.",
     ],
@@ -129,6 +137,7 @@ _TRACK_RE = re.compile(r"곡: (?P<title>.+?) — (?P<artist>.+?)(?: \(무드: (?
                        re.MULTILINE)
 _HEADLINE_RE = re.compile(r"^- (?P<headline>.+?): ", re.MULTILINE)
 _DATA_RE = re.compile(r'<data label="[^"]*">\n.*?\n</data>', re.DOTALL)
+_PARTS_RE = re.compile(r"문단 (\d+)개")
 
 
 def _block(label: str) -> re.Pattern:
@@ -194,6 +203,10 @@ class DummyLlmClient:
     async def complete(self, prompt: Prompt, *, max_tokens: int) -> str:
         await self._wait()
         from ..inputs import story_judge, topic_plan
+        if BLOCK_MARKER in _DATA_RE.sub("", prompt.user):
+            m = _PARTS_RE.search(prompt.user)
+            lines = _TEMPLATES[BLOCK_STEP][:int(m.group(1)) if m else 3]
+            return "\n\n".join(line.format_map(_slots(prompt)) for line in lines)
         if story_judge.MARKER in prompt.user:
             return story_judge.dummy_judgement_json(prompt)
         if topic_plan.MARKER in prompt.user:

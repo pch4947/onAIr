@@ -29,6 +29,12 @@ class ChatRules(BaseModel):
     preview_min_messages: int = Field(default=5, ge=1)
     preview_lookahead: int = Field(default=2, ge=0)
     preview_min_remaining_sec: float = Field(default=300.0, ge=0)
+    # 청취자가 적은 방송 (CORNER_DESIGN 7.7.1절)
+    quiet_after_sec: float = Field(default=180.0, ge=0)
+    question_gap_sec: float = Field(default=600.0, ge=0)
+    block_parts: int = Field(default=4, ge=1, le=6)
+    block_points: int = Field(default=3, ge=1, le=6)
+    song_story_every: int = Field(default=3, ge=0)
 
 
 def load_chat_rules(path: str | Path) -> ChatRules:

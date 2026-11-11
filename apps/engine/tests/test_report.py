@@ -85,6 +85,7 @@ def test_outcomes_and_rates_from_synthetic_log(tmp_path):
 
     report = station_report(tmp_path / "m.sqlite", "st_x")
     gen = report["generation"]
+    assert report["glue"] == {"resume": 0}, "고정 문구가 나가지 않았다"
     assert gen["quote_missing"] == [{"corner_type": "topic_talk", "step": "talk", "kind": "chat", "match": 0.231,
                                      "chat": "DJ님은 뭐 좋아하세요?", "script": "저는 군고구마를 좋아해요."}]
     assert '누락 · topic_talk · 일치 0.23 · "DJ님은 뭐 좋아하세요?"' in render(report)
@@ -164,3 +165,9 @@ def test_cli_lists_stations_and_prints_json(broadcast, capsys):
     assert json.loads(capsys.readouterr().out)["station_id"] == "st_report"
     assert cli(["st_report", "--db", str(broadcast.parent / "none.sqlite")]) == 1
     assert cli(["st_report", "--db", str(broadcast), "--run", "2"]) == 1, "회차가 하나뿐이다"
+
+
+def test_script_stats_counts_question_endings():
+    stats = script_stats(["어떤 간식이 떠오르세요?", "저는 군고구마가 좋아요.", "둘 중 어느 쪽이세요？"], None)
+    assert stats["question_end_rate"] == pytest.approx(0.667)
+    assert script_stats([], None)["question_end_rate"] is None

@@ -113,3 +113,35 @@ def test_cli_noise_compare_and_sweep_folder(tmp_path, capsys):
     assert compare.write_variants(out, ["base"]) is None
 
     assert compare.cli([str(tmp_path / "missing")]) == 1
+
+
+def test_refresh_fills_metrics_added_after_the_run(tmp_path, capsys):
+    # 지난 실행의 report.json에는 그 뒤에 만든 지표가 없다 — 회차의 계측 DB에서 계산해 채운다 (#262)
+    from onair_engine.domain import Decision, ScheduleContext
+    from onair_engine.telemetry import Telemetry
+
+    _run(tmp_path, "s", 1, silence=1.5)
+    run_dir = tmp_path / "s" / "run-1"
+    report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
+    report["station_id"] = "sim_s_1"
+    report["scripts"] = {"segments": 99}  # 이미 있는 값은 건드리지 않는다
+    (run_dir / "report.json").write_text(json.dumps(report), encoding="utf-8")
+    telemetry = Telemetry(run_dir / "metrics.sqlite", "sim_s_1")
+    ctx = ScheduleContext(now=0.0, pending_requests=[], generated_buffer_sec=0, inflight_generations=0,
+                          backpressure=False, corner=None, step_index=0, remaining_sec=0)
+    for _ in range(2):
+        telemetry.log_decision(ctx, Decision(action="glue", corner_type="topic_talk", step="glue:resume"))
+    telemetry.log_aired("seg_1", 1.0, "어떤 간식이 떠오르세요?")
+    telemetry.log_aired("seg_2", 2.0, "저는 군고구마가 좋아요.")
+    telemetry.close()
+    _run(tmp_path, "s", 2)  # 계측 DB를 지운 회차
+
+    assert compare.refresh(tmp_path) == (1, 1)
+    filled = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
+    assert filled["glue"]["resume"] == 2 and filled["scripts"] == {
+        "segments": 99, "same_opening_rate": 0.0, "similarity_mean": 0.0, "topic_intros": None,
+        "question_end_rate": 0.5}
+    assert filled["sim"]["silence_total_sec"] == 1.5, "흉내 백엔드가 잰 값은 그대로다"
+    assert compare.refresh(tmp_path) == (0, 1), "두 번 채우지 않는다"
+    assert compare.cli([str(tmp_path), "--refresh"]) == 0
+    assert "돌아왔어요 문구" in capsys.readouterr().out
