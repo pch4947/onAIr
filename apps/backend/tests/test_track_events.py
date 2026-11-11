@@ -80,6 +80,26 @@ class TrackClockTests(unittest.IsolatedAsyncioTestCase):
         redis.hget.return_value = 'song'
         self.assertEqual((await publisher.select_next()).id, 'song')
 
+    async def test_intro_mode_plays_the_first_song_without_an_intro(self):
+        redis = AsyncMock()
+        publisher = HlsPublisher(redis, Settings('127.0.0.1', 3000, track_intro_enabled=True))
+        publisher.journal = Mock()
+        publisher.journal.status.return_value = None
+        first = {**segment('music'), 'id': 'first', 'music_ref': 'yt:first'}
+        later = {**segment('music'), 'id': 'later', 'music_ref': 'yt:later'}
+        opening = {**segment(), 'id': 'opening'}
+        pipe = AsyncMock()
+        pipe.lrange = Mock()
+        pipe.hgetall = Mock()
+        pipe.__aenter__.return_value = pipe
+        redis.pipeline = Mock(return_value=pipe)
+        submissions = {'first': json.dumps({'source': 'first'}), 'later': json.dumps({'source': 'request'})}
+        redis.hmget.side_effect = lambda key, ids: [submissions.get(i) for i in ids]
+        pipe.execute.return_value = (['first', 'opening'], {'first': json.dumps(first), 'opening': json.dumps(opening)})
+        self.assertEqual((await publisher.select_next()).id, 'first')
+        pipe.execute.return_value = (['later', 'opening'], {'later': json.dumps(later), 'opening': json.dumps(opening)})
+        self.assertEqual((await publisher.select_next()).id, 'opening')  # other songs still wait for an intro
+
 
 @unittest.skipUnless(os.environ.get('ONAIR_INTEGRATION_TEST') == '1', 'Requires Redis')
 class TrackRedisTests(unittest.IsolatedAsyncioTestCase):

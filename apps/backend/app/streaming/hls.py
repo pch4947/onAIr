@@ -310,7 +310,15 @@ class HlsPublisher:
                 # A failed reservation must not terminate the entire station.
                 # Other speech can continue while the engine chooses another track.
                 return None
-            ids = [key for key in ids if key in records and json.loads(records[key])['kind'] != 'music']
+            # 첫 곡(first)은 소개 없이 방송 시작에 튼다 (계약 3.3·3.4절). 다른 곡은 소개가 예약해야 나간다
+            music = [key for key in ids if key in records and json.loads(records[key])['kind'] == 'music']
+            first = set()
+            if music:
+                submissions = await self.redis.hmget(self.prefix + ':music-submissions', music)
+                first = {key for key, raw in zip(music, submissions)
+                         if raw and json.loads(raw).get('source') == 'first'}
+            ids = [key for key in ids if key in records
+                   and (json.loads(records[key])['kind'] != 'music' or key in first)]
         candidates = []
         for key in ids:
             if self.current and key == self.current['id']:
