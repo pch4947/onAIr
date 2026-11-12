@@ -271,6 +271,20 @@ class Telemetry:
                     corner_type=corner_type, label=label, event=event, title=title)
         self._db.commit()
 
+    def log_corner_request(self, corner_type: str, reason: str | None = None) -> None:
+        """코너 변경 요청(corner.skip)과 그 처리 — 패널에만 남긴다. reason이 있으면 받아들이지 않았다."""
+        name = self.corner_titles.get(corner_type, corner_type)
+        summary = f"코너 변경 무시 · {name} ({reason})" if reason else f"코너 변경 요청 · {name}"
+        self._event("corner", summary, corner_type=corner_type,
+                    event="request_ignored" if reason else "request", reason=reason)
+        self._db.commit()
+
+    def log_discarded(self, segments: int, returned: int) -> None:
+        """백엔드가 재생하지 않고 버린 멘트(segment.discarded) — 패널에만 남긴다."""
+        summary = f"미송출 멘트 {segments}개 버림" + (f" · 입력 {returned}건 되돌림" if returned else "")
+        self._event("corner", summary, event="discarded", segments=segments, returned=returned)
+        self._db.commit()
+
     def log_station(self, event: str, payload: dict) -> None:
         # station.created 원문 = 방송 시점의 persona 사본 (persona.md 9.4절). 분석은 이 사본을 기준으로 한다
         self._db.execute(

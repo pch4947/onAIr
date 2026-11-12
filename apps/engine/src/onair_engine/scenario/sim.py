@@ -139,6 +139,8 @@ class SimBackend:
         self._next_ref = 0
         self._current_end = 0.0  # 지금 재생 중인 것이 끝나는 시각(time.time 기준)
         self._last_pressure: tuple[str, float] | None = None
+        self._payloads: dict[str, dict] = {}  # 곡 ref → 엔진에 알린 track.queued
+        self.skips: list[dict] = []  # 코너 변경 기록 — 버튼부터 새 코너 첫 멘트의 제출·재생까지
 
     @property
     def engine_done(self) -> bool:
@@ -149,6 +151,10 @@ class SimBackend:
     async def publish_segment(self, sub: SegmentSubmission) -> None:
         self._queue.append(sub)
         self._arrived.set()
+        skip = self.skips[-1] if self.skips else None
+        if skip and skip["segment_id"] is None and sub.corner_type == skip["corner"]:
+            skip["segment_id"] = sub.id  # 고른 코너의 첫 세그먼트 (콜 문구일 수 있다)
+            skip["submit_sec"] = round(self.now() - skip["at"], 1)
         if sub.music_ref and sub.music_ref == self._queued_ref:
             self._queued_ref = None
             self.queue_next_track()  # 소개할 곡을 엔진이 가져갔다 — 백엔드가 다음 곡을 미리 알린다
@@ -181,7 +187,39 @@ class SimBackend:
         if request is not None:
             payload.update(source="request", request_id=request["request_id"],
                            nickname=request.get("nickname"))
+        self._payloads[ref] = payload
         self.engine.on_track_queued(payload)
+
+    # ── 코너 변경 ────────────────────────────────────────────────────
+    async def skip_corner(self, corner: str, control_id: str | None = None) -> None:
+        """테스트 화면의 코너 버튼 — 실제 백엔드(apps/backend/app/test_controls.py)가 하는 일을 흉내 낸다.
+
+        송출기가 아직 손대지 않은 멘트를 대기열에서 버리고 segment.discarded와 corner.skip을 보낸다.
+        재생 중인 것과 미리 인코딩해 둔 분량(buffer_low_sec)은 그대로 나간다 — 곡이 나가는 중이면 곡이 끝나야 바뀐다.
+        버려진 곡 소개의 곡은 다음 곡으로 다시 알린다 (계약 3.2절 — 백엔드가 그 곡의 예약을 풀어야 한다).
+        """
+        ahead = max(0.0, self._current_end - time.time())
+        kept: deque[SegmentSubmission] = deque()
+        discarded: list[SegmentSubmission] = []
+        for sub in self._queue:
+            if ahead < self.sim.buffer_low_sec:
+                kept.append(sub)
+                ahead += sub.duration_ms / 1000 + (self._track_sec(sub) or 0)
+            else:
+                discarded.append(sub)
+        self._queue = kept
+        self.skips.append({"id": control_id, "corner": corner, "at": round(self.now(), 1),
+                           "discarded": len(discarded), "ahead_sec": round(ahead, 1),
+                           "segment_id": None, "submit_sec": None, "play_sec": None})
+        if discarded:
+            await self.engine.on_segments_discarded({"segment_ids": [s.id for s in discarded]})
+        intro = next((s for s in discarded if s.music_ref in self._payloads), None)
+        if intro is not None:
+            if self._queued_ref is not None:  # 그 뒤에 알린 곡은 다음 차례로 돌린다
+                self._playlist.appendleft(self._by_ref[self._queued_ref])
+            self._queued_ref = intro.music_ref
+            self.engine.on_track_queued(self._payloads[intro.music_ref])
+        self.engine.on_corner_skip({"corner": corner})
 
     # ── 재생 ─────────────────────────────────────────────────────────
     def now(self) -> float:
@@ -225,6 +263,9 @@ class SimBackend:
         self.played.append(Played(self._at(), "speech", sec, sub.id, sub.corner_type, script,
                                   audio_ref=sub.audio_ref))
         self._current_end = time.time() + sec
+        for skip in self.skips:
+            if skip["segment_id"] == sub.id:
+                skip["play_sec"] = round(self.now() - skip["at"], 1)
         if not self.engine_done:
             self.engine.on_segment_published(sub.id, time.time())
             self.engine.on_segment_started(sub.id, time.time() + self.sim.broadcast_delay_sec)

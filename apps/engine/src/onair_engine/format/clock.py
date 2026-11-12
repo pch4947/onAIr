@@ -66,6 +66,17 @@ class Clock:
             return ClockEntry(self.fmt.corner(self.fmt.closing))
         return None
 
+    def jump(self, name: str) -> ClockEntry | None:
+        """순환 차례와 상관없이 지금 들어갈 코너 (corner.skip). 순환은 그대로라 그 뒤는 원래 차례로 이어진다.
+
+        오프닝·엔딩으로는 가지 않고, 오프닝 전이나 엔딩이 시작된 뒤에도 가지 않는다 — None.
+        """
+        if (self._phase != "cycle" or name not in self.fmt.corners
+                or name in (self.fmt.opening, self.fmt.closing)):
+            return None
+        sectioned = f"$section:{name}" in self.fmt.cycle  # 분야마다 도는 코너는 첫 분야로
+        return ClockEntry(self.fmt.corner(name), self._sections[0] if sectioned and self._sections else None)
+
     def _cycle_entries(self) -> Iterator[ClockEntry]:
         main = itertools.cycle(self._main) if self._main else None
         for name in itertools.cycle(self.fmt.cycle):

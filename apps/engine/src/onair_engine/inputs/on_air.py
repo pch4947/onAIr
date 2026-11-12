@@ -77,6 +77,15 @@ class OnAirTimeline:
         self._shift_after(entry, entry.end - before)
         return True
 
+    def remove(self, segment_id: str) -> None:
+        """백엔드가 재생하지 않고 버린 세그먼트 (segment.discarded) — 뒤 항목의 추정 시각을 그만큼 당긴다."""
+        entry = self._by_segment.get(segment_id)
+        if entry is None or entry.synced:  # 이미 재생을 시작한 것은 버려진 것이 아니다
+            return
+        del self._by_segment[segment_id]
+        self._shift_after(entry, entry.start - entry.end)
+        self._entries.remove(entry)
+
     def sync_track(self, track_ref: str, started_at: float) -> None:
         """곡 재생 시작 확인 — 아직 확인하지 않은 그 곡 중 가장 앞의 것."""
         for entry in self._entries:

@@ -102,6 +102,19 @@ onair-engine --tts cartesia --max-segments 15 --demo-request "요즘 잠이 안 
 - **신청곡 한마디**: 같은 `request_id`의 `track.queued`가 오면 곡 소개에 넣습니다.
 - **코너 알림**: `pipeline.emit_corner_changed`로 켜고 끕니다. `config/station.example.yaml`에서 켜 두었고, VM의 엔진 서비스가 이 파일을 읽습니다. 코드 기본값은 꺼짐입니다. `corner.changed`를 모르는 백엔드(PR #189 이전)는 이벤트를 격리하므로 그런 백엔드와는 끕니다.
 - 백엔드가 모르는 상태는 바꿔 보내거나 보내지 않습니다 (`domain.wire_state`).
+
+### 코너 변경 (#259)
+
+테스트 화면의 코너 버튼은 백엔드를 거쳐 `segment.discarded`와 `corner.skip`으로 옵니다 (계약 3.2절).
+
+- **`corner.skip`**: 지금 코너를 끝내고 고른 코너로 들어갑니다. 그 뒤는 원래 순환으로 돌아갑니다.
+  - 생성 중이거나 아직 제출하지 않은 멘트는 내보내지 않습니다. 쓰던 곡과 입력은 되돌리고, 입력의 실패 횟수로 세지 않습니다.
+  - 버린 생성은 끝까지 돌지만 새 코너가 그 자리를 기다리지 않습니다. 그동안 동시 생성이 설정값의 두 배까지 늘 수 있습니다.
+  - 진입 조건을 못 채우면(문자 0건, 다음 곡 없음) 대체 코너로 가거나 건너뛰고 순환을 잇습니다. 곡 연속 방지는 적용하지 않습니다.
+  - 형식에 없는 코너, 오프닝·엔딩, 엔딩이 시작된 뒤의 요청은 무시합니다.
+- **`segment.discarded`**: 백엔드가 재생하지 않고 버린 멘트의 입력과 곡을 되돌리고, 그 길이를 버퍼 계산에서 뺍니다.
+- 엔진 패널에는 `코너 변경 요청 · 문자 소개`, `코너 변경 무시 · … (사유)`, `미송출 멘트 3개 버림 · 입력 1건 되돌림`으로 남습니다.
+- 버튼을 눌러도 재생 중인 것과 백엔드가 미리 인코딩한 분량은 그대로 나갑니다. 곡이 나가는 중이면 곡이 끝나야 바뀝니다.
 - 문자·사연·한마디는 백엔드가 보내기 시작해야 실제 방송에서 쓰입니다 (#168, #169, #140).
 
 ### Google Cloud TTS
@@ -239,7 +252,8 @@ python -m onair_engine.scenario config/scenarios/sparse.yaml config/scenarios/fl
   - Redis, HLS 플레이어 지연, 실제 발음은 흉내 내지 않습니다
 - **시나리오 파일** (`config/scenarios/*.yaml`)
   - 방송 설정, 흉내 값(`sim`), 시각별 입력(`inputs`), 배경 채팅(`chatter`), 게시판 사연을 적습니다
-  - 기대 결과(`expect`)를 적으면 회차마다 통과 여부를 판정합니다: `reflected`, `aired_contains`, `not_aired`, `max_silence_sec`, `max_fallback`
+  - 운영자 조작(`controls`)은 테스트 화면의 버튼입니다. 지금은 코너 버튼(`{at, corner}`)만 있습니다. 가짜 백엔드가 실제 백엔드처럼 재생 중인 것과 미리 인코딩한 분량(`sim.buffer_low_sec`)을 뺀 멘트를 버리고 엔진에 알립니다. `demo_buttons.yaml`이 데모의 코너 버튼 구간입니다
+  - 기대 결과(`expect`)를 적으면 회차마다 통과 여부를 판정합니다: `reflected`, `aired_contains`, `not_aired`, `max_silence_sec`, `max_fallback`, `corner_entered`(버튼을 누른 뒤 고른 코너의 첫 멘트가 들리기까지, 방송 지연 포함)
   - `config/scenarios/holdout/`은 검증용입니다. 설정값이나 프롬프트를 고칠 때는 돌리지 않고, 채택하려는 변경이 다른 주제·입력에서도 통하는지 볼 때만 돌립니다
 - **설정값 비교** (`--set`, `--sweep`, `--variant`): 코드를 고치지 않고 값을 바꿔 돌립니다
   - 이름은 `config/chat_rules.yaml`의 항목(`flood_threshold`), 엔진 설정(`engine.target_buffer_sec`, `engine.max_concurrent_generations`), 흉내 값(`sim.llm_quote_miss_rate`)입니다. 틀린 이름과 범위 밖 값은 실행 전에 거절합니다
@@ -252,6 +266,7 @@ python -m onair_engine.scenario config/scenarios/sparse.yaml config/scenarios/fl
     - 말 비율: 말 시간 ÷ (말 + 곡)
     - 곡 사이 토크: 곡과 곡 사이 멘트 길이의 중앙값. 첫 곡 전 오프닝과 마지막 곡 뒤 엔딩은 넣지 않습니다
     - 곡 연속: 곡 소개만 사이에 두고 곡이 이어진 횟수
+    - 코너 변경: 버튼마다 버린 멘트 수, 그대로 나간 분량, 고른 코너 첫 멘트의 제출·재생·청취까지 걸린 시간 (`report.json`의 `sim.corner_skips`)
   - `run-N/run.json`: 재현 정보 — 시나리오(덮어쓴 흉내 값 포함), seed, git 커밋과 커밋하지 않은 변경 여부, 변형과 덮어쓴 설정, LLM. 규칙을 덮어썼으면 그 회차가 쓴 `chat_rules.yaml`도 같이 남습니다
   - `summary.md`: 회차별 핵심 지표, 기대 결과 통과 회차
   - `issues.csv`: 빈 문제 기록표

@@ -43,7 +43,7 @@ from ..telemetry import _read
 from . import compare, review
 from .metrics import METRICS, aggregate
 from .sim import LoopLag, Played, SimBackend, SimTts, tune_dummy_llm
-from .spec import ScenarioSpec, SimSpec, TrackSpec, load_scenario
+from .spec import ControlSpec, ScenarioSpec, SimSpec, TrackSpec, load_scenario
 
 ENGINE_ROOT = Path(__file__).resolve().parents[3]  # apps/engine
 CALLS_PER_MINUTE = 2.5  # 실제 LLM 확인 프롬프트의 추정치 — 2026-11-07 실측(호출 13회)과 말:곡 5:5 기준
@@ -165,7 +165,7 @@ async def _inject(spec: ScenarioSpec, backend: SimBackend, engine: StationEngine
     for i, story in enumerate(spec.board_stories):  # 백엔드는 station.started 직후 후보를 보낸다 (#196)
         engine.on_board_story({"story_id": f"story_sim_{i}", "body": story.body,
                                "nickname": story.nickname, "posted_at": time.time() - 3600})
-    events = [(item.at, item) for item in spec.inputs]
+    events = [(item.at, item) for item in (*spec.inputs, *spec.controls)]
     if spec.chatter is not None:
         c = spec.chatter
         end = c.end if c.end is not None else spec.station.broadcast_minutes * 60
@@ -187,6 +187,11 @@ async def _inject(spec: ScenarioSpec, backend: SimBackend, engine: StationEngine
             rid = f"chatter_{n}"
             backend.played.append(Played(backend.now(), "input", 0, text=f"채팅 {rid} ({who}): {body}"))
             await engine.submit_request("chat", body, who, request_id=rid)
+            continue
+        if isinstance(item, ControlSpec):  # 테스트 화면의 코너 버튼
+            title = engine.telemetry.corner_titles.get(item.corner, item.corner)
+            backend.played.append(Played(backend.now(), "input", 0, text=f"조작 {item.id}: 코너 변경 → {title}"))
+            await backend.skip_corner(item.corner, item.id)
             continue
         rid = f"in_{item.id}"
         shown = item.body if item.kind != "song_request" else f"{item.title} - {item.artist} / {item.body}"
@@ -276,6 +281,11 @@ async def run_one(spec: ScenarioSpec, index: int, run_dir: Path, args: argparse.
         # 이 회차가 도는 동안 실행기의 타이머가 얼마나 늦게 깨어났나 — 크면 동시 실행이 지표를 틀었다
         "loop_lag_ms_p95": lag.percentile(95), "loop_lag_ms_max": lag.percentile(100),
         **_flow(backend.played),
+        # 코너 변경 — 버튼부터 고른 코너의 첫 세그먼트 제출·재생·청취까지 (청취 = 재생 + 방송 지연)
+        "corner_skips": [{**{k: v for k, v in skip.items() if k != "segment_id"},
+                          "heard_sec": None if skip["play_sec"] is None
+                          else round(skip["play_sec"] + spec.sim.broadcast_delay_sec, 1)}
+                         for skip in backend.skips],
         "error": error,
     }
     reflected = _reflections(db, station_id)
@@ -332,13 +342,17 @@ def _check(spec: ScenarioSpec, backend: SimBackend, report: dict,
             passed, detail = e.text in aired, ""
         elif e.type == "not_aired":
             passed, detail = e.text not in aired, ""
+        elif e.type == "corner_entered":
+            heard = next(s["heard_sec"] for s in report["sim"]["corner_skips"] if s["id"] == e.control)
+            passed = heard is not None and (e.within_sec is None or heard <= e.within_sec)
+            detail = "고른 코너에 들어가지 않음" if heard is None else f"{heard:.0f}초 뒤 들림"
         elif e.type == "max_silence_sec":
             value = report["sim"]["silence_max_sec"]
             passed, detail = value <= e.value, f"최대 무음 {value}초"
         else:  # max_fallback
             value = report.get("generation", {}).get("outcomes", {}).get("fallback", 0)
             passed, detail = value <= e.value, f"대체 멘트 {value}건"
-        out.append({"type": e.type, "target": e.input or e.text or e.value, "note": e.note,
+        out.append({"type": e.type, "target": e.input or e.control or e.text or e.value, "note": e.note,
                     "passed": passed, "detail": detail})
     return out
 
@@ -394,6 +408,14 @@ def _write_run(run_dir: Path, spec: ScenarioSpec, index: int, seed: int, args: a
              f"곡 소개만 두고 곡이 이어진 횟수 {sim['back_to_back_songs']}\n"
              f"- 실행 시간: {sim['wall_sec']}초\n- TTS 흉내 평균 지연: {sim['tts_latency_sec'] or '-'}초\n"
              + (f"- LLM 흉내 평균 지연: {sim['llm_latency_sec']}초 (더미 대본)\n" if sim["llm_latency_sec"] else ""))
+    if sim["corner_skips"]:
+        text += ("\n## 코너 변경\n\n청취는 재생에 방송 지연을 더한 값이다. 남은 분량은 버튼을 눌렀을 때 버리지 못하고 "
+                 "그대로 나간 분량(재생 중인 것과 미리 인코딩한 것)이다.\n\n"
+                 "| 시각 | 코너 | 버린 멘트 | 남은 분량 | 첫 멘트 제출 | 재생 | 청취 |\n|---|---|---|---|---|---|---|\n")
+        text += "".join(
+            f"| {_clock(s['at'])} | {titles.get(s['corner'], s['corner'])} | {s['discarded']}개 | {s['ahead_sec']}초 | "
+            + " | ".join("-" if s[k] is None else f"{s[k]}초" for k in ("submit_sec", "play_sec", "heard_sec"))
+            + " |\n" for s in sim["corner_skips"])
     if variant.overrides:
         text += f"- 덮어쓴 설정 ({variant.name}): " + ", ".join(f"{k}={v}" for k, v in variant.overrides) + "\n"
     if sim["error"]:
@@ -451,7 +473,8 @@ def write_summary(out: Path, spec: ScenarioSpec, reports: list[dict]) -> None:
         lines += ["", "## 기대 결과 통과 회차", "", "| 기대 결과 | 통과 |", "|---|---|"]
         for j, e in enumerate(spec.expect):
             passed = sum(1 for r in reports if r["expect"][j]["passed"])
-            lines.append(f"| {e.note or e.type} ({e.input or e.text or e.value}) | {passed}/{len(reports)} |")
+            lines.append(f"| {e.note or e.type} ({e.input or e.control or e.text or e.value}) "
+                         f"| {passed}/{len(reports)} |")
     errors = [f"- 회차 {i}: {r['sim']['error']}" for i, r in enumerate(reports, 1) if r["sim"]["error"]]
     if errors:
         lines += ["", "## 오류", "", *errors]
