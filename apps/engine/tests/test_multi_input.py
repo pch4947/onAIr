@@ -9,6 +9,7 @@ from onair_engine.corners.steps import (
     MULTI_STEER_RULE,
     QUOTE_RULE,
     STEER_RULE,
+    TRACK_LAST_RULE,
     WITH_FEATURE_RULE,
     build_prompt,
 )
@@ -99,6 +100,16 @@ def test_prompt_asks_for_each_chat_separately():
     user = build_prompt("talk", Material(topic="겨울 간식", quotes=[_chat(A, "a"), _chat(B, "b")]), PROFILE).user
     assert MULTI_QUOTE_RULE in user
     assert user.index(A) < user.index(B), "채팅은 한 줄에 한 건씩 고른 순서대로 들어간다"
+
+
+def test_song_intro_with_several_inputs_ends_with_the_song():
+    track = {"track_ref": "yt:1", "title": "가을 아침", "artist": "아이유"}
+    two = build_prompt("music_intro", Material(track=track, quotes=[_chat(A, "a"), _chat(B, "b")]), PROFILE).user
+    one = build_prompt("music_intro", Material(track=track, quotes=[_chat(A, "a")]), PROFILE).user
+    assert TRACK_LAST_RULE in two, "두 건이면 곡을 먼저 소개하고 채팅을 읽는다 — 순서를 정해 준다"
+    assert TRACK_LAST_RULE not in one, "한 건일 때의 프롬프트는 그대로다"
+    talk = build_prompt("talk", Material(topic="겨울 간식", quotes=[_chat(A, "a"), _chat(B, "b")]), PROFILE).user
+    assert TRACK_LAST_RULE not in talk
 
 
 def test_steering_chat_is_quoted_last():

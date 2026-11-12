@@ -44,6 +44,9 @@ MULTI_STEER_RULE = "그리고 마지막에 인용한 채팅의 얘기를 조금 
 # 주 소재(사연·신청곡)가 있는 멘트 — 채팅 때문에 사연이 요약되거나 곡 소개가 밀리면 안 된다
 WITH_FEATURE_RULE = ("이 멘트의 중심은 위에서 지시한 내용이다. 채팅 인용은 그 앞이나 뒤에 짧게 붙이고, "
                      "중심 내용을 줄이지 않는다. 위의 문장 수 제한에 채팅 인용은 넣지 않는다.")
+# 곡 소개 뒤에는 곡이 바로 나간다. 채팅이 한 건일 때는 인용 → 곡 소개 순서로 쓰는데(평가 90건 중 83건),
+# 두 건이 되면 곡을 먼저 소개하고 채팅을 읽는다(36건 중 35건, 2026-11-12 평가) — 순서를 정해 준다
+TRACK_LAST_RULE = "채팅 인용을 모두 마친 뒤에 곡을 소개하고, 곡 소개로 멘트를 끝낸다. 이 멘트 바로 뒤에 곡이 나간다."
 # 몰린 입력은 개인이 아니라 집계로 인정한다 — 특정 채팅을 인용하거나 건수를 지어내지 않는다 (9.2절)
 AGGREGATE_RULE = ("멘트 첫머리에 지금 채팅창에서 아래 화제 얘기가 많이 오간다고 한 문장으로 언급한다. "
                   "특정 채팅을 인용하거나 숫자를 말하지 않는다.")
@@ -373,6 +376,8 @@ def build_prompt(step: str, material: Material, profile: StationProfile, *,
             rule += f" {MULTI_STEER_RULE if len(quotes) > 1 else STEER_RULE}"
         if material.feature_ref:
             rule += f" {WITH_FEATURE_RULE}"
+        if material.track and (len(quotes) > 1 or material.feature_ref):
+            rule += f" {TRACK_LAST_RULE}"
         chats = "\n".join(q.body for q in quotes)
         user += f"\n{rule}\n" + data_block(CHAT, chats)
     if trend := material.extra.get("aggregate"):

@@ -80,7 +80,17 @@ class RecordingLlm:
 # 단계 이름에 +chat을 붙이면 채팅 인용을 넣는다. 사례 파일에 chats가 있으면 거기서, 없으면 stories에서 꺼낸다
 # (stories를 쓰면 같은 사연으로 낭독과 인용 두 경로의 L1을 시험한다)
 _STORY_STEPS = ("story", "text_read")
+# +chat2는 채팅 두 건을 한 멘트에 넣는다 (한 멘트에 입력 여러 건, #267)
 CHAT_SUFFIX = "+chat"
+_CHAT_COUNTS = {"+chat2": 2, CHAT_SUFFIX: 1}
+
+
+def split_entry(entry: str) -> tuple[str, int]:
+    """"talk+chat2" → ("talk", 2). 채팅을 넣지 않는 줄은 0이다."""
+    for suffix, count in _CHAT_COUNTS.items():
+        if entry.endswith(suffix):
+            return entry.removesuffix(suffix), count
+    return entry, 0
 _TRACK_STEPS = ("music_intro", "closing_farewell")
 
 
@@ -102,11 +112,10 @@ class Scenario:
                   for i, t in enumerate(raw.get("tracks", []))]
         news = [FeedItem(n["title"], n["summary"], n["source_url"]) for n in raw.get("news", [])]
         sequence = raw["sequence"]
-        unknown = [s for s in sequence if s.removesuffix(CHAT_SUFFIX) not in STEP_KINDS]
+        unknown = [s for s in sequence if split_entry(s)[0] not in STEP_KINDS]
         if unknown:
             raise SystemExit(f"{path}: 알 수 없는 단계 {unknown} (corners/steps.py STEP_KINDS)")
-        unquotable = [s for s in sequence if s.endswith(CHAT_SUFFIX)
-                      and not STEP_KINDS[s.removesuffix(CHAT_SUFFIX)].quotable]
+        unquotable = [s for s in sequence if split_entry(s)[1] and not STEP_KINDS[split_entry(s)[0]].quotable]
         if unquotable:
             raise SystemExit(f"{path}: 채팅을 인용하지 않는 단계에 +chat을 붙였다 {unquotable}")
         return cls(sequence=sequence, tracks=tracks, news=news,
@@ -185,22 +194,27 @@ async def run_scenario(profile: StationProfile, scenario: Scenario, llm: Recordi
 
 def _material(entry: str, scenario: Scenario, stories, chats, tracks, news) -> tuple[Material, dict] | None:
     """시나리오 한 줄의 소재. 꺼낼 픽스처가 떨어졌으면 None — 그 줄은 건너뛴다."""
-    kind = entry.removesuffix(CHAT_SUFFIX)
+    kind, n_chats = split_entry(entry)
     m = Material(topic=scenario.topic)
     case: dict = {}
-    if entry.endswith(CHAT_SUFFIX):
-        case = next(chats if scenario.chats else stories, None)
-        if case is None:
+    if n_chats:
+        cases = [c for c in (next(chats if scenario.chats else stories, None) for _ in range(n_chats)) if c]
+        if len(cases) < n_chats:
             return None
-        m.quotes = [ListenerRequest(request_id=f"req_{case['id']}", kind="chat" if scenario.chats else "story",
-                                    body=case["body"], requester_ref="eval",
-                                    received_at=time.time())]
+        case = cases[0] if n_chats == 1 else {
+            "id": "+".join(str(c["id"]) for c in cases), "type": "+".join(str(c.get("type")) for c in cases),
+            "expect": next((c["expect"] for c in cases if c.get("expect")), None)}
+        m.quotes = [ListenerRequest(request_id=f"req_{c['id']}", kind="chat" if scenario.chats else "story",
+                                    body=c["body"], requester_ref=f"eval_{c['id']}",
+                                    received_at=time.time()) for c in cases]
     if kind in _STORY_STEPS:
         story = next(stories, None)
         if story is None:
             return None
         case = case or story
         m.items = [{"nickname": "평가", "body": story["body"]}]
+        if m.quotes:  # 방송에서는 사연이 주 소재다 — 채팅을 함께 싣는 프롬프트가 나온다
+            m.feature_ref = f"story_{story['id']}"
     elif kind in _TRACK_STEPS or kind == "artist_talk":
         track = next(tracks, None)
         if track is None:
@@ -231,7 +245,7 @@ async def _run_steps(profile: StationProfile, scenario: Scenario,
     records: list[dict] = []
     aired: list[str] = []
     for step, entry in enumerate(scenario.sequence):
-        kind = entry.removesuffix(CHAT_SUFFIX)
+        kind = split_entry(entry)[0]
         got = _material(entry, scenario, stories, chats, tracks, news)
         if got is None:
             continue
@@ -259,10 +273,13 @@ async def _run_steps(profile: StationProfile, scenario: Scenario,
             "prompt_user": prompt_user,
         }
         if material.quotes and outcome == "aired":
-            # 방송과 같은 검사 — 누락이면 엔진은 그 채팅을 되돌리고, 두 번 빠지면 거절한다
-            chat = material.quotes[0].body
-            rec.update(chat=chat, chat_type=case.get("type"), quote_match=round(quote_match(chat, text), 3),
-                       quote="ok" if quoted(chat, text) else "missing")
+            # 방송과 같은 검사 — 누락이면 엔진은 그 채팅을 되돌리고, 두 번 빠지면 거절한다.
+            # 여러 건을 넣었으면 건마다 보고, 한 건이라도 빠지면 그 멘트를 누락으로 센다
+            each = [{"chat": q.body, "match": round(quote_match(q.body, text), 3), "ok": quoted(q.body, text)}
+                    for q in material.quotes]
+            rec.update(chat=" / ".join(e["chat"] for e in each), chat_type=case.get("type"),
+                       quote_match=min(e["match"] for e in each),
+                       quote="ok" if all(e["ok"] for e in each) else "missing", quotes=each)
         if outcome == "l2_reject":
             rec["l2_rule"] = safety.check_l2(text)
         if outcome == "aired":
@@ -403,8 +420,9 @@ def render_quotes(by_persona: dict[str, list[dict]]) -> list[str]:
     for name, recs in by_persona.items():
         for r in recs:
             if r.get("quote") == "missing":
+                missed = " / ".join(e["chat"] for e in r.get("quotes", []) if not e["ok"]) or r["chat"]
                 head = (f"- **{name} #{r['run']}-{r['step']} {r['corner']}** · 일치 {r['quote_match']:.2f} · "
-                        f"\"{r['chat']}\"")
+                        f"빠진 채팅 \"{missed}\"")
                 lines += [head, f"  > {r['text']}"]
     return [*lines, ""]
 
@@ -489,7 +507,7 @@ async def evaluate(args: argparse.Namespace) -> Path:
                     await judge_records(judge, profile, records)
                 by_persona[name] += records
 
-    ranges = {entry: STEP_KINDS[entry.removesuffix(CHAT_SUFFIX)].seconds
+    ranges = {entry: STEP_KINDS[split_entry(entry)[0]].seconds
               for entry in dict.fromkeys(scenario.sequence)}
     meta = {
         "started": started.strftime("%Y-%m-%d %H:%M"),
