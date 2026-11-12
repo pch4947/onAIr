@@ -58,6 +58,10 @@ CREATE TABLE IF NOT EXISTS topic_plan_log (
 CREATE TABLE IF NOT EXISTS aired_log (
     station_id TEXT, segment_id TEXT, at REAL, script TEXT
 );
+CREATE TABLE IF NOT EXISTS quote_log (
+    job_id TEXT, station_id TEXT, at REAL, corner_type TEXT, step TEXT, request_ref TEXT,
+    kind TEXT, result TEXT, match_ratio REAL, chat TEXT, script TEXT
+);
 CREATE TABLE IF NOT EXISTS event_log (
     station_id TEXT, at REAL, kind TEXT, summary TEXT, data_json TEXT
 );
@@ -220,6 +224,16 @@ class Telemetry:
             title = self.corner_titles.get(corner_type, corner_type)
             self._event("generation", f"생성 · {title} · " + " · ".join(parts),
                         job_id=job_id, corner_type=corner_type, request_ref=request_ref, stages=stages)
+        self._db.commit()
+
+    def log_quote(self, *, job_id: str, corner_type: str, step: str, request_ref: str | None,
+                  kind: str, result: str, match: float, chat: str, script: str,
+                  at: float | None = None) -> None:
+        """인용 검사 하나의 근거 — kind는 chat(채팅 인용)·read(문자 낭독)."""
+        self._db.execute(
+            "INSERT INTO quote_log VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (job_id, self.station_id, time.time() if at is None else at, corner_type, step, request_ref,
+             kind, result, round(match, 3), chat, script))
         self._db.commit()
 
     def log_request_state(self, request_id: str, state) -> None:

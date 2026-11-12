@@ -77,10 +77,17 @@ def test_outcomes_and_rates_from_synthetic_log(tmp_path):
     for event in ("enter", "exit", "skip", "fallback", "enter", "exit"):
         telemetry.log_corner("story_corner" if event in ("skip", "fallback") else "topic_talk", None,
                              event, 0 if event == "enter" else 60_000)
+    telemetry.log_quote(job_id="blocked", corner_type="topic_talk", step="talk", request_ref="in_1", kind="chat",
+                        result="missing", match=0.231, chat="DJ님은 뭐 좋아하세요?", script="저는 군고구마를 좋아해요.", at=1.0)
+    telemetry.log_quote(job_id="ok", corner_type="topic_talk", step="talk", request_ref="in_2", kind="chat",
+                        result="ok", match=1.0, chat="붕어빵은 팥이죠", script="붕어빵은 팥이죠 하신 분이 있네요.", at=1.0)
     telemetry.close()
 
     report = station_report(tmp_path / "m.sqlite", "st_x")
     gen = report["generation"]
+    assert gen["quote_missing"] == [{"corner_type": "topic_talk", "step": "talk", "kind": "chat", "match": 0.231,
+                                     "chat": "DJ님은 뭐 좋아하세요?", "script": "저는 군고구마를 좋아해요."}]
+    assert '누락 · topic_talk · 일치 0.23 · "DJ님은 뭐 좋아하세요?"' in render(report)
     assert gen["outcomes"] == {"ok": 1, "fallback": 1, "reject": 1, "incomplete": 0, "error": 1}
     assert gen["fallback_rate"] == pytest.approx(0.333)
     assert gen["job_sec"] == {"count": 1, "p50": 3.0, "p95": 3.0}, "대체·거부는 지연에 넣지 않는다"
