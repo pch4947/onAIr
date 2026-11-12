@@ -618,7 +618,7 @@ wsl redis-cli XADD engine:st_local_dev:in '*' type request.arrived contract_vers
 - `kind`: `speech`\|`glue`\|`filler`. v1의 `ack`는 없어지고, 사전 렌더 접착 요소(코너 콜 등)는 `glue`다. 백엔드의 BGM 더킹 구분(3.6절)은 그대로 — 셋 다 멘트다.
 - 사연 읽힘 처리(3.5절)는 `request_ref` 대신 `input_refs`에 `story_id`가 있는지로 판단한다.
 - **`reflection_levels`의 값 (C2, 2026-11-12 확정)** — 입력별 정수 하나다. 그 멘트에서 그 입력이 도달한 가장 높은 단계를 싣는다: 인용·낭독은 `2`, 다음 화제가 되었거나(STEER) 한 단계의 주 소재(게시판 사연, 신청곡)면 `3`. 백엔드는 저장만 한다. 키는 항상 `input_refs`와 같다.
-- 지금 엔진은 한 멘트에 입력을 하나만 싣는다(`input_refs`의 길이 0 또는 1). 여러 건을 싣는 것은 대본 검증을 거쳐 따로 넣는다(#157).
+- **한 멘트에 입력 여러 건** (#267) — v2로 보낼 때 엔진은 한 멘트에 입력을 여러 건 실을 수 있다. 채팅은 참여 강도의 `quote_limit`까지(`high`는 2건), 주 소재가 있는 멘트(사연, 신청곡 소개)에는 주 소재와 채팅 1건을 함께 싣는다. `input_refs`의 순서는 주 소재, 그다음 채팅이다. 대본에 실제로 들어간 입력만 싣는다 — 인용 검사에서 빠진 입력은 `pooled`/`inboxed`로 되돌아가고 `input_refs`에 없다. `reflected`는 입력마다 따로 간다. v1로 보내는 동안은 지금처럼 한 건만 싣는다.
 
 ### 10.6 `segment.started` (B→E, 신설 — PR #99 백엔드 리뷰 반영)
 

@@ -100,7 +100,7 @@ onair-engine --tts cartesia --max-segments 15 --demo-request "요즘 잠이 안 
 - **문자**: `text_corner`가 도착 순으로 낭독합니다. 대본에 글이 빠지면 한 번 되돌리고, 또 빠지면 `rejected`입니다.
 - **게시판 사연**: 받은 사연을 모아 LLM으로 주제 관련도를 판정하고, 관련 있는 사연만 `story_corner` 후보로 남깁니다. LLM이 실패하면 주제와 단어가 겹치는 사연만 남기고, 더미 LLM은 모두 남깁니다. 결과는 `story_judge_log`에 기록합니다. 후보 중에서는 주제 일치, 최근 순으로 고릅니다. 제출의 `request_ref`는 `story_id`입니다.
 - **신청곡 한마디**: 같은 `request_id`의 `track.queued`가 오면 곡 소개에 넣습니다.
-- **계약 버전**: 엔진이 백엔드로 보내는 이벤트의 버전은 `transport.contract_version`(환경변수 `ONAIR_CONTRACT_VERSION`이 먼저)으로 정합니다. 기본값 1은 지금까지와 같은 형식입니다. 2로 올리면 `segment.submitted`가 `request_ref` 대신 `input_refs`·`reflection_levels`를 싣고, `request.state`가 `pooled`·`inboxed`·`selected`·`reflected` 같은 v2 값으로 나갑니다(계약 10.4·10.5절). 백엔드가 v1·v2를 함께 받게 배포된 뒤에 올리고, 문제가 생기면 1로 되돌립니다(전환 순서는 계약 10.10절). 받는 쪽은 버전을 가리지 않습니다.
+- **계약 버전**: 엔진이 백엔드로 보내는 이벤트의 버전은 `transport.contract_version`(환경변수 `ONAIR_CONTRACT_VERSION`이 먼저)으로 정합니다. 기본값 1은 지금까지와 같은 형식입니다. 2로 올리면 `segment.submitted`가 `request_ref` 대신 `input_refs`·`reflection_levels`를 싣고, `request.state`가 `pooled`·`inboxed`·`selected`·`reflected` 같은 v2 값으로 나갑니다(계약 10.4·10.5절). 방송 동작도 하나 달라집니다 — 한 멘트에 입력을 여러 건 싣습니다(참여 강도 `high`는 채팅 2건, 사연·신청곡 소개 멘트에는 채팅 1건을 함께, #267). 백엔드가 v1·v2를 함께 받게 배포된 뒤에 올리고, 문제가 생기면 1로 되돌립니다(전환 순서는 계약 10.10절). 받는 쪽은 버전을 가리지 않습니다.
 - **코너 알림**: `pipeline.emit_corner_changed`로 켜고 끕니다. `config/station.example.yaml`에서 켜 두었고, VM의 엔진 서비스가 이 파일을 읽습니다. 코드 기본값은 꺼짐입니다. `corner.changed`를 모르는 백엔드(PR #189 이전)는 이벤트를 격리하므로 그런 백엔드와는 끕니다.
 - 백엔드가 모르는 상태는 바꿔 보내거나 보내지 않습니다 (`domain.wire_state`).
 
@@ -203,6 +203,7 @@ python -m onair_engine.eval --persona config/personas/dodo.yaml --llm claude --j
 ```
 
 - 채팅 인용만 볼 때는 `--cases config/eval_cases_chat.yaml`을 씁니다. 짧은 채팅 20개(주제에 맞는 말, 주제 밖의 말, DJ에게 묻는 말, 주제를 묻는 말, 짧은 반응, 읽으면 안 되는 요청)를 오늘의 이야기와 곡 소개에 번갈아 넣고, 리포트에 채팅 유형 × 단계별 인용 누락 표와 누락된 대본을 붙입니다. 채팅 인용 프롬프트(`corners/steps.py`의 `QUOTE_RULE`)나 인용 검사(`pipeline.quoted`)를 고칠 때 먼저 돌립니다.
+- 한 멘트에 입력 여러 건을 싣는 멘트는 `--cases config/eval_cases_multi.yaml`로 봅니다. 단계 이름 뒤의 `+chat2`는 채팅 두 건을, `story+chat`은 사연과 채팅 한 건을 한 멘트에 넣습니다. 두 건을 넣은 멘트는 한 건이라도 빠지면 누락으로 세고, 건마다의 판정은 `results.jsonl`의 `quotes`에 있습니다. 이 멘트들은 엔진이 계약 v2로 보낼 때만 방송에 나옵니다(#267).
 - 결과: `var/eval/<시각>/report.md` (요약표, 코너별 발화 시간, 경고 붙은 멘트, 전체 대본), `results.jsonl` (멘트 단위 원자료), `run.json` (재현 정보 — 커밋, LLM, 사례 파일), `worktree.diff` (커밋하지 않은 변경이 있을 때)
 - 프롬프트를 고치기 전·후의 결과는 `onair-pairwise`로 견줍니다 (아래 "튜닝 도구")
 - 자동 지표: L1 거부·L2 차단·대체 횟수, 사연 판정 오류(과잉 거부/거부 누락), 금지 문자열 노출(인젝션 성공·개인정보), 인용 누락(넣으라고 준 채팅이 대본에 없다), 말투 이탈 문장(존댓말/반말 종결 어미 — 프롬프트의 예시를 따라 쓴 말끝은 잡지 못합니다), 길이·문장 수 초과, 기호·영어·숫자 누출, 상투어, 입버릇·이름 언급 빈도, 직전 멘트 유사도·첫마디 중복, 지연
@@ -263,7 +264,7 @@ python -m onair_engine.scenario config/scenarios/sparse.yaml config/scenarios/fl
   - 기대 결과(`expect`)를 적으면 회차마다 통과 여부를 판정합니다: `reflected`, `aired_contains`, `not_aired`, `max_silence_sec`, `max_fallback`, `corner_entered`(버튼을 누른 뒤 고른 코너의 첫 멘트가 들리기까지, 방송 지연 포함)
   - `config/scenarios/holdout/`은 검증용입니다. 설정값이나 프롬프트를 고칠 때는 돌리지 않고, 채택하려는 변경이 다른 주제·입력에서도 통하는지 볼 때만 돌립니다
 - **설정값 비교** (`--set`, `--sweep`, `--variant`): 코드를 고치지 않고 값을 바꿔 돌립니다
-  - 이름은 `config/chat_rules.yaml`의 항목(`flood_threshold`), 엔진 설정(`engine.target_buffer_sec`, `engine.max_concurrent_generations`), 흉내 값(`sim.llm_quote_miss_rate`)입니다. 틀린 이름과 범위 밖 값은 실행 전에 거절합니다
+  - 이름은 `config/chat_rules.yaml`의 항목(`flood_threshold`), 엔진 설정(`engine.target_buffer_sec`, `engine.max_concurrent_generations`, `engine.contract_version`), 시나리오의 방송 설정(`station.intensity`), 흉내 값(`sim.llm_quote_miss_rate`)입니다. `engine.contract_version=2`는 한 멘트에 입력 여러 건을 싣는 동작을 켭니다 — 흉내 백엔드는 두 버전을 모두 받습니다. 틀린 이름과 범위 밖 값은 실행 전에 거절합니다
   - `--set 이름=값`은 모든 회차에, `--sweep 이름=값,값`은 값마다 변형을 하나씩, `--variant 이름:설정=값,설정=값`은 여러 값을 함께 바꾼 변형을 만듭니다. 지금 설정은 `base`라는 변형으로 항상 같이 돕니다
   - 변형이 달라도 같은 회차 번호는 같은 seed입니다(입력 도착 시각, TTS·LLM 흉내 지연, 더미 대본이 같습니다). 그래서 회차끼리 짝지어 차이를 봅니다
   - 선별 기준, 인용 창(`reaction_window_sec`), 집계 언급은 사용자 실험의 조건입니다(CORNER_DESIGN 10절). 값을 훑어보는 것은 괜찮지만 한 값으로 굳히지 않습니다
