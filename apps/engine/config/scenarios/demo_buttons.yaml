@@ -1,0 +1,35 @@
+# 데모 시나리오의 코너 버튼 구간 (docs/DEMO_SCENARIO.md 3:00~5:00, #259).
+# 버튼을 누른 뒤 고른 코너가 들리기까지 걸리는 시간을 잰다. demo.yaml과 방송 설정은 같고 버튼만 더했다 —
+# demo.yaml은 튜닝 기준선(ENGINE_TUNING_LOG)과 견주는 파일이라 건드리지 않았다.
+# 스테이션(형식)·페르소나 버튼은 #260·#261에서 넣는다.
+name: demo_buttons
+description: 코너 버튼(주제 토크 → 문자 소개 → 곡 소개)을 1분 간격으로 눌렀을 때 고른 코너가 제때 들리는지 본다.
+station:
+  format: talk
+  corners: [topic_talk, text_corner, story_corner]
+  intensity: mid
+  topic: 겨울 간식
+  # 엔딩은 이미 낸 곡까지 센 남은 시간이 5분 30초보다 적어지면 시작하고, 그 뒤의 버튼은 무시된다.
+  # 12분으로 돌리면 4:54에 엔딩이 시작돼 5:00의 버튼이 무시됐다 (2026-11-12)
+  broadcast_minutes: 18
+board_stories:
+  - {body: "퇴근길에 붕어빵 세 개 사서 집까지 걸으면서 다 먹었어요. 손이 따뜻해서 좋았어요.", nickname: 밤샘러}
+inputs:
+  # 데모 문서: 문자 2건과 신청곡은 미리 보내 두고, 3:00 구간의 채팅은 2:50쯤 보낸다
+  - {at: "1:00", kind: message, who: m1, nickname: 퇴근길, body: "회사 앞에 호떡 노점이 새로 생겼어요. 오늘 처음 먹어 봤는데 꿀이 뜨거웠어요.", id: msg1}
+  - {at: "1:10", kind: message, who: m2, body: "시험 끝나고 친구랑 어묵 먹으러 가요.", id: msg2}
+  - {at: "2:50", kind: chat, who: phone, body: "오늘 너무 피곤해요", id: tired}
+  - {at: "4:30", kind: song_request, who: s1, nickname: 눈사람, title: 첫눈, artist: 가상의 가수, body: "첫눈 오는 날 들으면 좋을 것 같아서요", id: song}
+controls:
+  - {at: "3:00", corner: topic_talk, id: to_talk}
+  - {at: "4:00", corner: text_corner, id: to_text}
+  - {at: "5:00", corner: music_intro, id: to_song}
+expect:
+  # 데모는 버튼마다 1분을 쓴다 — 그 안에 고른 코너가 들려야 한다
+  - {type: corner_entered, control: to_talk, within_sec: 60, note: 주제 토크 버튼 뒤 1분 안에 주제 토크가 들린다}
+  - {type: corner_entered, control: to_text, within_sec: 60, note: 문자 소개 버튼 뒤 1분 안에 문자 소개가 들린다}
+  - {type: corner_entered, control: to_song, within_sec: 60, note: 곡 소개 버튼 뒤 1분 안에 곡 소개가 들린다}
+  - {type: reflected, input: msg1, note: 닉네임 있는 문자가 읽힌다}
+  - {type: reflected, input: msg2, note: 익명 문자가 읽힌다}
+  - {type: reflected, input: song, note: 신청곡을 사연과 함께 소개한다}
+  - {type: max_fallback, value: 0, note: 대체 멘트 없음}

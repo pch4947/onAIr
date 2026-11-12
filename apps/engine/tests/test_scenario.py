@@ -1,6 +1,7 @@
 """시나리오 실행기 — 시나리오 파일, TTS 흉내, 가짜 백엔드, 1회 실행 (#213)."""
 import argparse
 import asyncio
+import dataclasses
 import json
 import random
 from pathlib import Path
@@ -48,6 +49,11 @@ def test_parse_at():
                 {"at": 2, "kind": "chat", "who": "b", "body": "y", "id": "d"}]},  # id 중복
     {"expect": [{"type": "reflected", "input": "none"}]},  # 없는 입력
     {"expect": [{"type": "not_aired"}]},  # text 없음
+    {"controls": [{"at": 1, "corner": "text_corner", "id": "d"},
+                  {"at": 2, "corner": "music_intro", "id": "d"}]},  # 조작 id 중복
+    {"controls": [{"at": 1, "type": "persona", "corner": "text_corner"}]},  # 모르는 조작
+    {"expect": [{"type": "corner_entered", "control": "none"}]},  # 없는 조작
+    {"expect": [{"type": "corner_entered"}]},  # control 없음
     {"station": {"format": "talk", "unknown": 1}},  # 모르는 필드
 ])
 def test_invalid_scenarios_are_rejected(bad):
@@ -58,6 +64,13 @@ def test_invalid_scenarios_are_rejected(bad):
 def test_inputs_get_default_ids():
     spec = ScenarioSpec.model_validate({"name": "x", "inputs": [{"at": "0:10", "kind": "chat", "who": "a", "body": "안녕"}]})
     assert spec.inputs[0].id == "i0" and spec.inputs[0].at == 10
+
+
+def test_controls_get_default_ids_and_can_be_expected():
+    spec = ScenarioSpec.model_validate({
+        "name": "x", "controls": [{"at": "3:00", "corner": "text_corner"}],
+        "expect": [{"type": "corner_entered", "control": "c0", "within_sec": 60}]})
+    assert (spec.controls[0].id, spec.controls[0].at, spec.controls[0].type) == ("c0", 180, "corner_skip")
 
 
 # ── TTS 흉내 ───────────────────────────────────────────────────────────
@@ -196,6 +209,59 @@ def test_song_request_jumps_the_playlist():
     assert backend.engine.calls[-1][1][0]["track"]["title"] == "곡1", "밀려난 곡이 다음 차례다"
 
 
+class SkippableEngine(FakeEngine):
+    async def on_segments_discarded(self, payload):
+        self.calls.append(("on_segments_discarded", (payload,)))
+
+
+def test_corner_skip_discards_untouched_segments_and_times_the_new_corner():
+    backend = _backend(buffer_low_sec=1.5)
+    backend.engine = SkippableEngine()
+
+    async def scenario():
+        backend.queue_next_track()  # sim:1 곡1
+        await backend.notify_station("station.started", {})
+        for sid in ("s1", "s2", "s3"):
+            await backend.publish_segment(_sub(sid, ms=1000))
+        await backend.publish_segment(_sub("intro", ms=1000, music_ref="sim:1"))  # 다음 곡(sim:2 곡2)을 알린다
+        before = len(backend.engine.calls)
+        await backend.skip_corner("text_corner", "to_text")
+        calls = backend.engine.calls[before:]
+        await backend.publish_segment(_sub("old", ms=100))  # 다른 코너의 멘트는 세지 않는다
+        first = dataclasses.replace(_sub("new", ms=100), corner_type="text_corner")
+        await backend.publish_segment(first)
+        await backend.publish_segment(dataclasses.replace(first, id="new2"))
+        await backend._play_segment(first)
+        return calls
+
+    calls = asyncio.run(scenario())
+    # 재생할 것이 없으면 미리 인코딩할 분량(1.5초)을 채울 때까지 앞의 둘은 그대로 나간다
+    assert [(name, args[0]) for name, args in calls if name != "on_track_queued"] == [
+        ("on_segments_discarded", {"segment_ids": ["s3", "intro"]}), ("on_corner_skip", {"corner": "text_corner"})]
+    assert [name for name, _ in calls] == ["on_segments_discarded", "on_track_queued", "on_corner_skip"]
+    requeued = next(args[0] for name, args in calls if name == "on_track_queued")
+    assert requeued["track"]["track_ref"] == "sim:1", "소개가 버려진 곡을 다음 곡으로 다시 알린다"
+    backend.queue_next_track()
+    assert backend.engine.calls[-1][1][0]["track"]["title"] == "곡2", "그 뒤에 알렸던 곡이 다음 차례다"
+    skip, = backend.skips
+    assert (skip["id"], skip["discarded"], skip["ahead_sec"], skip["segment_id"]) == ("to_text", 2, 2.0, "new")
+    assert skip["submit_sec"] is not None and skip["play_sec"] is not None
+
+
+def test_corner_skip_keeps_everything_when_little_is_queued():
+    backend = _backend(buffer_low_sec=15)
+    backend.engine = SkippableEngine()
+
+    async def scenario():
+        await backend.notify_station("station.started", {})
+        await backend.publish_segment(_sub("s1", ms=1000))
+        await backend.skip_corner("text_corner")
+
+    asyncio.run(scenario())
+    assert [name for name, _ in backend.engine.calls] == ["on_corner_skip"]
+    assert backend.skips[0]["discarded"] == 0 and backend.skips[0]["play_sec"] is None
+
+
 def test_after_engine_finishes_the_queue_is_recorded_without_waiting():
     backend = _backend()
 
@@ -246,7 +312,9 @@ def test_run_one_with_dummy_llm(tmp_path, monkeypatch):
         "sim": {"tts_latency_base_sec": 0, "tts_latency_per_audio_sec": 0, "broadcast_delay_sec": 0},
         "tracks": [{"title": "곡", "artist": "가수", "sec": 5}],
         "inputs": [{"at": 0, "kind": "message", "who": "a", "nickname": "밤샘러", "body": "붕어빵 먹었어요", "id": "m"}],
-        "expect": [{"type": "max_fallback", "value": 0}, {"type": "not_aired", "text": "절대없는문구"}],
+        "controls": [{"at": 1, "corner": "text_corner", "id": "skip"}],
+        "expect": [{"type": "max_fallback", "value": 0}, {"type": "not_aired", "text": "절대없는문구"},
+                   {"type": "corner_entered", "control": "skip"}],
     })
     args = argparse.Namespace(llm="dummy", llm_model=None, llm_base_url=None, llm_reasoning_effort=None,
                               minutes=None, persona=None, tts="sim", repeat=1, parallel=1, note="점검")
@@ -254,7 +322,11 @@ def test_run_one_with_dummy_llm(tmp_path, monkeypatch):
     report = asyncio.run(asyncio.wait_for(runner.run_one(spec, 0, tmp_path / "run-1", args, variant), timeout=120))
     assert report["sim"]["error"] is None
     assert report["generation"]["jobs"] > 0
-    assert [e["passed"] for e in report["expect"]] == [True, True]
+    assert [e["passed"] for e in report["expect"]][:2] == [True, True]
+    # 1분 방송이라 버튼이 엔딩 뒤에 올 수도 있다 — 기록과 판정이 남는지만 본다
+    skip, = report["sim"]["corner_skips"]
+    assert skip["id"] == "skip" and report["expect"][2]["passed"] == (skip["heard_sec"] is not None)
+    assert "## 코너 변경" in (tmp_path / "run-1" / "report.md").read_text(encoding="utf-8")
     for name in ("transcript.md", "report.md", "report.json", "run.json", "played.json"):
         assert (tmp_path / "run-1" / name).exists()
     played = json.loads((tmp_path / "run-1" / "played.json").read_text(encoding="utf-8"))["played"]

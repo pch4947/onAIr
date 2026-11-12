@@ -249,6 +249,20 @@ class StationEngine:
         if isinstance(request_id := payload.get("request_id"), str):
             await self.scheduler.cancel_request(request_id)
 
+    def on_corner_skip(self, payload: dict) -> None:
+        """운영자가 고른 코너로 넘어간다 (계약 3.2절 corner.skip). 있는 코너인지는 편성 관리자가 가린다."""
+        corner = payload.get("corner")
+        if not isinstance(corner, str) or not corner:
+            raise ValueError(f"corner.skip에 코너가 없다: {payload!r}"[:200])
+        self.scheduler.skip_to(corner)
+
+    async def on_segments_discarded(self, payload: dict) -> None:
+        """백엔드가 재생하지 않고 버린 멘트 (계약 3.2절 segment.discarded)."""
+        ids = payload.get("segment_ids")
+        if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+            raise ValueError(f"segment.discarded 형식 오류: {payload!r}"[:200])
+        await self.scheduler.discard_segments(ids)
+
     def on_segment_published(self, segment_id: object, at: object) -> None:
         if isinstance(segment_id, str) and isinstance(at, (int, float)):
             self.scheduler.on_segment_published(segment_id, float(at))

@@ -90,6 +90,20 @@ class InputSpec(_Spec):
         return self
 
 
+class ControlSpec(_Spec):
+    """운영자 조작 — 테스트 화면의 버튼. 가짜 백엔드가 실제 백엔드처럼 엔진에 알린다 (계약 3.2절)."""
+
+    at: float  # 방송 시작(station.started) 기준 초
+    type: Literal["corner_skip"] = "corner_skip"
+    corner: str  # 형식 파일의 코너 키 (topic_talk, text_corner, music_intro 등)
+    id: str | None = None  # expect에서 가리킬 이름
+
+    @field_validator("at", mode="before")
+    @classmethod
+    def _at(cls, value):
+        return parse_at(value)
+
+
 class ChatterSpec(_Spec):
     """배경 채팅 — 정해진 줄에서 무작위로 고른다. 도착 간격은 지수분포(평균 60/per_minute초)."""
 
@@ -113,9 +127,12 @@ class StorySpec(_Spec):
 class ExpectSpec(_Spec):
     """회차마다 판정하는 기대 결과."""
 
-    type: Literal["reflected", "aired_contains", "not_aired", "max_silence_sec", "max_fallback"]
+    type: Literal["reflected", "aired_contains", "not_aired", "max_silence_sec", "max_fallback",
+                  "corner_entered"]
     input: str | None = None  # reflected: inputs의 id
-    within_sec: float | None = None  # reflected: 도착부터 재생 시작까지 (방송 지연 포함)
+    control: str | None = None  # corner_entered: controls의 id
+    # reflected: 도착부터 재생 시작까지, corner_entered: 버튼부터 새 코너 첫 멘트가 들리기까지 (둘 다 방송 지연 포함)
+    within_sec: float | None = None
     text: str | None = None  # aired_contains, not_aired
     value: float | None = None  # max_silence_sec, max_fallback
     note: str | None = None  # 사람이 읽을 설명
@@ -123,7 +140,8 @@ class ExpectSpec(_Spec):
     @model_validator(mode="after")
     def _check(self) -> ExpectSpec:
         need = {"reflected": "input", "aired_contains": "text", "not_aired": "text",
-                "max_silence_sec": "value", "max_fallback": "value"}[self.type]
+                "max_silence_sec": "value", "max_fallback": "value",
+                "corner_entered": "control"}[self.type]
         if getattr(self, need) is None:
             raise ValueError(f"{self.type}에는 {need}가 필요하다")
         return self
@@ -137,6 +155,7 @@ class ScenarioSpec(_Spec):
     tracks: list[TrackSpec] = Field(default_factory=lambda: list(DEFAULT_TRACKS), min_length=1)
     board_stories: list[StorySpec] = Field(default_factory=list)
     inputs: list[InputSpec] = Field(default_factory=list)
+    controls: list[ControlSpec] = Field(default_factory=list)
     chatter: ChatterSpec | None = None
     expect: list[ExpectSpec] = Field(default_factory=list)
 
@@ -150,6 +169,14 @@ class ScenarioSpec(_Spec):
         unknown = [e.input for e in self.expect if e.input is not None and e.input not in ids]
         if unknown:
             raise ValueError(f"expect가 없는 입력을 가리킨다: {unknown}")
+        for i, control in enumerate(self.controls):
+            control.id = control.id or f"c{i}"
+        control_ids = [control.id for control in self.controls]
+        if len(set(control_ids)) != len(control_ids):
+            raise ValueError("controls의 id가 겹친다")
+        unknown = [e.control for e in self.expect if e.control is not None and e.control not in control_ids]
+        if unknown:
+            raise ValueError(f"expect가 없는 조작을 가리킨다: {unknown}")
         return self
 
 

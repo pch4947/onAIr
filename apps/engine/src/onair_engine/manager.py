@@ -281,6 +281,10 @@ class EngineManager:
                 engine.on_segment_published(payload.get("segment_id"), payload.get("at"))
         elif event_type == "segment.started":  # 계약 v2 (10.6절)
             engine.on_segment_started(payload.get("segment_id"), payload.get("started_at"))
+        elif event_type == "segment.discarded":  # 코너 변경 — 백엔드가 버린 멘트를 먼저 알린다 (#259)
+            await engine.on_segments_discarded(payload)
+        elif event_type == "corner.skip":
+            engine.on_corner_skip(payload)
         elif event_type == "station.closed":
             engine.stop()  # 방송 태스크가 끝나면 _run_station이 방을 정리한다
         elif event_type:

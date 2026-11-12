@@ -161,9 +161,19 @@ class Scheduler:
         # 순서 보장 제출 — 순번 발급, 다음에 낼 순번, 끝났지만 앞 순번을 기다리는 결과
         self._seq = 0
         self._next_pub = 0
-        self._ready: dict[int, tuple[SegmentSubmission | None, int, Anchor | None]] = {}
+        self._ready: dict[int, tuple[SegmentSubmission | None, int, Anchor | None,
+                                     GenerationJob | None]] = {}
         self._seq_run: dict[int, CornerRun] = {}  # 순번 → 그것을 편성한 코너 (코너 예산 — #220)
         self._deferred: PlannedStep | None = None  # 만들 때를 기다리는 곡 소개 (#239)
+        # 코너 변경 (#259) — 운영자가 고른 코너, 클락 대신 들어갈 코너
+        self._jump: str | None = None
+        self._forced: ClockEntry | None = None
+        self._jobs: dict[int, GenerationJob] = {}  # 순번 → 생성 중인 작업
+        self._settling: set[int] = set()  # 생성이 끝나 결과를 정리하는 중인 순번 — 입력은 그 작업이 정리한다
+        self._abandoned: set[int] = set()  # 코너 변경으로 버린 순번 중 생성이 아직 끝나지 않은 것
+        # 제출했지만 재생 시작을 확인하지 못한 세그먼트 — 백엔드가 버리면 곡·입력을 되돌린다
+        self._unaired: dict[str, tuple[SegmentSubmission, GenerationJob | None, int]] = {}
+        self._announced_segment: str | None = None
         self._pub_lock = asyncio.Lock()
 
     @property
@@ -224,8 +234,34 @@ class Scheduler:
         elif request_id in self._generating:
             self._discard.add(request_id)
 
+    def skip_to(self, corner_type: str) -> None:
+        """운영자가 고른 코너로 넘어간다 (계약 3.2절 corner.skip). 편성 루프가 다음 차례에 지금 코너를 끝낸다."""
+        self._jump = corner_type
+
+    async def discard_segments(self, segment_ids: list[str]) -> None:
+        """백엔드가 재생하지 않고 버린 세그먼트 (계약 3.2절 segment.discarded).
+
+        소개하려던 곡과 인용한 입력을 되돌리고, 그 분량을 버퍼 계산과 송출 위치 추정에서 뺀다.
+        모르는 세그먼트와 이미 재생을 시작한 세그먼트는 무시한다.
+        """
+        dropped = returned = 0
+        for segment_id in segment_ids:
+            entry = self._unaired.get(segment_id)
+            if entry is None:
+                continue
+            sub, job, track_ms = entry
+            dropped += 1
+            self._produced_ms -= sub.duration_ms + track_ms
+            self.timeline.remove(segment_id)
+            if segment_id == self._announced_segment:  # 화면을 바꿀 세그먼트가 사라졌다 — 다음 세그먼트가 다시 알린다
+                self._announced_corner = None
+            returned += await self._take_back(sub, job)
+        if dropped:
+            self.telemetry.log_discarded(dropped, returned)
+
     def on_segment_published(self, segment_id: str, at: float) -> None:
         """PUBLISHED — 대본을 송출 이력으로 옮긴다 (context-memory 3.1절). 재전달은 무시한다."""
+        self._unaired.pop(segment_id, None)
         script = self.pipeline.take_aired(segment_id)
         if script is not None:
             self.telemetry.log_aired(segment_id, at, script)
@@ -250,6 +286,7 @@ class Scheduler:
 
     def on_segment_started(self, segment_id: str, started_at: float) -> None:
         """재생 시작 확인 — 인용이 들어 있으면 반영 확정 (CORNER_DESIGN 9.3, 9.4절). 재전달은 무시한다."""
+        self._unaired.pop(segment_id, None)
         if not self.timeline.sync_started(segment_id, started_at):
             return
         quoted = self._quoted.pop(segment_id, None)
@@ -331,6 +368,8 @@ class Scheduler:
             if max_segments is not None and self._seq >= max_segments:
                 break
             await self._expire_inputs(time.time())
+            if self._jump is not None:
+                await self._cut_corner()
             ctx = self._snapshot()
             blocked_sec = self.pipeline.tts_blocked_until - ctx.now
             if blocked_sec > 0:  # 합성할 수 없으니 LLM도 부르지 않는다. 입력은 창이 지나면 만료된다
@@ -372,9 +411,10 @@ class Scheduler:
                     criterion=selection.criterion if selection else None,
                     material=job.material.extra.get("material")))
                 seq = self._reserve()
+                self._jobs[seq] = job
                 asyncio.create_task(self._generate(job, seq))
             await asyncio.sleep(0)  # 생성 태스크에 실행 양보
-        while self._inflight > 0:  # 진행 중 생성 마무리 대기
+        while self._inflight > 0 or self._abandoned:  # 진행 중 생성 마무리 대기 (버린 생성도 계측을 쓴다)
             await asyncio.sleep(0.1)
         if max_segments is None:  # 방송 종료 — 남은 입력은 반영되지 못했다 (관통 테스트는 중간에 끊을 뿐이다)
             leftovers = [*self.pool.drain(), *self.sources.inbox.drain(), *self._song_requests.values()]
@@ -407,10 +447,13 @@ class Scheduler:
         empty = 0
         while True:
             if self._run is None:
-                entry = self.clock.next(ctx.remaining_sec)
-                if entry is None:
-                    return None
-                entry = self._admit(entry)
+                if self._forced is not None:  # 운영자가 고른 코너 — 못 들어가면 원래 순환으로 이어진다
+                    entry, self._forced = self._admit(self._forced, forced=True), None
+                else:
+                    entry = self.clock.next(ctx.remaining_sec)
+                    if entry is None:
+                        return None
+                    entry = self._admit(entry)
                 if entry is None:
                     empty += 1
                     if empty >= _MAX_EMPTY_CORNERS:
@@ -446,9 +489,12 @@ class Scheduler:
             if empty >= _MAX_EMPTY_CORNERS:
                 return _WAIT
 
-    def _admit(self, entry: ClockEntry) -> ClockEntry | None:
-        """진입 조건(requires)을 못 채우면 대체 코너로, 대체도 없으면 이번 차례를 건너뛴다."""
-        if self._holds_song(entry.corner):
+    def _admit(self, entry: ClockEntry, *, forced: bool = False) -> ClockEntry | None:
+        """진입 조건(requires)을 못 채우면 대체 코너로, 대체도 없으면 이번 차례를 건너뛴다.
+
+        forced는 운영자가 고른 코너다 — 곡 연속 방지로 미루지 않는다.
+        """
+        if not forced and self._holds_song(entry.corner):
             self._songs_held += 1
             self.telemetry.log_corner(entry.corner.corner_type, entry.label, "hold", self._produced_ms,
                                       entry.corner.title)
@@ -465,6 +511,53 @@ class Scheduler:
             self._skip_logged.add(key)
             self.telemetry.log_corner(*key, "skip", self._produced_ms, entry.corner.title)
         return None
+
+    async def _cut_corner(self) -> None:
+        """지금 코너를 끝내고 운영자가 고른 코너를 다음 차례로 잡는다 (#259).
+
+        아직 제출하지 않은 멘트(생성 중이거나 앞 순번을 기다리는 것)는 내보내지 않고 곡과 입력을 되돌린다.
+        이미 제출한 것 중 재생 전인 멘트는 백엔드가 버리고 segment.discarded로 알린다.
+        버린 생성은 끝까지 돌게 두되 새 코너가 그 자리를 기다리지 않게 동시 생성 한도를 새로 연다.
+        """
+        corner_type, self._jump = self._jump, None
+        entry = self.clock.jump(corner_type)
+        if entry is None:
+            self.telemetry.log_corner_request(
+                corner_type, "지금은 바꿀 수 없는 코너" if corner_type in self.fmt.corners
+                else "이 형식에 없는 코너")
+            return
+        self.telemetry.log_corner_request(corner_type)
+        async with self._pub_lock:
+            for seq in range(self._next_pub, self._seq):
+                if seq in self._ready:  # 생성은 끝났고 앞 순번을 기다리던 것
+                    sub, _, _, job = self._ready.pop(seq)
+                    if sub is not None:
+                        await self._take_back(sub, job)
+                    continue
+                self._abandoned.add(seq)
+                self._inflight -= 1
+                self._spend(seq, None)
+                job = self._jobs.get(seq)
+                if job is None or seq in self._settling:
+                    continue
+                self._put_back_track(job)
+                for req in _inputs(job):
+                    self._generating.pop(req.request_id, None)
+                    await self._return_input(req)
+            self._next_pub = self._seq
+        self._sem = asyncio.Semaphore(self.max_concurrent)
+        self._steer_pending = False
+        if self._deferred is not None:  # 만들 때를 기다리던 곡 소개 — 곡을 되돌린다
+            self.sources.tracks.put_back(self._deferred.items[0])
+            self._deferred = None
+        if self._run is not None:
+            self.telemetry.log_corner(self._run.spec.corner_type, self._run.label, "exit",
+                                      self._produced_ms, self._run.spec.title)
+            self._run.closed = True
+            if self._run.pending == 0:
+                self._log_corner_length(self._run)
+            self._run = None
+        self._forced = entry
 
     def _plays_song(self, corner: CornerSpec) -> bool:
         """곡을 소개하는(틀게 하는) 코너. 엔딩은 마지막 곡이 있어도 건너뛰지 않는다."""
@@ -728,14 +821,24 @@ class Scheduler:
     async def _generate(self, job: GenerationJob, seq: int) -> None:
         self._inflight += 1
         sub: SegmentSubmission | None = None
-        inputs = [*job.material.quotes, *([job.feature] if job.feature else [])]
+        inputs = _inputs(job)
         for req in inputs:
             self._generating[req.request_id] = req
         try:
             async with self._sem:
+                if seq in self._abandoned:  # 차례를 기다리는 사이 코너가 바뀌었다 — 입력은 이미 되돌렸다
+                    return
                 for req in inputs:
                     await self._transition(req, RequestState.GENERATING)
+                if seq in self._abandoned:
+                    return
                 sub = await self.pipeline.run(job)
+                if seq in self._abandoned:  # 만드는 사이 코너가 바뀌었다 — 결과를 버린다
+                    if sub is not None:
+                        self.pipeline.take_aired(sub.id)
+                    sub = None
+                    return
+                self._settling.add(seq)
                 if any(req.request_id in self._discard for req in inputs):
                     sub = None  # 취소·철회됐다 — 만든 결과를 내보내지 않는다
                     # 취소된 신청곡이 아니면 곡은 잘못이 없다 — 다음 곡 소개에 쓴다
@@ -754,7 +857,7 @@ class Scheduler:
                     if sub.request_ref == req.request_id:
                         self._quoted[sub.id] = (req, job)
                         await self._transition(req, RequestState.GENERATED)
-                        if job.material.extra.get("steer"):
+                        if job.material.extra.get("steer") and seq not in self._abandoned:
                             self._apply_steer(req, job, sub.id)
                     else:  # 인용이 빠졌거나 제공자 장애로 filler 대체됨 — 반영되지 않았다
                         await self._requeue_or_reject(req, job)
@@ -763,19 +866,29 @@ class Scheduler:
             # 파이프라인이 재시도·filler 대체까지 했는데도 실패한 경우다 (TTS 전면 장애 등)
             logger.exception("GENERATION_FAILED %s %s/%s", job.job_id, job.corner_type, job.step)
             sub = None
-            self._put_back_track(job)
-            for req in inputs:
-                if req.state == RequestState.GENERATING:
-                    await self._requeue_or_reject(req, job)
+            if seq not in self._abandoned or seq in self._settling:
+                self._put_back_track(job)
+                for req in inputs:
+                    if req.state == RequestState.GENERATING:
+                        await self._requeue_or_reject(req, job)
         finally:
-            self._inflight -= 1
-            if job.material.extra.get("steer"):
-                self._steer_pending = False
-            for req in inputs:
-                self._generating.pop(req.request_id, None)
-            # 실패해도 순번은 비워야 뒤 순번이 나간다. 곡 길이는 백엔드가 실제로 틀 곡(music_ref)만 센다
-            track_ms = int((job.material.track or {}).get("duration_ms") or 0)
-            await self._complete(seq, sub, track_ms if sub and sub.music_ref else 0, job.anchor)
+            self._jobs.pop(seq, None)
+            settled = seq in self._settling
+            self._settling.discard(seq)
+            if seq in self._abandoned:
+                # 순번·동시 생성 수는 코너를 바꿀 때 정리했다. 결과를 정리하던 중이었으면 여기서 되돌린다
+                self._abandoned.discard(seq)
+                if settled and sub is not None:
+                    await self._take_back(sub, job)
+            else:
+                self._inflight -= 1
+                if job.material.extra.get("steer"):
+                    self._steer_pending = False
+                for req in inputs:
+                    self._generating.pop(req.request_id, None)
+                # 실패해도 순번은 비워야 뒤 순번이 나간다. 곡 길이는 백엔드가 실제로 틀 곡(music_ref)만 센다
+                track_ms = int((job.material.track or {}).get("duration_ms") or 0)
+                await self._complete(seq, sub, track_ms if sub and sub.music_ref else 0, job.anchor, job)
 
     def _put_back_track(self, job: GenerationJob) -> None:
         """곡 소개 멘트가 나가지 못했다 — 소개하려던 곡을 다음 곡 소개 차례로 돌린다 (#216)."""
@@ -791,30 +904,68 @@ class Scheduler:
                 job.provider_failed = True
                 await self._requeue_or_reject(req, job)
 
+    async def _take_back(self, sub: SegmentSubmission, job: GenerationJob | None) -> int:
+        """만들었지만 방송에 나가지 않게 된 세그먼트 — 소개하려던 곡과 인용한 입력을 되돌린다 (#259).
+
+        되돌린 입력 수를 돌려준다.
+        """
+        self._unaired.pop(sub.id, None)
+        self.pipeline.take_aired(sub.id)
+        if job is not None:
+            self._put_back_track(job)
+        quoted = self._quoted.pop(sub.id, None)
+        if quoted is None:
+            return 0
+        await self._return_input(quoted[0])
+        return 1
+
+    async def _return_input(self, req: ListenerRequest) -> None:
+        """코너 변경으로 나가지 못한 입력 — 입력 탓이 아니므로 실패로 세지 않고 제자리로 되돌린다 (#259)."""
+        if req.request_id in self._discard:  # 생성 중에 취소·철회됐다
+            self._discard.discard(req.request_id)
+            await self._transition(req, RequestState.CANCELLED)
+        elif req.kind == SONG_REQUEST:  # 곡도 함께 되돌아간다 — 다음 곡 소개가 한마디를 다시 쓴다
+            self._song_requests[req.request_id] = req
+            await self._transition(req, RequestState.INBOXED)
+        else:
+            if req.kind not in (MESSAGE, BOARD_STORY):
+                self._forget_quote(req)
+                self._last_quote_at = float("-inf")  # 인용이 나가지 않았다 — 인용 간격을 다시 세지 않는다
+            await self._put_back_input(req)
+
+    def _forget_quote(self, req: ListenerRequest) -> None:
+        self.selector.forget(req)
+        if self._last_requester == req.requester_ref:  # 인용이 나가지 않았으니 연속 금지에 걸지 않는다
+            self._last_requester = None
+
+    async def _put_back_input(self, req: ListenerRequest) -> None:
+        """입력을 꺼내 온 곳으로 되돌린다."""
+        if req.kind == BOARD_STORY:  # 상태를 알릴 곳이 없다
+            self.sources.stories.put_back(req)
+            await self._transition(req, RequestState.QUEUED)
+        elif req.kind == MESSAGE:
+            self.sources.inbox.put_back(req)
+            await self._transition(req, RequestState.INBOXED)
+        else:
+            await self._transition(req, RequestState.QUEUED)
+            self.pool.put_back(req)
+
     async def _requeue_or_reject(self, req: ListenerRequest, job: GenerationJob) -> None:
         if req.kind == SONG_REQUEST:  # 곡은 소개 실패와 상관없이 나간다 — 한마디만 다시 말할 차례가 없다
             await self._transition(req, RequestState.EXPIRED)
             return
-        if req.kind == BOARD_STORY:  # 장애가 지나면 다시 고를 수 있다. 상태를 알릴 곳이 없다
-            self.sources.stories.put_back(req)
-            await self._transition(req, RequestState.QUEUED)
+        if req.kind == BOARD_STORY:  # 장애가 지나면 다시 고를 수 있다
+            await self._put_back_input(req)
             return
         if req.kind != MESSAGE:
-            self.selector.forget(req)
-            if self._last_requester == req.requester_ref:  # 인용이 나가지 않았으니 연속 금지에 걸지 않는다
-                self._last_requester = None
+            self._forget_quote(req)
         # 제공자 장애는 입력 탓이 아니다 — 세지 않고 되돌려, 창이 지나면 만료되게 둔다
         failures = self._failures.get(req.request_id, 0) + (0 if job.provider_failed else 1)
         self._failures[req.request_id] = failures
         if failures >= _MAX_REQUEST_FAILURES:
             await self._transition(req, RequestState.REJECTED)
             return
-        if req.kind == MESSAGE:
-            self.sources.inbox.put_back(req)
-            await self._transition(req, RequestState.INBOXED)
-            return
-        await self._transition(req, RequestState.QUEUED)
-        self.pool.put_back(req)
+        await self._put_back_input(req)
 
     async def _transition(self, req: ListenerRequest, state: RequestState) -> None:
         req.state = state
@@ -847,16 +998,16 @@ class Scheduler:
                                   run.spec.title)
 
     async def _complete(self, seq: int, sub: SegmentSubmission | None, track_ms: int = 0,
-                        anchor: Anchor | None = None) -> None:
+                        anchor: Anchor | None = None, job: GenerationJob | None = None) -> None:
         """순번 seq의 결과를 받아, 앞 순번이 다 나갔으면 차례대로 제출한다."""
         self._spend(seq, sub)
-        self._ready[seq] = (sub, track_ms, anchor)
+        self._ready[seq] = (sub, track_ms, anchor, job)
         async with self._pub_lock:
             while self._next_pub in self._ready:
-                ready, ms, seg_anchor = self._ready.pop(self._next_pub)
+                ready, ms, seg_anchor, seg_job = self._ready.pop(self._next_pub)
                 self._next_pub += 1
                 if ready is not None:
-                    await self._publish(ready, ms, seg_anchor)
+                    await self._publish(ready, ms, seg_anchor, seg_job)
 
     async def _announce_corner(self, sub: SegmentSubmission) -> None:
         """코너 첫 세그먼트 제출 전에 알린다. 백엔드가 그 세그먼트 재생 시작에 화면을 바꾼다 (계약 10.7절)."""
@@ -865,13 +1016,15 @@ class Scheduler:
                 or sub.corner_type == self._announced_corner):
             return
         self._announced_corner = sub.corner_type
+        self._announced_segment = sub.id
         await self.transport.notify_station("corner.changed", {
             "corner": sub.corner_type, "title": corner.title, "segment_id": sub.id,
             "contract": {kind: str(corner.mode(kind)) for kind in (CHAT, MESSAGE, SONG_REQUEST)},
         })
 
     async def _publish(self, sub: SegmentSubmission, track_ms: int = 0,
-                       anchor: Anchor | None = None) -> None:
+                       anchor: Anchor | None = None, job: GenerationJob | None = None) -> None:
+        self._unaired[sub.id] = (sub, job, track_ms)
         if anchor is not None:  # 첫 곡 전이나 앵커 없는 접착 문구는 송출 위치를 옮기지 않는다
             self.timeline.append(sub.id, anchor, sub.duration_ms, time.time(),
                                  track_ref=sub.music_ref, track_ms=track_ms)
@@ -880,3 +1033,8 @@ class Scheduler:
         self._submitted += 1
         await self._announce_corner(sub)
         await self.transport.publish_segment(sub)
+
+
+def _inputs(job: GenerationJob) -> list[ListenerRequest]:
+    """이 작업이 쥐고 있는 청취자 입력 — 인용할 채팅과 주 소재(문자·사연·신청곡)."""
+    return [*job.material.quotes, *([job.feature] if job.feature else [])]
