@@ -9,7 +9,7 @@ from pathlib import Path
 from .audio import CachedTts
 from .catalog import Catalog
 from .corners.run import MaterialSources, TrackSource
-from .domain import ListenerRequest, RequestState, StationConfig, new_id
+from .domain import ListenerRequest, RequestState, StationConfig, new_id, wire_state
 from .format import Clock, load_format
 from .glue import GlueBank
 from .inputs.classify import keywords
@@ -57,6 +57,9 @@ class EngineSettings:
     target_buffer_sec: float = 30.0
     # 켜면 코너 진입을 백엔드에 알린다. 지금 백엔드는 모르는 이벤트를 격리하므로 #170 전까지 끈다
     emit_corner_changed: bool = False
+    # 엔진→백엔드 이벤트의 계약 버전. 2면 segment.submitted에 input_refs·reflection_levels를, request.state에
+    # v2 값을 보낸다 (계약 10.4·10.5절). 백엔드가 v1·v2를 함께 받게 배포된 뒤에 올린다 (#157)
+    contract_version: int = 1
     # 이보다 오래된 request.arrived는 답하지 않는다. 입력 스트림을 처음부터 읽으므로
     # 엔진이 꺼져 있던 사이의 예전 요청이 재기동 때 몰려온다 [예시]
     request_max_age_sec: float = 600.0
@@ -152,7 +155,9 @@ class StationEngine:
             target_buffer_sec=settings.target_buffer_sec,
             max_concurrent=settings.max_concurrent_generations,
             emit_corner_changed=settings.emit_corner_changed, topic_plan=self.topic_plan,
+            contract_version=settings.contract_version,
         )
+        self._contract_version = settings.contract_version
         self._safety = safety
         self._stop = asyncio.Event()
 
@@ -281,19 +286,19 @@ class StationEngine:
             self.scheduler.on_track_started(track_ref, float(started_at))
 
     def on_segment_started(self, segment_id: object, started_at: object) -> None:
-        """세그먼트 재생 시작 (계약 v2 10.6절)."""
+        """세그먼트 재생 시작 (계약 10.6절) — 인용이 들어 있으면 여기서 반영이 확정된다."""
         if isinstance(segment_id, str) and isinstance(started_at, (int, float)):
             self.scheduler.on_segment_started(segment_id, float(started_at))
 
-    def on_segment_played(self, segment_id: object, at: object) -> None:
-        """재생 완료 (계약 v1 state.transition PLAYED) — 길이를 빼서 시작 시각으로 쓴다."""
-        if isinstance(segment_id, str) and isinstance(at, (int, float)):
-            self.scheduler.on_segment_played(segment_id, float(at))
+    async def _notify_state(self, request_id: str, state: RequestState) -> None:
+        wire = wire_state(state, self._contract_version)
+        if wire is not None:  # v2에는 screened가 없다 — 바로 뒤에 pooled/inboxed가 나간다
+            await self.transport.notify_request_state(request_id, wire)
 
     async def reject_stale_request(self, request_id: str) -> None:
         """너무 늦게 받은 요청 — 답하지 않고 종결한다. 백엔드 상태가 requested로 남지 않게 rejected로 알린다."""
         self.telemetry.log_request_state(request_id, RequestState.REJECTED)
-        await self.transport.notify_request_state(request_id, RequestState.REJECTED)
+        await self._notify_state(request_id, RequestState.REJECTED)
 
     async def submit_request(self, kind: str, body: str, requester_ref: str,
                              request_id: str | None = None,
@@ -311,10 +316,10 @@ class StationEngine:
         if self._safety.check_l0(body) is not None:
             req.state = RequestState.REJECTED
             self.telemetry.log_request_state(req.request_id, req.state)
-            await self.transport.notify_request_state(req.request_id, req.state)  # F-15
+            await self._notify_state(req.request_id, req.state)  # F-15
             return req
         req.state = RequestState.SCREENED
         self.telemetry.log_request_state(req.request_id, req.state)
-        await self.transport.notify_request_state(req.request_id, req.state)
+        await self._notify_state(req.request_id, req.state)
         await self.scheduler.accept_request(req)
         return req

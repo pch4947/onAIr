@@ -100,6 +100,7 @@ onair-engine --tts cartesia --max-segments 15 --demo-request "요즘 잠이 안 
 - **문자**: `text_corner`가 도착 순으로 낭독합니다. 대본에 글이 빠지면 한 번 되돌리고, 또 빠지면 `rejected`입니다.
 - **게시판 사연**: 받은 사연을 모아 LLM으로 주제 관련도를 판정하고, 관련 있는 사연만 `story_corner` 후보로 남깁니다. LLM이 실패하면 주제와 단어가 겹치는 사연만 남기고, 더미 LLM은 모두 남깁니다. 결과는 `story_judge_log`에 기록합니다. 후보 중에서는 주제 일치, 최근 순으로 고릅니다. 제출의 `request_ref`는 `story_id`입니다.
 - **신청곡 한마디**: 같은 `request_id`의 `track.queued`가 오면 곡 소개에 넣습니다.
+- **계약 버전**: 엔진이 백엔드로 보내는 이벤트의 버전은 `transport.contract_version`(환경변수 `ONAIR_CONTRACT_VERSION`이 먼저)으로 정합니다. 기본값 1은 지금까지와 같은 형식입니다. 2로 올리면 `segment.submitted`가 `request_ref` 대신 `input_refs`·`reflection_levels`를 싣고, `request.state`가 `pooled`·`inboxed`·`selected`·`reflected` 같은 v2 값으로 나갑니다(계약 10.4·10.5절). 백엔드가 v1·v2를 함께 받게 배포된 뒤에 올리고, 문제가 생기면 1로 되돌립니다(전환 순서는 계약 10.10절). 받는 쪽은 버전을 가리지 않습니다.
 - **코너 알림**: `pipeline.emit_corner_changed`로 켜고 끕니다. `config/station.example.yaml`에서 켜 두었고, VM의 엔진 서비스가 이 파일을 읽습니다. 코드 기본값은 꺼짐입니다. `corner.changed`를 모르는 백엔드(PR #189 이전)는 이벤트를 격리하므로 그런 백엔드와는 끕니다.
 - 백엔드가 모르는 상태는 바꿔 보내거나 보내지 않습니다 (`domain.wire_state`).
 

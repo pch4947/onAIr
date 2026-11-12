@@ -8,7 +8,6 @@ Redis 계약(스트림·envelope·전달 보장)은 docs/ENGINE_REDIS_CONTRACT.m
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import json
 import socket
 import time
@@ -17,13 +16,16 @@ import urllib.request
 from collections.abc import AsyncIterator
 from typing import Protocol
 
-from .domain import RequestState, SegmentSubmission, new_id
+from .domain import RequestState, SegmentSubmission, new_id, segment_payload
 
 
 class Transport(Protocol):
     async def publish_segment(self, sub: SegmentSubmission) -> None: ...
 
-    async def notify_request_state(self, request_id: str, state: RequestState) -> None: ...
+    async def notify_request_state(self, request_id: str, state: RequestState | str,
+                                   detail: dict | None = None) -> None:
+        """요청 상태 통보. detail은 계약 v2에서만 온다 — reflected의 segment_id·started_at (10.4절)."""
+        ...
 
     async def notify_station(self, event_type: str, payload: dict) -> None:
         """스테이션 수명주기 통보 — station.started / station.rejected (계약 3.1절)."""
@@ -38,10 +40,11 @@ class StdoutTransport:
     """M0 더미: 제출/통보를 JSON 라인으로 출력한다. 이벤트는 발생하지 않는다."""
 
     async def publish_segment(self, sub: SegmentSubmission) -> None:
-        payload = json.dumps(dataclasses.asdict(sub), ensure_ascii=False, default=str)
+        payload = json.dumps(segment_payload(sub), ensure_ascii=False, default=str)
         print("SUBMIT " + payload, flush=True)
 
-    async def notify_request_state(self, request_id: str, state: RequestState) -> None:
+    async def notify_request_state(self, request_id: str, state: RequestState | str,
+                                   detail: dict | None = None) -> None:
         print(f"REQUEST_STATE {request_id} -> {state}", flush=True)
 
     async def notify_station(self, event_type: str, payload: dict) -> None:
@@ -71,9 +74,10 @@ class HttpTransport:
         self._retries = max(1, retries)
 
     async def publish_segment(self, sub: SegmentSubmission) -> None:
-        await self._post("/api/engine/segments", dataclasses.asdict(sub))
+        await self._post("/api/engine/segments", segment_payload(sub))
 
-    async def notify_request_state(self, request_id: str, state: RequestState) -> None:
+    async def notify_request_state(self, request_id: str, state: RequestState | str,
+                                   detail: dict | None = None) -> None:
         await self._post(
             f"/api/engine/requests/{request_id}/state",
             {"request_id": request_id, "state": str(state), "at": time.time()},
@@ -129,11 +133,11 @@ class RedisTransport:
     백엔드 -> 엔진: engine:{station_id}:in 을 소비 그룹 "engine"으로 읽고, 처리가 끝나면 XACK.
     """
 
-    CONTRACT_VERSION = "1"
+    CONTRACT_VERSION = "1"  # 기본값. 엔진→백엔드 이벤트를 v2로 보내려면 contract_version=2 (계약 10.10절)
     GROUP = "engine"
 
     def __init__(self, url: str, station_id: str, *, client=None, consumer: str | None = None,
-                 maxlen: int = 10_000, block_ms: int = 5_000):
+                 maxlen: int = 10_000, block_ms: int = 5_000, contract_version: int = 1):
         try:
             import redis.asyncio as redis_asyncio
             from redis.exceptions import RedisError, ResponseError
@@ -150,12 +154,14 @@ class RedisTransport:
         self._consumer = consumer or f"engine-{socket.gethostname()}"
         self._maxlen = maxlen
         self._block_ms = block_ms
+        self.contract_version = int(contract_version)
 
     async def publish_segment(self, sub: SegmentSubmission) -> None:
-        await self._publish("segment.submitted", dataclasses.asdict(sub))
+        await self._publish("segment.submitted", segment_payload(sub, self.contract_version))
 
-    async def notify_request_state(self, request_id: str, state: RequestState) -> None:
-        await self._publish("request.state", {"request_id": request_id, "state": str(state)})
+    async def notify_request_state(self, request_id: str, state: RequestState | str,
+                                   detail: dict | None = None) -> None:
+        await self._publish("request.state", {"request_id": request_id, "state": str(state), **(detail or {})})
 
     async def notify_station(self, event_type: str, payload: dict) -> None:
         await self._publish(event_type, payload)
@@ -171,7 +177,7 @@ class RedisTransport:
     async def _publish(self, event_type: str, payload: dict) -> None:
         fields = {
             "type": event_type,
-            "contract_version": self.CONTRACT_VERSION,
+            "contract_version": str(self.contract_version),
             "event_id": new_id("evt"),
             "station_id": self.station_id,
             "at": str(time.time()),
@@ -279,7 +285,7 @@ def _decode(stream: str, entry_id: str, fields: dict | None) -> dict | None:
 
 def make_transport(kind: str, *, base_url: str = "http://localhost:3000",
                    token: str | None = None, redis_url: str = "redis://localhost:6379/0",
-                   station_id: str | None = None) -> Transport:
+                   station_id: str | None = None, contract_version: int = 1) -> Transport:
     if kind == "stdout":
         return StdoutTransport()
     if kind == "http":
@@ -287,5 +293,5 @@ def make_transport(kind: str, *, base_url: str = "http://localhost:3000",
     if kind == "redis":
         if station_id is None:
             raise ValueError("redis transport는 station_id가 필요합니다")
-        return RedisTransport(redis_url, station_id)
+        return RedisTransport(redis_url, station_id, contract_version=contract_version)
     raise ValueError(f"unknown transport kind: {kind}")

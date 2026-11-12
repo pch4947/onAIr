@@ -161,13 +161,13 @@ def test_answer_without_attribution_is_not_a_quote():
     assert not quoted("붕어빵은 팥이죠", "오늘도 많은 분이 계시네요. 겨울밤 이야기를 이어가 볼게요.")
 
 
-def test_played_event_confirms_reflection_and_metrics(tmp_path):
+def test_started_event_confirms_reflection_and_metrics(tmp_path):
     engine, req, segment = _quoted_run(tmp_path)
     telemetry = _reopen_telemetry(engine, tmp_path)
 
     at = req.received_at + 50.0
-    engine.on_segment_played(segment.id, at)
-    engine.on_segment_played(segment.id, at + 99.0)  # 재전달 — 처음 값 유지
+    engine.on_segment_started(segment.id, at)
+    engine.on_segment_started(segment.id, at + 99.0)  # 재전달 — 처음 값 유지
     telemetry.close()
 
     rows = _rows(tmp_path, "SELECT request_id, segment_id, chat_type, started_at, quote_age, "
@@ -175,7 +175,7 @@ def test_played_event_confirms_reflection_and_metrics(tmp_path):
     assert len(rows) == 1
     rid, seg, chat_type, started, age, net, match, script_chars, quote_chars = rows[0]
     assert (rid, seg, chat_type) == (req.request_id, segment.id, "standalone")
-    assert started == at - segment.duration_ms / 1000
+    assert started == at
     assert age == net == started - req.received_at
     assert match is None  # 독립형은 맥락 일치를 재지 않는다
     assert script_chars > 0 and quote_chars == len(req.body)
@@ -222,16 +222,15 @@ def test_manager_routes_playback_events(tmp_path):
     manager = EngineManager(EngineSettings())
 
     async def scenario():
-        for state in ("MIXING", "PUBLISHED"):  # 재생 완료가 아니면 확정하지 않는다
+        for state in ("MIXING", "PUBLISHED", "PLAYED"):  # 재생 시작은 segment.started로만 확정한다
             await manager._route_station_event(engine, {
                 "type": "state.transition",
                 "payload": {"segment_id": segment.id, "state": state, "at": time.time()}})
-        assert req.state != RequestState.REFLECTED
-        await manager._route_station_event(engine, {
-            "type": "state.transition",
-            "payload": {"segment_id": segment.id, "state": "PLAYED", "at": time.time()}})
         await manager._route_station_event(engine, {  # 잘못된 페이로드는 무시한다
             "type": "segment.started", "payload": {"segment_id": 3, "started_at": "x"}})
+        assert req.state != RequestState.REFLECTED
+        await manager._route_station_event(engine, {
+            "type": "segment.started", "payload": {"segment_id": segment.id, "started_at": time.time()}})
         await manager._route_station_event(engine, {
             "type": "track.started", "payload": {"track_ref": "yt:none", "started_at": 1.0}})
 

@@ -210,7 +210,7 @@ wsl redis-cli XRANGE engine:st_8f2a:out - + COUNT 3   # station.started 또는 s
 `track.queued`에 신청자 `nickname`과 `request_id`를 전달한다. 엔진은 닉네임을 L0 검사한 뒤
 곡 소개의 데이터 블록에 넣고, 음악 세그먼트의 방송 상태로 신청 기록을 갱신한다.
 엔진은 `request.arrived`(`kind: song_request`)의 한마디를 `request_id`별로 보관했다가, 같은 id의
-`track.queued`가 오면 곡 소개에 넣는다(#167). 백엔드는 아직 이 `request.arrived`를 보내지 않는다(#140).
+`track.queued`가 오면 곡 소개에 넣는다(#167). 백엔드는 한마디가 있을 때만, `track.queued`보다 먼저 이 `request.arrived`를 보낸다(#140).
 | `track.started` | `{"track_ref", "started_at"}` | 곡 재생이 시작됐다. 엔진은 `started_at + duration_ms`를 곡 종료 예상 시각으로 쓴다 |
 
 **역할 나눔** — **어떤 곡**을 틀지는 백엔드가, **언제** 틀지는 엔진 러닝오더가 정한다.
@@ -516,7 +516,9 @@ wsl redis-cli XADD engine:st_local_dev:in '*' type request.arrived contract_vers
 | `engine.health` | E→B | `order_position`·`next_slot`·`policy_name` → `corner`·`step`·`experiment`, 풀·inbox 크기 추가 (필드 추가는 버전 무관, 3.1.1) |
 | `request.cancelled` | B→E | 풀·inbox에 있으면 빼고 `cancelled`. 이미 `selected`면 제출 전 결과를 통째로 버리고 그 단계를 다시 만든다 (10.1.1) `[확정 전]` |
 
-#### 10.1.1 `selected` 이후 취소 `[확정 전]`
+#### 10.1.1 `selected` 이후 취소 `[엔진 안 확정 2026-11-12 — 백엔드 확인 대기]`
+
+제출 후에 백엔드가 세그먼트를 뺐을 때의 통보는 새 이벤트를 만들지 않고 `segment.discarded`(3.2절, #259)를 쓴다 — 엔진은 그 세그먼트가 인용한 입력을 되돌린다. 아래 표의 `state.transition` 통보안은 이것으로 대체한다.
 
 합성된 음성에서 입력 하나만 지울 수는 없다. 그래서 취소된 입력이 들어간 세그먼트는 **세그먼트 단위로** 처리한다.
 
@@ -582,11 +584,17 @@ wsl redis-cli XADD engine:st_local_dev:in '*' type request.arrived contract_vers
 | `selected` | 세그먼트에 들어감 (생성 중) | |
 | `reflected` | 그 입력이 들어간 세그먼트가 재생되기 시작함 — payload에 `segment_id`, `started_at`(10.6) | O |
 | `expired` | 창이 지나도록 선택되지 못함 / 방송 종료. v1에 먼저 추가해 양쪽에 구현됐다(#157) | O |
+| `rejected` | 안전 검사 탈락 | O |
+| `cancelled` | 취소됨 (v1과 같음) | O |
 
 **v1 동안 엔진이 보내는 값** (#167) — 백엔드가 모르는 값은 이벤트째 격리되므로 바꿔 보낸다: `inboxed` → `queued`, `not_on_air` → `expired`, `cancelled`·`reflected`는 보내지 않고 계측에만 남긴다. 게시판 사연은 요청이 아니므로 상태를 보내지 않는다(3.5절).
 
-| `rejected` | 안전 검사 탈락 | O |
-| `cancelled` | 취소됨 (v1과 같음) | O |
+**v2에서 엔진이 보내는 값** (#157, 2026-11-12 합의) — `pooled`, `inboxed`, `not_on_air`, `selected`, `reflected`, `expired`, `rejected`, `cancelled`.
+
+- v1의 `screened`·`queued`·`generating`·`generated`는 보내지 않는다. 채팅은 안전 검사를 통과하면 바로 `pooled`, 문자와 신청곡 한마디는 `inboxed`가 첫 통보다.
+- `reflected`는 엔진이 `segment.started`를 받은 뒤에 보낸다. payload는 `{"request_id", "state": "reflected", "segment_id", "started_at"}`이고 `started_at`은 받은 `segment.started`의 값 그대로다.
+- `collected`는 투표(M5) 전까지, `held`는 엔진에 그 상태가 생길 때까지 보내지 않는다. 곡이 나가는 동안 온 채팅은 `pooled`로 기다린다.
+- 요청 상태는 엔진이 보낸 값만 쓴다. 송출 상태(`mixing`·`published`·`played`)는 세그먼트 기록에만 남긴다. 종결 상태는 `reflected`·`expired`·`rejected`·`cancelled`·`not_on_air`이고 대기 집계는 나머지다. 신청곡은 엔진이 아니라 백엔드가 송출을 정하므로 지금처럼 송출 상태(`played`)로 끝낸다.
 
 - `selected` 뒤 생성이 실패하거나 대본에 인용이 빠지면 `pooled`/`inboxed`로 되돌아갈 수 있다. 백엔드는 마지막 상태만 표시하면 된다.
 - 프론트 표시 문구 예는 [CORNER_DESIGN.md](CORNER_DESIGN.md) 9.1절.
@@ -609,6 +617,8 @@ wsl redis-cli XADD engine:st_local_dev:in '*' type request.arrived contract_vers
 - `reflection_levels`: **입력별로** 이 멘트가 도달한 반영 단계(1~4, 기획서 4.2절). 같은 멘트라도 입력마다 다르다 — 예: 한 채팅은 인용·반응(②)만, 다른 채팅은 다음 화제가 됨(③, STEER). 키는 `input_refs`와 같고, 입력이 없으면 `{}` (PR #101 리뷰 반영 — 단일 `reflection_level` 대신).
 - `kind`: `speech`\|`glue`\|`filler`. v1의 `ack`는 없어지고, 사전 렌더 접착 요소(코너 콜 등)는 `glue`다. 백엔드의 BGM 더킹 구분(3.6절)은 그대로 — 셋 다 멘트다.
 - 사연 읽힘 처리(3.5절)는 `request_ref` 대신 `input_refs`에 `story_id`가 있는지로 판단한다.
+- **`reflection_levels`의 값 (C2, 2026-11-12 확정)** — 입력별 정수 하나다. 그 멘트에서 그 입력이 도달한 가장 높은 단계를 싣는다: 인용·낭독은 `2`, 다음 화제가 되었거나(STEER) 한 단계의 주 소재(게시판 사연, 신청곡)면 `3`. 백엔드는 저장만 한다. 키는 항상 `input_refs`와 같다.
+- 지금 엔진은 한 멘트에 입력을 하나만 싣는다(`input_refs`의 길이 0 또는 1). 여러 건을 싣는 것은 대본 검증을 거쳐 따로 넣는다(#157).
 
 ### 10.6 `segment.started` (B→E, 신설 — PR #99 백엔드 리뷰 반영)
 
@@ -682,12 +692,19 @@ v2 합의 전까지 엔진은 v1을 유지한다. 합의 후 [ENGINE_ARCHITECTUR
 
 - 단계마다 이 장에서 해당 항목을 확정하고 GitHub 이슈로 백엔드와 맞춘다. 확정하면 `[확정 전]` 표시를 지우고 v1 본문(1~9장)으로 옮긴다.
 
+**v1에서 v2로 넘어가는 순서** (#157, 2026-11-12 합의) — 어느 시점에 배포해도 깨지지 않게 받는 쪽을 먼저 넓힌다.
+
+1. 백엔드: 엔진→백엔드 이벤트를 `contract_version` 1·2 둘 다 받게 배포한다.
+2. 엔진: 보내는 버전을 2로 올린다. 설정 `transport.contract_version`(환경변수 `ONAIR_CONTRACT_VERSION`이 먼저다)이고 기본값은 1이다. 값을 올리면 `segment.submitted`가 `input_refs`·`reflection_levels`로, `request.state`가 10.4절의 v2 값으로 나가고 envelope의 `contract_version`이 `"2"`가 된다. 문제가 생기면 1로 되돌린다.
+3. 백엔드·프론트: `request.arrived`를 v2로 바꾼다. 엔진은 `kind`의 `chat`·`message`와 v1의 `story`를 이미 모두 받고(#168), 받는 이벤트의 `contract_version`은 가리지 않는다.
+4. 양쪽에서 v1 처리를 지운다.
+
 ### 10.11 확정 전 항목 (PR #101 백엔드 리뷰 기준)
 
 | # | 항목 | 정할 때 | 관련 |
 |---|---|---|---|
-| C1 | `selected` 이후 취소 — 제출 전 결과 폐기·재생성 범위, 제출 후 백엔드가 세그먼트를 뺐을 때 엔진 통보 방식 | M4 | 10.1.1 |
-| C2 | 입력별 반영 단계 `reflection_levels` 형식 | M4 | 10.5 |
+| C1 | `selected` 이후 취소 — 제출 전 결과 폐기·재생성 범위, 제출 후 백엔드가 세그먼트를 뺐을 때 엔진 통보 방식. 엔진 안: 제출 전은 10.1.1절대로, 제출 후는 `segment.discarded` (2026-11-12, 백엔드 확인 대기) | M4 | 10.1.1 |
+| C2 | ~~입력별 반영 단계 `reflection_levels` 형식~~ **확정 2026-11-12** — 입력별 정수 1~4 | M4 | 10.5 |
 | C3 | ~~`corner.changed` — 기준 세그먼트가 폐기·교체될 때 처리, 화면과 엔진 계약이 어긋나는 동안의 UI 안내~~ **확정 2026-11-12** — 송출되지 않으면 이전 코너 유지, 안내 문구는 두지 않는다 | M4 | 10.7 |
 | C4 | `vote.open` — 기준 세그먼트가 폐기될 때, 결과가 늦을 때 엔진 대기 상한 | M5 | 10.8 |
 | C5 | `segment.insert_before` — 수락·거절 응답(`segment.insert_result`), 중복 처리, 큐 선택과의 동시성 제어 | M6 | 10.9 |

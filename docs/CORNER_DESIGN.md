@@ -297,8 +297,8 @@ STEER된 입력은 반영 ③단계(흐름 변경)로 기록한다.
 |---|---|---|
 | 입력 종류 | `story`·`mood`·`chat`을 모두 채팅으로 다룬다 — 프론트 채팅창이 `story`로 보낸다 | `kind`로 나눈다 (10.3) |
 | 만료 | `request.state: expired`를 보낸다(#158에서 v1에 추가). 백엔드는 종결 상태로 처리하고 대기 집계에서 뺀다. 일반 채팅은 화면에 상태를 표시하지 않으므로 청취자에게 보이는 변화는 없다 | 같음 |
-| 반영 확정 | `state.transition` `PLAYED`에서 세그먼트 길이를 빼서 재생 시작으로 쓴다. 값은 맞지만 기록이 세그먼트 길이만큼 늦다 | `segment.started` (이미 같은 경로로 처리) |
-| 송출 위치 | 제출 순서·길이로 추정하고 `PLAYED`·`track.started`로 보정한다. 이벤트가 없으면 추정이 어긋날 수 있다 | `segment.started`로 더 빨리 보정 |
+| 반영 확정 | `segment.started`로 확정한다(백엔드가 v1에 먼저 넣었다). `PLAYED`에서 세그먼트 길이를 빼 추정하던 예비 경로는 2026-11-12에 지웠다(#157) | 같음. 확정하면 `request.state: reflected`를 보낸다 |
+| 송출 위치 | 제출 순서·길이로 추정하고 `segment.started`·`track.started`로 보정한다. 이벤트가 없으면 추정이 어긋날 수 있다 | 같음 |
 | 인용 수 | 세그먼트당 1건 (`request_ref` 단일 값). 문자·사연·신청곡 멘트에는 채팅을 함께 인용하지 않는다 | `input_refs`로 참여 강도 상한까지 |
 | 입력 상태 | `inboxed`는 `queued`로, `not_on_air`는 `expired`로 바꿔 보낸다. `cancelled`·`reflected`는 계측에만 남긴다 | `request.state` 새 값 |
 
