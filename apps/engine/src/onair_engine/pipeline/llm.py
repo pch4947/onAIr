@@ -195,9 +195,10 @@ class DummyLlmClient:
         step = detect_step(prompt.user) or "filler"
         text = self._rng.choice(_TEMPLATES[step]).format_map(_slots(prompt))
         m = _CHAT_RE.search(prompt.user)
-        if m and (not self.quote_miss_rate or self._rng.random() >= self.quote_miss_rate):
-            quote = m["body"].split("\n", 1)[0].strip()[:60]
-            text = _QUOTE_TEMPLATE.format(quote=quote) + text
+        # 채팅은 한 줄에 한 건이다 — 건마다 인용하고, 빠뜨릴지도 건마다 정한다 (한 멘트에 여러 건, #267)
+        for line in reversed(m["body"].splitlines() if m else []):
+            if line.strip() and (not self.quote_miss_rate or self._rng.random() >= self.quote_miss_rate):
+                text = _QUOTE_TEMPLATE.format(quote=line.strip()[:60]) + text
         return Script(text=text)
 
     async def complete(self, prompt: Prompt, *, max_tokens: int) -> str:

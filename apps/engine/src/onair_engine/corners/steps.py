@@ -36,6 +36,14 @@ QUOTE_RULE = ("아래 청취자 채팅을 짧게 인용하고 한 문장으로 �
               "문장 끝은 DJ의 말투로 맺는다. 닉네임이나 아이디는 말하지 않는다.")
 # 다음 단계부터 이 채팅이 화제가 된다 — 청취자가 흐름이 바뀐 이유를 알 수 있게 한다 (CORNER_DESIGN 5.2절)
 STEER_RULE = "그리고 이 얘기를 조금 더 해 보겠다고 자연스럽게 말한다."
+# 한 멘트에 입력 여러 건 (계약 v2 input_refs, #267)
+# 묶어서 "여러 분이 ~라고 하셨네요"라고 하면 누구의 말도 인용되지 않는다 — 한 건씩 밝혀야 자기 말인 줄 안다
+MULTI_QUOTE_RULE = ("채팅이 여러 건이다. 한 건씩 따로 인용하고 각각 한 문장으로 반응한다. "
+                    "한 건도 빠뜨리지 않고, 여러 건을 한 문장으로 묶지 않는다.")
+MULTI_STEER_RULE = "그리고 마지막에 인용한 채팅의 얘기를 조금 더 해 보겠다고 자연스럽게 말한다."
+# 주 소재(사연·신청곡)가 있는 멘트 — 채팅 때문에 사연이 요약되거나 곡 소개가 밀리면 안 된다
+WITH_FEATURE_RULE = ("이 멘트의 중심은 위에서 지시한 내용이다. 채팅 인용은 그 앞이나 뒤에 짧게 붙이고, "
+                     "중심 내용을 줄이지 않는다. 위의 문장 수 제한에 채팅 인용은 넣지 않는다.")
 # 몰린 입력은 개인이 아니라 집계로 인정한다 — 특정 채팅을 인용하거나 건수를 지어내지 않는다 (9.2절)
 AGGREGATE_RULE = ("멘트 첫머리에 지금 채팅창에서 아래 화제 얘기가 많이 오간다고 한 문장으로 언급한다. "
                   "특정 채팅을 인용하거나 숫자를 말하지 않는다.")
@@ -355,8 +363,17 @@ def build_prompt(step: str, material: Material, profile: StationProfile, *,
     if material.quotes:
         if not kind.quotable:
             raise ValueError(f"{step} 단계는 채팅을 인용하지 않는다")
-        chats = "\n".join(q.body for q in material.quotes)
-        rule = f"{QUOTE_RULE} {STEER_RULE}" if material.extra.get("steer") else QUOTE_RULE
+        quotes, steer = list(material.quotes), material.extra.get("steer")
+        rule = QUOTE_RULE
+        if len(quotes) > 1:
+            rule += f" {MULTI_QUOTE_RULE}"
+            if steer:  # 화제가 될 채팅(첫 건)을 마지막에 인용해야 "이 얘기를 더"로 이어진다
+                quotes = [*quotes[1:], quotes[0]]
+        if steer:
+            rule += f" {MULTI_STEER_RULE if len(quotes) > 1 else STEER_RULE}"
+        if material.feature_ref:
+            rule += f" {WITH_FEATURE_RULE}"
+        chats = "\n".join(q.body for q in quotes)
         user += f"\n{rule}\n" + data_block(CHAT, chats)
     if trend := material.extra.get("aggregate"):
         user += f"\n{AGGREGATE_RULE}\n" + data_block(TREND, trend.keyword)
