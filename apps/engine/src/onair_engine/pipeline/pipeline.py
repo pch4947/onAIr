@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import itertools
 import logging
 import re
@@ -15,7 +16,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TypeVar
 
-from ..corners.steps import build_prompt
+from ..corners.steps import build_prompt, split_block
 from ..domain import (
     GenerationJob,
     Material,
@@ -29,11 +30,16 @@ from ..domain import (
 )
 from ..prompt_data import RECENT, data_block
 from ..telemetry import Telemetry
-from .llm import REJECT, DummyLlmClient, LlmClient
+from .llm import REJECT, DummyLlmClient, LlmClient, LlmError
 from .safety import SafetyChecker
 from .tts import TtsClient, TtsQuotaError
 
 _ATTEMPTS = 2  # 최초 1회 + 재시도 1회
+# 앞 멘트의 대본이 나올 때까지 기다리는 상한 — 넘으면 앞 멘트를 모르는 채로 쓴다. 앞 호출이 느릴 때
+# 뒤 멘트까지 늦어져 무음이 되는 것보다 낫다 (LLM 호출은 보통 1.5초, 드물게 20초)
+_CONTEXT_WAIT_SEC = 3.0
+BLOCK_MAX_TOKENS = 1500  # 덩어리는 멘트 서너 개 분량이다. 추론 모델은 생각하는 데도 출력 한도를 쓴다
+_FAILED = object()  # _write: LLM이 재시도까지 실패했다
 _PENDING_AIR_MAX = 256
 # 인용 검사 — 채팅 글자 bigram 중 이만큼이 대본에 있으면 인용한 것으로 본다 [예시].
 # LLM은 "컵라면이요"를 "컵라면이라고"처럼 어미를 바꿔 인용하므로 문자열 그대로는 비교하지 않는다
@@ -103,6 +109,9 @@ class GenerationPipeline:
         self._recent: deque[str] = deque(maxlen=recent_segments)
         # 생성했지만 아직 송출 확인이 안 된 대본 (context-memory 3.1절 pending_air)
         self._pending_air: dict[str, str] = {}
+        # 대본은 한 번에 하나씩 쓴다 — 뒤 멘트가 앞 멘트의 대본을 보고 쓰게 한다. 합성은 그대로 동시에 돈다.
+        # 예전에는 합성이 끝나야 맥락에 들어가서, 동시에 만든 멘트의 절반이 앞 멘트를 모르고 썼다 (#262)
+        self._script_lock = asyncio.Lock()
 
     def take_aired(self, segment_id: str) -> str | None:
         """PUBLISHED를 받은 세그먼트의 대본. 재전달이나 모르는 세그먼트면 None."""
@@ -120,6 +129,36 @@ class GenerationPipeline:
         비어 있으면 스케줄러가 그 입력을 되돌린다. LLM/TTS가 재시도까지 실패하면 filler 대체
         세그먼트를 돌려준다(곡 소개였다면 music_ref는 유지한다 — 곡 재생이 멘트 실패에 막히지 않게).
         """
+        if job.block is not None and job.part > 0:
+            return await self._run_part(job)
+        try:
+            written = await self._write_in_turn(job)
+        finally:
+            if job.block is not None:  # 어떻게 끝났든 나머지 문단 작업이 기다리지 않게 한다
+                job.block.fail()
+        if written is _FAILED:
+            return await self._fallback(job)
+        if written is None:
+            return None
+        script, quote_ref = written
+        try:
+            return await self._voice(job, script, time.time(), quote_ref)
+        except _TtsFailed:
+            return await self._fallback(job)
+
+    async def _write_in_turn(self, job: GenerationJob):
+        """앞 멘트의 대본이 나온 뒤에 쓴다. 앞 호출이 오래 걸리면 기다리지 않고 쓴다."""
+        try:
+            await asyncio.wait_for(self._script_lock.acquire(), _CONTEXT_WAIT_SEC)
+        except TimeoutError:
+            return await self._write(job)
+        try:
+            return await self._write(job)
+        finally:
+            self._script_lock.release()
+
+    async def _write(self, job: GenerationJob):
+        """대본을 쓰고 검사해 맥락에 넣는다. (대본, 인용한 입력) · None(거부) · _FAILED(LLM 장애)."""
         # [1] 프롬프트 구성 (L1 지시 내장 + 방송 맥락)
         t0 = time.time()
         prompt = self._with_context(
@@ -127,10 +166,15 @@ class GenerationPipeline:
 
         # [2] LLM 호출
         try:
-            script = await self._retry(job, "llm", lambda: self.llm.generate(prompt))
+            if job.block is not None:
+                texts = await self._retry(job, "llm", lambda: self._write_block(prompt, job.block.parts))
+                script = Script(text=texts[0])
+            else:
+                script = await self._retry(job, "llm", lambda: self.llm.generate(prompt))
+                texts = [script.text]
         except Exception:
             logger.exception("LLM_FAILED %s %s", job.job_id, job.corner_type)
-            return await self._fallback(job)
+            return _FAILED
         t1 = time.time()
         job.script_chars = len(script.text)
         self._log(job, "llm", t0, t1, "ok")
@@ -150,20 +194,39 @@ class GenerationPipeline:
                   or self._check_quote(job, "read", job.material.must_read, script.text, t1))
             quote_ref = job.material.feature_ref if ok else None
 
+        # [4] L2 출력단 검사 — 덩어리는 문단마다 보고, 걸린 문단부터 뒤는 버린다
+        clean = list(itertools.takewhile(lambda text: self.safety.check_l2(text) is None, texts))
+        self._log(job, "l2", t1, time.time(), "ok" if clean else "reject")
+        if not clean:
+            return None
+        # 합성을 기다리지 않고 맥락에 넣는다 — 바로 뒤 멘트가 이 대본을 보고 쓴다
+        self._recent.extend(clean)
+        if job.block is not None:
+            job.block.resolve(clean)
+        return script, quote_ref
+
+    async def _write_block(self, prompt: Prompt, parts: int) -> list[str]:
+        """이야기 덩어리를 한 번에 쓰고 문단으로 나눈다. 문단을 못 얻으면 LlmError — 다시 부른다."""
+        raw = await self.llm.complete(prompt, max_tokens=BLOCK_MAX_TOKENS)
+        texts = split_block(raw, parts)
+        if not texts:
+            raise LlmError("덩어리 대본에서 문단을 얻지 못했습니다")
+        return texts
+
+    async def _run_part(self, job: GenerationJob) -> SegmentSubmission | None:
+        """덩어리의 둘째 문단부터 — 대본은 이미 쓰였고 검사도 끝났다. 합성만 한다."""
+        texts = await job.block.wait()
+        if texts is None or job.part >= len(texts):
+            return None  # 덩어리를 쓰지 못했거나 문단이 계획보다 적게 나왔다
+        script = Script(text=texts[job.part])
+        job.script_chars = len(script.text)
         try:
-            return await self._finish(job, script, t1, quote_ref)
+            return await self._voice(job, script, time.time(), None)
         except _TtsFailed:
             return await self._fallback(job)
 
-    async def _finish(self, job: GenerationJob, script: Script, started: float,
-                      quote_ref: str | None = None) -> SegmentSubmission | None:
-        # [4] L2 출력단 검사
-        violation = self.safety.check_l2(script.text)
-        t2 = time.time()
-        self._log(job, "l2", started, t2, "reject" if violation else "ok")
-        if violation:
-            return None
-
+    async def _voice(self, job: GenerationJob, script: Script, started: float,
+                     quote_ref: str | None = None) -> SegmentSubmission:
         # [5] TTS
         seg_id = new_id("seg")
         logger.info("SCRIPT %s [%s] %s", seg_id, job.corner_type, script.text)
@@ -174,9 +237,7 @@ class GenerationPipeline:
         except Exception as exc:
             logger.exception("TTS_FAILED %s %s", job.job_id, job.corner_type)
             raise _TtsFailed from exc
-        t3 = time.time()
-        self._log(job, "tts", t2, t3, "ok")
-        self._recent.append(script.text)
+        self._log(job, "tts", started, time.time(), "ok")
         self._pending_air[seg_id] = script.text
         while len(self._pending_air) > _PENDING_AIR_MAX:  # 송출 통보가 없는 실행(로컬)에서 쌓이지 않게
             self._pending_air.pop(next(iter(self._pending_air)))
@@ -208,8 +269,9 @@ class GenerationPipeline:
         self._log(job, "fallback", now, now, "filler")
         prompt = build_prompt("filler", filler.material, self.profile)
         script = await self._fallback_llm.generate(prompt)
+        self._recent.append(script.text)
         try:
-            return await self._finish(filler, script, now)
+            return await self._voice(filler, script, now)
         except _TtsFailed as exc:
             raise RuntimeError(f"filler 대체도 TTS에서 실패: {job.job_id}") from exc.__cause__
 
@@ -233,8 +295,9 @@ class GenerationPipeline:
         # 직전 대본은 사연을 인용할 수 있으므로 데이터 블록으로 넣는다 — 지연된 프롬프트 인젝션 대비
         recent = "\n".join(f"- {text}" for text in self._recent)
         return Prompt(
-            system=(f"{prompt.system}\n\n직전에 송출한 멘트다. 흐름은 이어가되 같은 인사·표현을 "
-                    f"반복하지 않는다.\n{data_block(RECENT, recent)}"),
+            system=(f"{prompt.system}\n\n직전에 한 멘트다. 아래로 갈수록 최근이고 마지막 줄이 방금 한 말이다. "
+                    f"방금 한 말에 이어서 말하고, 같은 인사·표현·질문을 반복하지 않는다.\n"
+                    f"{data_block(RECENT, recent)}"),
             user=prompt.user,
         )
 

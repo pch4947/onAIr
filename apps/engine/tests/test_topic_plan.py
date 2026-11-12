@@ -11,7 +11,14 @@ from onair_engine.corners.steps import build_prompt
 from onair_engine.domain import Material, Prompt
 from onair_engine.format import load_format
 from onair_engine.format.clock import ClockEntry
-from onair_engine.inputs.topic_plan import Angle, TopicPlan, angle_count, parse_angles
+from onair_engine.inputs.topic_plan import (
+    CONTINUE,
+    NEW,
+    Angle,
+    TopicPlan,
+    angle_count,
+    parse_angles,
+)
 from onair_engine.pipeline.llm import DummyLlmClient, LlmError, detect_step
 from onair_engine.prompt_data import ANGLE, COVERED_ANGLES, NOW
 from onair_engine.scheduler.scheduler import time_context
@@ -32,7 +39,7 @@ def test_parse_angles_keeps_well_formed_items():
         {"title": "호빵", "points": "목록 아님"},
     ]}, ensure_ascii=False)
     angles = parse_angles(text)
-    assert angles == [Angle("붕어빵", ("팥", "슈크림", "꼬리")), Angle("호빵", ())]
+    assert angles == [Angle("붕어빵", ("팥", "슈크림", "꼬리", "머리")), Angle("호빵", ())]
 
 
 @pytest.mark.parametrize("bad", ["갈래 없음", '{"angles": "x"}', '{"angles": [{"title": ""}]}', "[1, 2]"])
@@ -42,7 +49,8 @@ def test_parse_angles_rejects_unusable_output(bad):
 
 
 def test_angle_count_follows_broadcast_length():
-    assert [angle_count(m) for m in (5, 30, 60, 240)] == [2, 6, 12, 12]
+    # 갈래 하나를 두 번에 걸쳐 쓴다 — 30분 방송에 셋이면 된다 (#262)
+    assert [angle_count(m) for m in (5, 30, 60, 240)] == [2, 3, 6, 12]
 
 
 # ── 계획 ──────────────────────────────────────────────────────────────
@@ -82,6 +90,22 @@ def test_plan_hands_out_angles_in_order_and_logs(tmp_path):
     events = [s for (s,) in db.execute("SELECT summary FROM event_log WHERE kind = 'topic_plan'")]
     assert events == ["이야기 갈래 2개 준비", "이야기 갈래 1/2 · 붕어빵 팥 대 슈크림",
                       "이야기 갈래 2/2 · 편의점 호빵"]
+
+
+def test_plan_carries_an_angle_across_entries(tmp_path):
+    # 들어올 때마다 갈래를 바꾸면 곡이 끝날 때마다 소주제가 바뀐다 — 남은 말할 거리는 다음 진입이 잇는다 (#262)
+    angles = [Angle("붕어빵", ("꺼내기", "풀기 하나", "풀기 둘", "마무리")), Angle("호빵", ("데우는 법",))]
+    reply = json.dumps({"angles": [{"title": a.title, "points": list(a.points)} for a in angles]},
+                       ensure_ascii=False)
+    plan, _, telemetry = _plan(tmp_path, reply)
+    assert plan.take(3) == (None, None) and plan.more() == (), "준비 전에는 갈래 없이 간다"
+    asyncio.run(plan.run())
+    assert plan.take(3) == (Angle("붕어빵", ("꺼내기", "풀기 하나", "풀기 둘")), NEW)
+    assert plan.take(3) == (Angle("붕어빵", ("마무리",)), CONTINUE), "하던 갈래를 잇는다"
+    assert plan.take(1) == (Angle("호빵", ("데우는 법",)), NEW), "다 썼으면 다음 갈래로"
+    assert plan.more() == () and plan.take(1) == (None, None)
+    assert [a.title for a in plan.used] == ["붕어빵", "호빵"]
+    telemetry.close()
 
 
 def test_plan_drops_angles_that_fail_safety_rules(tmp_path):
@@ -191,24 +215,31 @@ class Recording(FakePipeline):
         return await super().run(job)
 
 
-def test_broadcast_moves_to_the_next_angle_on_each_topic_talk(tmp_path):
+def test_broadcast_carries_the_angle_across_the_song(tmp_path):
     engine, transport = _engine(tmp_path, corners=["topic_talk"], topic="겨울 간식")
     engine.scheduler.pipeline = pipeline = Recording()
     engine.topic_plan._llm.delay_sec = 0  # 첫 주제 토크 전에 계획이 끝난다 — 실제 방송은 오프닝과 첫 곡이 가려 준다
-    asyncio.run(engine.run(max_segments=16))
+    asyncio.run(engine.run(max_segments=22))
     openers = [j for j in pipeline.jobs if j.step in ("talk_open", "talk_resume")]
-    assert [j.step for j in openers[:2]] == ["talk_open", "talk_resume"]
-    assert [j.material.extra["angle"].title for j in openers[:2]] == ["1번째 이야기", "2번째 이야기"]
-    assert "covered_angles" not in openers[0].material.extra
-    assert openers[1].material.extra["covered_angles"] == ["1번째 이야기"]
-    assert all("now" in j.material.extra for j in openers)
-    # 더미 갈래는 말할 거리가 2개 — 꺼내기가 첫째, 이야기 단계가 둘째를 쓰고 곡으로 간다 (#226)
+    assert [j.step for j in openers[:3]] == ["talk_open", "talk_resume", "talk_resume"]
+    # 더미 갈래는 말할 거리가 4개 — 첫 진입이 셋(꺼내기 하나 + 이야기 둘)을 쓰고, 곡 뒤에 같은 갈래를 잇는다 (#262)
+    assert [(j.material.extra["angle"].title, j.material.extra["angle_state"]) for j in openers[:3]] == [
+        ("1번째 이야기", "new"), ("1번째 이야기", "continue"), ("2번째 이야기", "new")]
     assert openers[0].material.extra["angle"].points == ("떠오르는 장면 하나",)
+    assert openers[1].material.extra["angle"].points == ("마무리하는 생각 하나",)
+    assert "covered_angles" not in openers[0].material.extra and "covered_angles" not in openers[1].material.extra
+    assert openers[2].material.extra["covered_angles"] == ["1번째 이야기"], "갈래가 바뀔 때 앞 갈래를 알려 준다"
+    assert all("now" in j.material.extra for j in openers)
     talks = [j for j in pipeline.jobs if j.step == "talk"]
-    assert talks[0].material.extra["angle"].points == ("청취자에게 던질 질문 하나",)
+    assert [j.material.extra["angle"].points for j in talks[:2]] == [("흔히 겪는 일 하나",), ("둘 중 하나 고르기",)]
     assert talks[0].material.extra["material"] == "angle"
-    assert [s.audio_ref.rsplit("/", 1)[1].rsplit("_", 1)[0] for s in transport.segments if _glue(s)][:2] \
-        == ["topic_talk_call", "topic_talk_resume"]
+    # 곡만 사이에 두고 같은 코너로 돌아온다 — "다시 …로 돌아왔어요"를 틀지 않는다
+    glue = [s.audio_ref.rsplit("/", 1)[1].rsplit("_", 1)[0] for s in transport.segments if _glue(s)]
+    assert glue.count("topic_talk_call") == 1 and "topic_talk_resume" not in glue
+    # 곡 뒤 첫 멘트는 방금 나간 곡을 안다. 곡을 받는 말은 한 번 걸러 한 번만 한다
+    assert "after_song" not in openers[0].material.extra
+    assert [j.material.extra["back_announce"] for j in openers[1:3]] == [True, False]
+    assert openers[1].material.extra["after_song"]["title"]
 
 
 def test_broadcast_without_host_topic_makes_no_plan(tmp_path):

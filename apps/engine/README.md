@@ -170,8 +170,14 @@ onair-engine --llm claude --tts google --transport redis --demo-request "요즘 
 - 대본은 그대로 TTS에 들어가므로 시스템 프롬프트가 마크다운·이모지·지문·화자 표기를 금지하고, 새어 나온 것은 `clean_script`가 지웁니다. 출력 한도에서 잘리면 마지막 완결 문장까지만 씁니다.
 - 부적합 판단(L1)은 `REJECT`로 통일합니다. 제공자 안전 필터 차단(Gemini `blockReason`, Claude `refusal`)도 같게 다룹니다.
 - 최근 N개 대본(`context.recent_segments`)을 시스템 프롬프트에 붙여 같은 인사·표현 반복을 막습니다.
-- **이야기 갈래**: 호스트가 주제를 정한 방송은 시작할 때 LLM 호출 1번으로 주제를 갈래(약 5분에 1개)로 펼칩니다. 주제 토크는 들어올 때마다 다음 갈래를 쓰고, 두 번째 진입부터는 주제를 다시 소개하지 않고 이어 말합니다(`talk_resume`, 형식 설정의 단계 필드 `again`). 화제를 꺼내는 단계에는 요일·시각·방송 경과도 넣습니다. 갈래 생성이 실패하면 주제 한 줄로 말합니다. 결과는 `topic_plan_log`에 남습니다. 설계: CORNER_DESIGN 5.1.1절.
+- **이야기 갈래**: 호스트가 주제를 정한 방송은 시작할 때 LLM 호출 1번으로 주제를 갈래(약 10분에 1개, 말할 거리 4~6개)로 펼칩니다. 주제 토크는 한 번 들어와서 말할 거리를 셋까지 쓰고, 남았으면 곡 뒤에 같은 갈래를 잇습니다. 다 쓰면 다음 갈래로 넘어가며 앞 갈래에서 넘어온다고 말합니다. 기록은 `topic_plan_log`와 엔진 패널에 남습니다
 - **말할 거리가 있을 때만 이야기**: 주제 토크의 이야기 단계는 매번 말할 거리 하나를 씁니다. 순서는 인용할 채팅, 방송에 나간 청취자 이야기 다시 꺼내기(3분 뒤, 코너당 1번), 갈래의 남은 말할 거리입니다. 떨어지면 곡으로 갑니다 — 조용한 방송은 말이 짧아집니다. 엔딩 돌아보기도 방송에 나간 청취자 이야기와 다룬 갈래를 씁니다. 리포트 '생성' 절에 '이야기 단계 소재' 분포가 나옵니다. 설계: CORNER_DESIGN 7.7절.
+- **청취자가 적은 방송**: 채팅 후보가 없고 마지막 채팅 뒤로 3분(`quiet_after_sec`)이 지나면 DJ가 끌고 갑니다 (docs/CORNER_DESIGN.md 7.7.1절)
+  - 곡만 사이에 두고 주제 토크로 돌아오면 "다시 …로 돌아왔어요"를 틀지 않고, 첫 멘트가 방금 나간 곡 뒤를 잇습니다
+  - 곡 사이 말 전체를 LLM 한 번으로 씁니다(문단 `block_parts`개). 문단 하나가 세그먼트 하나로 합성됩니다. 쓰는 동안 온 채팅은 남은 문단 바로 뒤에 인용합니다
+  - 청취자에게 묻는 것은 10분(`question_gap_sec`)에 한 번이고, 세 번에 한 번(`song_story_every`)은 주제 대신 방금 나간 곡 이야기를 합니다
+  - 채팅이 오면 멘트를 하나씩 만드는 평소 흐름으로 돌아갑니다. `block_parts: 1`이면 조용해도 한 번에 쓰지 않습니다
+- **앞 멘트를 보고 씁니다**: 대본은 한 번에 하나씩 쓰고 나오는 대로 맥락에 넣습니다(합성은 동시에). 예전에는 합성이 끝나야 들어가서 다음 멘트의 절반이 앞 멘트를 모르고 썼습니다
 - **곡 연속 방지** (사연토크): 곡 사이 코너가 다 빠지면(문자가 없어 문자 소개가 빠지는 등) 다음 곡도 건너뜁니다. 연달아서는 두 번까지만 건너뛰고, 신청곡은 건너뛰지 않습니다. 형식 설정 `songs_back_to_back`, 계측 `corner_log`의 `hold`. 설계: CORNER_DESIGN 6.2절.
 - **실패 처리**: LLM/TTS 호출은 1회 재시도하고, 재실패하면 더미의 고정 filler 대본으로 대체해 방송을 잇습니다(곡 소개였다면 곡 `music_ref`는 그대로 싣습니다). 제공자 장애로 인용이 대체된 요청은 `queued`로 되돌리고 창이 지나면 `expired`로 끝납니다. 대본에 인용이 빠지면 한 번 되돌리고, 또 빠지면 `rejected`로 통보합니다. Gemini TTS가 429를 주면 재시도하지 않고, 안내된 시간까지 TTS와 LLM을 호출하지 않습니다(`decision_log`의 `tts_blocked`). 계측 `generation_log`에 `error`/`fallback`/`quote` 단계가 남습니다.
 - **제출 순서**: 생성은 병렬(`max_concurrent_generations`)이지만 제출은 편성 순서대로 합니다 — 코너 콜이 앞 코너의 마지막 멘트보다 먼저 나가지 않습니다.
@@ -302,6 +308,8 @@ python -m onair_engine.scenario.compare var/scenario/<--sweep 실행>           
 python -m onair_engine.eval.pairwise var/eval/<전> var/eval/<후>              # 가려진 쌍 만들기
 python -m onair_engine.eval.pairwise --tally var/pairwise/<시각>              # votes.csv를 채운 뒤 집계
 python -m onair_engine.eval.pairwise var/eval/<전> var/eval/<후> --judge-llm claude --judge-model claude-sonnet-5-5
+python -m onair_engine.eval.pairwise --blocks var/scenario/<전> var/scenario/<후> --limit 140 --judge-llm ...  # 곡 사이 말 전체끼리
+python -m onair_engine.scenario.compare var/scenario/<전> var/scenario/<후> --refresh    # 실행 뒤에 생긴 지표를 채우고 비교
 ```
 
 - **`onair-compare`**: 같은 회차 번호(같은 seed)끼리 짝지어 지표 차이를 봅니다
@@ -309,6 +317,8 @@ python -m onair_engine.eval.pairwise var/eval/<전> var/eval/<후> --judge-llm c
   - 폴더 하나만 주면 지표별 평균·표준편차와 "구분되는 차이"(같은 회차 수로 두 조건을 견줄 때 이만큼은 달라져야 우연과 구분된다)를 보여 줍니다. 회차 수는 이 값을 보고 정합니다
   - `-o`로 마크다운을, `--json`으로 원자료를 파일로 씁니다. 표는 실험 기록에 그대로 붙일 수 있게 출처(폴더, 커밋, LLM, 덮어쓴 설정)를 머리에 적습니다
 - **`onair-pairwise`**: 같은 persona·회차·단계의 대본 두 개를 어느 쪽이 고친 뒤인지 가린 채 보여 주고 나은 쪽을 고르게 합니다
+  - `--blocks`는 `onair-scenario` 실행 폴더 두 개를 받아, 같은 시나리오·회차·자리의 곡과 곡 사이 말 전체를 견줍니다. 말이 이어지는지는 멘트 하나로는 볼 수 없습니다. `--limit`으로 시나리오마다 고르게 뽑습니다
+- **`onair-compare --refresh`**: 실행 뒤에 추가된 지표(예: 고정 문구 "돌아왔어요" 횟수, 질문으로 끝난 멘트)를 회차의 `metrics.sqlite`에서 계산해 `report.json`에 채웁니다. 이미 있는 값은 건드리지 않습니다
   - `pairs.md`(읽을 것), `votes.csv`(가 / 나 / 같음을 적을 것), `key.json`(어느 쪽이 고친 뒤인지 — 고르기 전에 열지 않습니다)을 만듭니다. `--tally`가 선택을 되돌려 세고 `report.md`를 씁니다
   - 판정은 같음을 뺀 선택이 한쪽으로 치우쳤는지 봅니다(부호 검정, p < 0.05, 6쌍 이상). 먼저 보인 쪽을 고른 비율도 같이 나옵니다 — 50%에서 멀면 심사가 순서에 끌린 것입니다
   - `--judge-llm`을 주면 LLM이 고릅니다. 생성에 쓴 모델과 다른 모델을 씁니다. 사람이 고른 결과와 어긋나는지 가끔 확인합니다

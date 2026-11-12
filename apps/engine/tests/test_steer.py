@@ -13,6 +13,7 @@ from onair_engine.format import ClockEntry, load_format
 from onair_engine.inputs.classify import steer_rule
 from onair_engine.inputs.rules import load_chat_rules
 from onair_engine.sources.rss import RssCollector
+from test_scheduler import short_talk
 
 ROOT = Path(__file__).resolve().parent.parent
 RULES = load_chat_rules(ROOT / "config" / "chat_rules.yaml")
@@ -54,7 +55,7 @@ def test_can_steer_needs_count_budget_and_a_remaining_talk_step():
     run.spent_ms = run.spec.budget_sec[1] * 1000 - 1000
     assert not run.can_steer(1)  # 한 단계 시간이 안 남았다
     run.spent_ms = 0
-    for _ in range(4):
+    for _ in range(5):  # common.yaml의 이야기 단계 반복 수
         assert run.next_step().step.kind == "talk"
     assert not run.can_steer(1)  # 마지막 이야기 — 바뀐 화제로 말할 단계가 없다
 
@@ -101,7 +102,7 @@ def _broadcast(tmp_path, body, *, intensity="mid", drop_quote=False):
                               formats_dir=ROOT / "config" / "formats", target_buffer_sec=1e9)
     transport = Capture()
     transport.body = body
-    engine = StationEngine(cfg, settings, transport)
+    engine = short_talk(StationEngine(cfg, settings, transport))
     transport.engine = engine
     pipeline = engine.scheduler.pipeline
     original = pipeline.run

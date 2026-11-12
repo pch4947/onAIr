@@ -58,6 +58,9 @@ METRICS: list[Metric] = [
     Metric("same_opening_rate", "같은 첫머리", _path("scripts", "same_opening_rate"), LOW),
     Metric("similarity_mean", "직전 멘트 유사도", _path("scripts", "similarity_mean"), LOW, summary=False),
     Metric("topic_intros", "주제 소개", _path("scripts", "topic_intros")),
+    # 흐름 (#262) — 곡마다 "다시 …로 돌아왔어요"가 나오면 토막 난다. 질문 비율은 어느 쪽이 좋은지 방송에 따라 다르다
+    Metric("resume_glue", "돌아왔어요 문구", _path("glue", "resume"), LOW),
+    Metric("question_end_rate", "질문으로 끝남", _path("scripts", "question_end_rate")),
     Metric("expect_pass_rate", "기대 결과 통과율", _expect_pass_rate, HIGH, summary=False),
     # 실행기 자체의 상태 — 크면 동시 실행이 타이밍 지표를 틀었다 (sim.LoopLag). 엔진 성능이 아니다
     Metric("loop_lag_ms_p95", "루프 지연 P95(ms)", _path("sim", "loop_lag_ms_p95")),

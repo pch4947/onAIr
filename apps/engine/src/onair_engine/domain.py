@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -160,6 +161,35 @@ class Script:
     text: str
 
 
+class BlockScript:
+    """한 번에 쓴 이야기 덩어리 — 첫 문단을 맡은 작업이 LLM을 부르고, 나머지 문단 작업은 그 결과를 기다린다.
+
+    곡 사이 말을 멘트마다 따로 쓰면 각자 시작과 끝이 있는 토막이 된다. 덩어리로 쓰고 문단 단위로 합성하면
+    글은 이어지고 합성 지연은 멘트 하나와 같다 (CORNER_DESIGN 7.7.1절, #262).
+    """
+
+    WAIT_SEC = 90.0  # 첫 문단 작업이 결과를 내지 못했을 때 나머지가 기다리는 상한
+
+    def __init__(self, parts: int):
+        self.parts = parts  # 계획한 문단 수 — 실제로 나온 문단이 적으면 남는 작업은 건너뛴다
+        self._texts: asyncio.Future[list[str] | None] = asyncio.get_running_loop().create_future()
+
+    def resolve(self, texts: list[str]) -> None:
+        if not self._texts.done():
+            self._texts.set_result(texts)
+
+    def fail(self) -> None:
+        """대본을 쓰지 못했다 — 기다리는 작업을 풀어 준다. 이미 결과가 있으면 그대로 둔다."""
+        if not self._texts.done():
+            self._texts.set_result(None)
+
+    async def wait(self) -> list[str] | None:
+        try:
+            return await asyncio.wait_for(asyncio.shield(self._texts), self.WAIT_SEC)
+        except TimeoutError:
+            return None
+
+
 @dataclass
 class GenerationJob:
     job_id: str
@@ -173,6 +203,8 @@ class GenerationJob:
     script_chars: int = 0  # 대본 글자 수 — 인용 점유율 원시 값. 파이프라인이 채운다
     provider_failed: bool = False  # LLM·TTS 장애로 대체됐다 — 인용한 입력의 잘못이 아니다
     feature: ListenerRequest | None = None  # 주 소재인 입력 — 문자·사연·신청곡
+    block: BlockScript | None = None  # 이야기 덩어리의 한 문단이면 그 덩어리
+    part: int = 0  # 덩어리의 몇 번째 문단인가 — 0번 작업이 덩어리 전체를 쓴다
 
 
 @dataclass

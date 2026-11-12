@@ -11,7 +11,7 @@
 
 | 항목 | 상태 | 근거 (코드) |
 |---|---|---|
-| 직전 멘트를 프롬프트에 넣기 (Working) | **부분 구현** | [pipeline/pipeline.py](../apps/engine/src/onair_engine/pipeline/pipeline.py) `GenerationPipeline._recent: deque[str]`(maxlen = `StationConfig.recent_segments`, 기본 8)와 `_with_context()`. 요약 없이 대본 원문을 그대로 넣는다 |
+| 직전 멘트를 프롬프트에 넣기 (Working) | **부분 구현** | [pipeline/pipeline.py](../apps/engine/src/onair_engine/pipeline/pipeline.py) `GenerationPipeline._recent: deque[str]`(maxlen = `StationConfig.recent_segments`, 기본 8)와 `_with_context()`. 요약 없이 대본 원문을 그대로 넣는다. 대본이 L2를 통과하면 바로 넣는다 — 합성을 기다리면 동시에 만드는 다음 멘트가 앞 멘트를 모르고 쓴다(#262). 대본은 한 번에 하나씩 쓴다 |
 | 송출 이력 (Episodic) | **미구현(설계)** | `AiredHistory` 류 없음. `_recent`는 **TTS 완료 시점**에 기록하며 메모리에만 있다 |
 | 기록 기준 = 실제 송출 | **부분 구현** | `PUBLISHED`를 받으면 대본을 `pending_air`에서 `aired_log`로 옮긴다(#167). 프롬프트 맥락은 아직 생성 기준(`_recent`)이다 — 버퍼만큼 앞서 만들므로, 송출 기준으로 바꾸면 방금 만든 대본을 모르고 반복하게 된다. 맥락 설계와 함께 바꾼다 |
 | 결정 로그 | **구현됨** | [telemetry.py](../apps/engine/src/onair_engine/telemetry.py) `Telemetry` — SQLite `decision_log`, `request_log`, `generation_log` |

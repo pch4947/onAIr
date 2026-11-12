@@ -233,6 +233,38 @@ def write_variants(out: Path, names: list[str]) -> Path | None:
     return path
 
 
+def _fill(old: dict, new: dict) -> int:
+    """old에 없는 항목만 new에서 채운다. 채운 항목 수를 돌려준다."""
+    added = 0
+    for key, value in new.items():
+        if key not in old:
+            old[key] = value
+            added += 1
+        elif isinstance(old[key], dict) and isinstance(value, dict):
+            added += _fill(old[key], value)
+    return added
+
+
+def refresh(root: Path) -> tuple[int, int]:
+    """실행 뒤에 생긴 지표를 지난 회차의 report.json에 채운다 — 회차의 metrics.sqlite에서 다시 계산한다.
+
+    이미 있는 값은 건드리지 않는다. (채운 회차 수, 계측 DB가 없어 건너뛴 회차 수)를 돌려준다.
+    """
+    from ..report import station_report  # 비교만 할 때는 필요 없다
+
+    done = skipped = 0
+    for path in sorted(Path(root).glob("**/run-*/report.json")):
+        report = _json(path)
+        db = path.parent / "metrics.sqlite"
+        if not report or not report.get("station_id") or not db.exists():
+            skipped += 1
+            continue
+        if _fill(report, station_report(db, report["station_id"])):
+            path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+            done += 1
+    return done, skipped
+
+
 def cli(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="onair-compare", description="시나리오 실행 결과 비교 — 폴더 하나면 회차 간 편차, 둘 이상이면 첫 폴더 대비")
@@ -241,6 +273,8 @@ def cli(argv: list[str] | None = None) -> int:
     parser.add_argument("--label", action="append", default=None, help="폴더마다 붙일 이름 (순서대로)")
     parser.add_argument("-o", "--out", type=Path, default=None, help="마크다운을 파일로도 쓴다")
     parser.add_argument("--json", type=Path, default=None, help="원자료를 JSON으로 쓴다")
+    parser.add_argument("--refresh", action="store_true",
+                        help="비교하기 전에, 실행 뒤에 생긴 지표를 각 회차의 metrics.sqlite에서 계산해 report.json에 채운다")
     args = parser.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
     roots = expand(args.roots)
@@ -248,6 +282,11 @@ def cli(argv: list[str] | None = None) -> int:
     if missing:
         print(f"폴더가 없습니다: {', '.join(missing)}", file=sys.stderr)
         return 1
+    if args.refresh:
+        for root in roots:
+            done, skipped = refresh(root)
+            print(f"지표 채움 · {root.name}: {done}회차" + (f", 계측 DB 없음 {skipped}회차" if skipped else ""),
+                  file=sys.stderr)
     loaded = [load(r) for r in roots]
     if not loaded[0]:
         print(f"회차가 없습니다 (<시나리오>/run-N/report.json): {roots[0]}", file=sys.stderr)

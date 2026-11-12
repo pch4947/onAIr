@@ -19,9 +19,10 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from ..corners.run import CornerRun, MaterialSources, PlannedStep, Thread
-from ..corners.steps import STEP_KINDS
+from ..corners.steps import BLOCK_STEP, STEP_KINDS
 from ..domain import (
     Anchor,
+    BlockScript,
     ChatType,
     Decision,
     GenerationJob,
@@ -46,7 +47,7 @@ from ..inputs.pool import QuotePool
 from ..inputs.router import BOARD_STORY, CHAT, MESSAGE, SONG_REQUEST, normalize_kind
 from ..inputs.rules import ChatRules
 from ..inputs.selector import RELEVANCE, QuoteSelector
-from ..inputs.topic_plan import Angle, TopicPlan
+from ..inputs.topic_plan import NEW, Angle, TopicPlan
 from ..pipeline.pipeline import GenerationPipeline
 from ..telemetry import Telemetry
 from ..transport import Transport
@@ -175,6 +176,14 @@ class Scheduler:
         self._unaired: dict[str, tuple[SegmentSubmission, GenerationJob | None, int]] = {}
         self._announced_segment: str | None = None
         self._pub_lock = asyncio.Lock()
+        # 청취자가 적은 방송의 흐름 (CORNER_DESIGN 7.7.1절, #262)
+        self._last_chat_at = float("-inf")  # 마지막 채팅 도착 — 한동안 없으면 조용한 방송이다
+        self._last_question_at = float("-inf")  # 청취자에게 마지막으로 물은 때
+        self._last_talk_corner: str | None = None  # 곡 소개가 아닌 마지막 코너
+        self._song_since_talk = False  # 그 코너 뒤에 곡이 나갔다
+        self._last_track: dict | None = None  # 마지막으로 소개한 곡 — 곡 뒤 첫 멘트가 받는다
+        self._song_returns = 0  # 곡 뒤에 말을 이은 횟수 — 곡을 받는 말은 한 번 걸러 한 번만 한다
+        self._quiet_visits = 0  # 조용한 동안 한 번에 쓴 진입 수 — 몇 번에 한 번은 곡 이야기로 쉬어 간다
 
     @property
     def inflight(self) -> int:
@@ -275,6 +284,7 @@ class Scheduler:
         req.state = RequestState.QUEUED
         self.telemetry.log_request_state(req.request_id, req.state)
         self.pool.add(req)
+        self._last_chat_at = max(self._last_chat_at, req.received_at)
 
     def on_track_started(self, track_ref: str, started_at: float) -> None:
         self.timeline.sync_track(track_ref, started_at)
@@ -467,10 +477,17 @@ class Scheduler:
                 topic = entry.label or self.topic
                 self._run_anchor = None
                 corner_type = entry.corner.corner_type
+                plays_song = self._plays_song(entry.corner)
                 self._run = CornerRun(entry, sources=self.sources, intensity=self.intensity,
                                       thread=Thread(topic=topic, keywords=sorted(keywords(topic))),
-                                      again=self._entered.get(corner_type, 0) > 0)
+                                      again=self._entered.get(corner_type, 0) > 0,
+                                      continues=not plays_song and self._last_talk_corner == corner_type,
+                                      after_song=not plays_song and self._song_since_talk)
                 self._entered[corner_type] = self._entered.get(corner_type, 0) + 1
+                if plays_song:
+                    self._song_since_talk = True
+                else:
+                    self._last_talk_corner, self._song_since_talk = corner_type, False
                 self.telemetry.log_corner(entry.corner.corner_type, entry.label, "enter",
                                           self._produced_ms, entry.corner.title)
             planned = self._run.next_step()
@@ -478,6 +495,8 @@ class Scheduler:
                 if planned.step.kind == "glue" and self.glue.get(
                         planned.corner.corner_type, planned.step.glue) is None:
                     continue  # 이 코너는 그 문구가 없다
+                if planned.step.glue == "resume" and self._run.continues:
+                    continue  # 곡만 사이에 두고 같은 코너를 잇는다 — 돌아왔다고 말하지 않는다
                 return planned
             self.telemetry.log_corner(self._run.spec.corner_type, self._run.label, "exit",
                                       self._produced_ms, self._run.spec.title)
@@ -589,9 +608,12 @@ class Scheduler:
         material = Material(items=list(planned.items), label=planned.label,
                             topic=self._run.thread.topic if self._run else self.topic)
         feature = None
+        step_kind = step.kind  # 조용한 방송에서는 꺼내는 단계가 이야기 덩어리로 바뀐다
+        block: BlockScript | None = None
         if step.items == "track":
             material.track = planned.items[0]
             material.items = []
+            self._last_track = material.track
             feature = self._song_requests.pop(material.track.get("request_id"), None)
         elif step.items in ("message", "board_story"):
             feature = planned.items[0]["request"]
@@ -604,7 +626,10 @@ class Scheduler:
         elif step.kind == "corner_preview":
             material.extra.update(guide=self.fmt.guide, corners=self.clock.main_titles())
         elif step.kind in _OPENERS:
-            self._open_thread(material)
+            block = self._plan_block(corner)
+            self._open_thread(material, block)
+            if block is not None:
+                step_kind = BLOCK_STEP
         elif step.kind == "closing_lookback":
             material.extra["lookback"] = self.callbacks.lookback()
             if self.topic_plan is not None and self.topic_plan.used:
@@ -617,33 +642,91 @@ class Scheduler:
             material.items = []
         anchor = self._anchor_for(planned)
         await self._expire_inputs(time.time())
-        material.quotes = self._take_quotes(corner.mode("chat"), step.kind, anchor, material)
+        if point is not None and point["source"] == "block":  # 이미 쓴 덩어리의 다음 문단 — 합성만 한다
+            material.extra["material"] = "block"
+            return GenerationJob(
+                job_id=new_id("job"), corner_type=corner.corner_type, step=BLOCK_STEP, material=material,
+                plain=corner.subjectivity == "none", anchor=anchor, block=point["block"], part=point["part"],
+            )
+        material.quotes = self._take_quotes(corner.mode("chat"), step_kind, anchor, material)
         if point is not None:
             if point["source"] == "chat" and not material.quotes:  # 선별기가 고르지 않았다 — 다른 소재로
                 point = self._quiet_point(self._run) or {"source": "topic"}
             self._use_point(point, material)
         if corner.mode("chat") == Mode.STEER:
             self._mark_steer(material)
-        self._mark_aggregate(corner.mode("chat"), step.kind, material)
+        self._mark_aggregate(corner.mode("chat"), step_kind, material)
+        if block is not None:
+            material.extra["material"] = "block"
         return GenerationJob(
-            job_id=new_id("job"), corner_type=corner.corner_type, step=step.kind,
+            job_id=new_id("job"), corner_type=corner.corner_type, step=step_kind,
             material=material, plain=corner.subjectivity == "none", anchor=anchor, feature=feature,
+            block=block,
         )
 
-    def _open_thread(self, material: Material) -> None:
+    def _is_quiet(self, now: float) -> bool:
+        """채팅 후보가 없고 마지막 채팅 뒤로 한동안 지났다 — DJ가 끌고 간다 (CORNER_DESIGN 7.7.1절)."""
+        return not len(self.pool) and now - self._last_chat_at >= self.chat_rules.quiet_after_sec
+
+    def _plan_block(self, corner: CornerSpec) -> BlockScript | None:
+        """조용한 방송이면 이번 진입을 한 번에 쓴다. 채팅이 오가는 동안은 짧은 멘트로 빨리 반영한다."""
+        parts = self.chat_rules.block_parts
+        if (parts < 2 or self._run is None or not self._is_quiet(time.time())
+                or not any(step.items == "talk_point" for step in corner.steps)):
+            return None
+        self._run.block = BlockScript(parts)
+        self._run.block_next = 1
+        # 덩어리가 이번 진입의 말을 다 쓴다 — 문단 뒤에 주제만으로 한 줄 더 붙이지 않는다.
+        # 그 뒤에 채팅이 화제를 바꾸면 새 화제의 몫(Thread.free_points)은 새로 생긴다
+        self._run.thread.free_points = self._run.thread.points_left = 0
+        return self._run.block
+
+    def _open_thread(self, material: Material, block: BlockScript | None = None) -> None:
         """화제를 꺼내는 단계 — 이번 진입의 갈래를 정하고 질문·다룬 갈래·시간 맥락을 붙인다 (CORNER_DESIGN 5.1.1절)."""
-        material.extra["question"] = self.intensity.question
         now = time.time()
+        quiet = self._is_quiet(now)
         material.extra["now"] = time_context(now, self._started_at or now)
-        if self.topic_plan is None or self._run is None:
+        run = self._run
+        song_story = None
+        if block is not None:
+            material.extra["parts"] = block.parts
+            self._quiet_visits += 1
+        if run is not None and run.after_song and self._last_track is not None:
+            material.extra["after_song"] = self._last_track
+            self._song_returns += 1
+            every = self.chat_rules.song_story_every
+            # 주제 이야기만 되풀이하지 않게 곡 이야기로 쉬어 간다. 방금 나간 곡으로 한다 — 다음 곡은 백엔드가
+            # 앞 곡 소개를 받은 뒤에야 알려 주는데, 이 덩어리는 그 전에 쓴다
+            if block is not None and every and self._quiet_visits % every == 0:
+                song_story = self._last_track
+            # 곡을 받는 말도 매번 하면 틀이 된다. 곡 이야기를 하는 차례에는 그 이야기가 곡을 받는다
+            material.extra["back_announce"] = song_story is None and self._song_returns % 2 == 1
+        ask = self.intensity.question and (
+            not quiet or now - self._last_question_at >= self.chat_rules.question_gap_sec)
+        material.extra["question"] = ask
+        if ask:
+            self._last_question_at = now
+        elif quiet:
+            material.extra["no_question"] = True
+        if song_story is not None:
+            material.extra["song_story"] = song_story
+            return
+        if run is None:
+            return
+        if block is not None and not run.called_back and (aired := self.callbacks.take(now)) is not None:
+            run.called_back = True
+            material.extra["callback"] = aired
+            self.telemetry.log_callback(aired)
+        if self.topic_plan is None:
             return
         covered = [a.title for a in self.topic_plan.used]
-        angle = self.topic_plan.next_angle()
-        thread = self._run.thread
-        thread.angle = angle
-        if angle is not None:  # 꺼내기는 첫 말할 거리로 — 나머지는 이야기 단계가 하나씩 쓴다
-            material.extra["angle"] = Angle(angle.title, angle.points[:1])
-            thread.points_used = min(1, len(angle.points))
+        angle, state = self.topic_plan.take(self.chat_rules.block_points if block is not None else 1)
+        run.thread.angle = angle
+        if angle is not None:  # 한 번에 쓰지 않을 때는 첫 말할 거리만 — 나머지는 이야기 단계가 하나씩 꺼낸다
+            material.extra["angle"] = angle
+            material.extra["angle_state"] = state
+            if state != NEW:  # 하던 갈래 — 다룬 갈래 목록에서 뺀다
+                covered = covered[:-1]
         if covered:
             material.extra["covered_angles"] = covered
 
@@ -651,7 +734,11 @@ class Scheduler:
         """이야기 단계의 소재 하나 — 인용할 채팅 → 다시 꺼낼 청취자 이야기 → 갈래의 말할 거리 (CORNER_DESIGN 7.7절).
 
         None이면 할 말이 떨어졌다 — 이야기 단계를 끝내고 다음 코너(곡)로 간다. 억지로 채우지 않는다.
+        한 번에 쓴 덩어리가 있으면 그 문단을 먼저 다 낸다. 그 사이에 온 채팅은 덩어리 바로 뒤에 인용한다.
         """
+        if run.block is not None and run.block_next < run.block.parts:
+            run.block_next += 1
+            return {"source": "block", "block": run.block, "part": run.block_next - 1}
         if self._quote_ready(run.spec.mode("chat"), "talk"):
             return {"source": "chat"}
         return self._quiet_point(run)
@@ -660,14 +747,16 @@ class Scheduler:
         """채팅 없이 말할 거리."""
         if run is None:
             return None
-        if not run.called_back and (aired := self.callbacks.take(time.time())) is not None:
+        # 덩어리를 쓴 진입은 다시 꺼내기도 덩어리 안에서만 한다 — 문단 뒤에 멘트를 더 붙이지 않는다
+        if (run.block is None and not run.called_back
+                and (aired := self.callbacks.take(time.time())) is not None):
             run.called_back = True
             return {"source": "callback", "callback": aired}
         thread = run.thread
         if thread.angle is not None:
-            if thread.points_used < len(thread.angle.points):
-                thread.points_used += 1
-                return {"source": "angle", "point": thread.angle.points[thread.points_used - 1]}
+            if thread.points_left > 0 and self.topic_plan is not None and (points := self.topic_plan.more()):
+                thread.points_left -= 1
+                return {"source": "angle", "point": points[0]}
             return None
         if thread.free_points > 0:  # 갈래가 없다(계획 실패·다 씀·화제 전환) — 주제만으로 정해진 횟수
             thread.free_points -= 1
@@ -676,6 +765,8 @@ class Scheduler:
 
     def _use_point(self, point: dict, material: Material) -> None:
         material.extra["material"] = point["source"]
+        if point["source"] != "chat" and self._is_quiet(time.time()):
+            material.extra["no_question"] = True  # 답이 없는 방송에서 멘트마다 묻지 않는다
         if point["source"] == "callback":
             material.extra["callback"] = point["callback"]
             self.telemetry.log_callback(point["callback"])
