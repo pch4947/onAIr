@@ -325,6 +325,32 @@ def test_displaced_song_requests_are_kept_and_newest_goes_first():
     assert queued()["track"]["title"] == "곡1" and "request_id" not in queued(), "신청곡이 다 나가면 플레이리스트"
 
 
+def test_displaced_track_already_being_introduced_is_not_played_twice():
+    backend = _backend()
+
+    def request(name):
+        return {"track": TrackSpec(title=name, artist="가수", sec=0.2), "request_id": name, "nickname": name}
+
+    def queued():
+        return backend.engine.calls[-1][1][0]
+
+    async def scenario():
+        backend.queue_next_track()  # sim:1 곡1 — 엔진이 소개를 만들기 시작한다
+        backend.queue_next_track(request("첫째"))  # sim:2 — 곡1은 밀려난다
+        await backend.publish_segment(_sub("late", music_ref="sim:1"))  # 만들던 곡1 소개가 온다
+        assert queued()["request_id"] == "첫째", "다음 곡은 그대로 신청곡이다"
+        backend.queue_next_track(request("둘째"))  # sim:3 — 첫째가 밀려난다
+        await backend.publish_segment(_sub("late2", music_ref="sim:2"))  # 만들던 첫째 소개가 온다
+        order = []
+        for sid in ("a", "b", "c"):
+            await backend.publish_segment(_sub(sid, music_ref=queued()["track"]["track_ref"]))
+            order.append(queued()["track"]["title"])
+        return order
+
+    assert asyncio.run(scenario()) == ["곡2", "곡1", "곡2"], "이미 소개된 곡1과 첫째는 다시 나가지 않는다"
+    assert len(backend._playlist) == 2 and not backend._requests
+
+
 def test_corner_skip_keeps_song_requests_whose_intro_was_discarded():
     backend = _backend(buffer_low_sec=0.5)
     backend.engine = SkippableEngine()

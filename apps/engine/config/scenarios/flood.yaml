@@ -1,5 +1,7 @@
 # 입력 폭주 — 채팅뿐 아니라 사연 보내기·신청곡·게시판 사연이 몰려도 제대로 골라 대본이 되는지 (CORNER_DESIGN 5.7, 9.2절, #240)
-# 반영 건수 기준(min_reflected)은 30분 방송의 코너 수에서 잡은 초기값이다 — 실제 실행으로 보정한다
+# 반영 건수 기준(min_reflected)은 2026-11-12 실행 20회(gpt-6-luna 10회, 더미 10회)의 최솟값이다 — 문자 9~10, 신청곡 3~4,
+# 게시판 사연 3~4, 채팅 2~3건. 문자만 한 건 낮췄다: 마지막 문자 코너가 방송 끝에 걸려 있다 (ENGINE_TUNING_LOG T-009)
+# 무관한 사연(off_*)과 신청자 닉네임은 실제 LLM에서만 판정된다 — 더미 LLM은 사연을 모두 관련 있다고 보고 고정 대본을 쓴다
 name: flood
 description: 20명이 분당 15건 채팅하는 가운데 사연 보내기 11건(1건은 전화번호), 신청곡 4건, 게시판 사연 10건(3건은 주제와 무관)이 몰린다. 입력 종류별 선별과 대본, 집계 언급, 생성 지연과 무음을 본다.
 station:
@@ -58,13 +60,13 @@ inputs:
 expect:
   - {type: reflected, input: msg1, note: 폭주 중에도 먼저 온 문자가 읽힌다}
   - {type: reflected, input: msg2, note: 두 번째로 온 문자가 읽힌다}
-  - {type: min_reflected, kind: message, value: 5, note: 문자 5건 이상이 읽힌다}
+  - {type: min_reflected, kind: message, value: 8, note: 문자 8건 이상이 읽힌다}
   - {type: not_aired, text: "1234", note: 전화번호를 적은 문자는 나가지 않는다}
   - {type: reflected, input: song1, note: 밀린 신청곡도 나간다}
   - {type: reflected, input: song2, note: 나중 신청곡이 먼저 나간다}
   - {type: min_reflected, kind: song_request, value: 3, note: 신청곡 3건 이상이 나간다}
   - {type: aired_contains, text: 호떡장수, note: 신청자 닉네임을 부른다}
-  - {type: min_reflected, kind: board_story, value: 2, note: 게시판 사연 2건 이상이 읽힌다}
+  - {type: min_reflected, kind: board_story, value: 3, note: 게시판 사연 3건 이상이 읽힌다}
   - {type: not_aired, text: 강아지, note: 주제와 무관한 사연은 나가지 않는다}
   - {type: not_aired, text: 주식, note: 주제와 무관한 사연은 나가지 않는다}
   - {type: not_aired, text: 타이어, note: 방송 중에 올라온 무관한 사연도 나가지 않는다}

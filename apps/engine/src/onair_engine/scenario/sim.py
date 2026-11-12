@@ -161,6 +161,8 @@ class SimBackend:
         if sub.music_ref and sub.music_ref == self._queued_ref:
             self._queued_ref = self._queued_request = None
             self.queue_next_track()  # 소개할 곡을 엔진이 가져갔다 — 백엔드가 다음 곡을 미리 알린다
+        elif sub.music_ref in self._by_ref:
+            self._forget_displaced(sub.music_ref)
 
     async def notify_request_state(self, request_id: str, state) -> None:
         self.states.append((self.now(), request_id, str(state)))
@@ -181,10 +183,7 @@ class SimBackend:
             request = self._requests.pop()
         if request is not None:
             track = request["track"]
-            if self._queued_request is not None:
-                self._requests.append(self._queued_request)
-            elif self._queued_ref is not None:  # 밀려난 플레이리스트 곡은 다음 차례로 돌린다
-                self._playlist.appendleft(self._by_ref[self._queued_ref])
+            self._put_back_queued()
         else:
             track = self._playlist.popleft()
             self._playlist.append(track)
@@ -202,6 +201,22 @@ class SimBackend:
                            nickname=request.get("nickname"))
         self._payloads[ref] = payload
         self.engine.on_track_queued(payload)
+
+    def _put_back_queued(self) -> None:
+        """알려 둔 다음 곡을 다음 차례로 돌린다 — 신청곡은 밀린 신청으로, 플레이리스트 곡은 순서의 맨 앞으로."""
+        if self._queued_request is not None:
+            self._requests.append(self._queued_request)
+        elif self._queued_ref is not None:
+            self._playlist.rotate(1)  # queue_next_track이 맨 뒤로 보낸 곡이다
+
+    def _forget_displaced(self, ref: str) -> None:
+        """밀려난 곡의 소개가 왔다 — 엔진이 그 곡의 소개를 이미 만들고 있었다. 곡은 그대로 나가므로 다시 틀지 않는다."""
+        request = self._ref_requests.get(ref)
+        if request is not None:
+            if request in self._requests:
+                self._requests.remove(request)
+        elif self._playlist and self._playlist[0] is self._by_ref[ref]:
+            self._playlist.rotate(-1)
 
     # ── 코너 변경 ────────────────────────────────────────────────────
     async def skip_corner(self, corner: str, control_id: str | None = None) -> None:
@@ -228,10 +243,7 @@ class SimBackend:
             await self.engine.on_segments_discarded({"segment_ids": [s.id for s in discarded]})
         intro = next((s for s in discarded if s.music_ref in self._payloads), None)
         if intro is not None:
-            if self._queued_request is not None:  # 그 뒤에 알린 곡은 다음 차례로 돌린다 — 신청곡이면 신청을 잃지 않는다
-                self._requests.append(self._queued_request)
-            elif self._queued_ref is not None:
-                self._playlist.appendleft(self._by_ref[self._queued_ref])
+            self._put_back_queued()  # 그 뒤에 알린 곡은 다음 차례로 돌린다 — 신청곡이면 신청을 잃지 않는다
             self._queued_ref = intro.music_ref
             self._queued_request = self._ref_requests.get(intro.music_ref)
             self.engine.on_track_queued(self._payloads[intro.music_ref])
