@@ -65,11 +65,17 @@ def _engine(tmp_path, contract_version: int, **config) -> tuple[StationEngine, C
     return StationEngine(cfg, settings, transport), transport
 
 
-def _two_chats(engine, segments: int = 8):
+async def _opening_done(engine) -> None:
+    """오프닝 멘트가 다 정해질 때까지 기다린다 — 오프닝은 채팅을 한 건만 싣는다 (T-009)."""
+    while all(s.corner_type == "opening" for s in engine.transport.segments):
+        await asyncio.sleep(0.005)
+
+
+def _two_chats(engine, segments: int = 12):
     async def scenario():
         stop = asyncio.Event()
         task = asyncio.create_task(engine.scheduler.run(stop, max_segments=segments))
-        await asyncio.sleep(0.01)
+        await _opening_done(engine)
         one = await engine.submit_request("chat", A, "u1", request_id="req_a")
         two = await engine.submit_request("chat", B, "u2", request_id="req_b")
         await task
@@ -195,12 +201,30 @@ def test_a_missed_chat_goes_back_while_the_other_is_reflected(tmp_path):
 
     engine.scheduler.pipeline.llm = DropSecond()
     engine.scheduler.intensity = engine.scheduler.intensity.model_copy(update={"quote_gap_sec": 0})
-    _two_chats(engine, segments=10)
+    _two_chats(engine, segments=14)
     first = next(s for s in transport.segments if "req_a" in s.input_refs)
     assert first.input_refs == ["req_a"], "빠진 채팅은 싣지 않는다"
     states_b = [s for rid, s in transport.states if rid == "req_b"]
     assert states_b[:3] == ["pooled", "selected", "pooled"], states_b
     assert any(s.input_refs == ["req_b"] for s in transport.segments), "되돌아간 채팅은 다음 멘트에서 인용된다"
+
+
+def _pick_two(tmp_path, step_kind: str) -> list[str]:
+    """참여 강도 high, 계약 v2에서 채팅 두 건이 기다릴 때 이 단계가 몇 건을 고르는가."""
+    engine, _ = _engine(tmp_path, 2, intensity="high")
+    scheduler = engine.scheduler
+    scheduler.enqueue_request(_chat(A, "req_a"))
+    scheduler.enqueue_request(_chat(B, "req_b"))
+    anchor = Anchor(id="topic:1", kind="topic", keywords=frozenset(), seq=1)
+    picked = scheduler._take_quotes(Mode.QUOTE, step_kind, anchor, Material(topic="겨울 간식"))
+    engine.telemetry.close()
+    return [req.request_id for req in picked]
+
+
+def test_opening_quotes_one_chat_even_on_v2_high(tmp_path):
+    """오프닝은 버퍼 없이 나간다 — 두 건을 실으면 멘트가 길어져 무음이 된다 (T-009)."""
+    assert len(_pick_two(tmp_path, "corner_preview")) == 1
+    assert len(_pick_two(tmp_path / "talk", "talk")) == 2
 
 
 def _pick_for_song_request(tmp_path, contract_version: int):
@@ -250,8 +274,8 @@ def test_discarded_segment_returns_every_input(tmp_path):
 
     async def scenario():
         stop = asyncio.Event()
-        task = asyncio.create_task(engine.scheduler.run(stop, max_segments=8))
-        await asyncio.sleep(0.01)
+        task = asyncio.create_task(engine.scheduler.run(stop, max_segments=12))
+        await _opening_done(engine)
         one = await engine.submit_request("chat", A, "u1", request_id="req_a")
         two = await engine.submit_request("chat", B, "u2", request_id="req_b")
         await task

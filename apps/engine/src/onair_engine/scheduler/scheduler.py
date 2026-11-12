@@ -71,6 +71,9 @@ _WAIT = object()  # _next_planned: 낼 수 있는 단계가 지금은 없다
 _V1_QUOTES_PER_SEGMENT = 1
 # 주 소재(사연·신청곡)가 있는 멘트에 함께 싣는 채팅 수 — 주 소재가 밀리지 않게 한 건만
 _QUOTES_WITH_FEATURE = 1
+# 한 건만 싣는 단계. 오프닝의 코너 예고는 쌓아 둔 버퍼 없이 나간다 — 두 건을 실으면 대본과 합성이
+# 길어져 오프닝 도중의 무음이 늘었다 (ENGINE_TUNING_LOG T-009, O-004)
+_SINGLE_QUOTE_STEPS = frozenset({"corner_preview"})
 _TEXT_CORNER = "text_corner"  # 예고가 가리키는 코너
 # 곡 연속 방지로 연달아 건너뛸 수 있는 곡 수 (#228). 건너뛰기는 시간이 들지 않는 결정이고, 클락이 코너를
 # _MAX_EMPTY_CORNERS번 연달아 못 넣어야 기다린다. 1번이면 본 코너에 문자 소개가 있는 방송(빠짐 → 곡 → 빠짐 → 곡)에서
@@ -830,11 +833,13 @@ class Scheduler:
         for req in requests:
             await self._transition(req, RequestState.EXPIRED)
 
-    def _quote_limit(self, with_feature: bool = False) -> int:
+    def _quote_limit(self, with_feature: bool = False, step_kind: str | None = None) -> int:
         """이 멘트에 실을 수 있는 채팅 수 — 참여 강도 상한과 계약이 실을 수 있는 수 가운데 작은 쪽."""
         if self._contract_version < 2:
             return 0 if with_feature else min(self.intensity.quote_limit, _V1_QUOTES_PER_SEGMENT)
-        return min(self.intensity.quote_limit, _QUOTES_WITH_FEATURE) if with_feature else self.intensity.quote_limit
+        if with_feature or step_kind in _SINGLE_QUOTE_STEPS:
+            return min(self.intensity.quote_limit, _QUOTES_WITH_FEATURE)
+        return self.intensity.quote_limit
 
     def _quote_ready(self, chat_mode, step_kind: str, with_feature: bool = False) -> bool:
         """지금 이 단계에 채팅을 인용할 수 있다 — 풀에 채팅이 있고 계약·참여 강도·인용 간격이 허용한다."""
@@ -849,7 +854,7 @@ class Scheduler:
         with_feature = bool(material.feature_ref)
         if not self._quote_ready(chat_mode, step_kind, with_feature):
             return []
-        limit = self._quote_limit(with_feature)
+        limit = self._quote_limit(with_feature, step_kind)
         now = time.time()
         topic_words = anchor.keywords | keywords(material.topic)
         selection = self.selector.select(
