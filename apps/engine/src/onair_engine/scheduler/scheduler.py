@@ -598,13 +598,15 @@ class Scheduler:
         if block is not None:
             material.extra["parts"] = block.parts
             self._quiet_visits += 1
-            every = self.chat_rules.song_story_every
-            if every and self._quiet_visits % every == 0:  # 주제 이야기만 되풀이하지 않게 곡 이야기로 쉬어 간다
-                song_story = self.sources.tracks.peek()
         if run is not None and run.after_song and self._last_track is not None:
             material.extra["after_song"] = self._last_track
             self._song_returns += 1
-            # 곡을 받는 말도 매번 하면 틀이 된다. 다음 곡 이야기를 하는 차례에는 곡이 둘이라 하지 않는다
+            every = self.chat_rules.song_story_every
+            # 주제 이야기만 되풀이하지 않게 곡 이야기로 쉬어 간다. 방금 나간 곡으로 한다 — 다음 곡은 백엔드가
+            # 앞 곡 소개를 받은 뒤에야 알려 주는데, 이 덩어리는 그 전에 쓴다
+            if block is not None and every and self._quiet_visits % every == 0:
+                song_story = self._last_track
+            # 곡을 받는 말도 매번 하면 틀이 된다. 곡 이야기를 하는 차례에는 그 이야기가 곡을 받는다
             material.extra["back_announce"] = song_story is None and self._song_returns % 2 == 1
         ask = self.intensity.question and (
             not quiet or now - self._last_question_at >= self.chat_rules.question_gap_sec)

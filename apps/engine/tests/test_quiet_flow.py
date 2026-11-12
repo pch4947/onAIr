@@ -19,7 +19,7 @@ from onair_engine.format.clock import ClockEntry
 from onair_engine.pipeline.llm import REJECT, DummyLlmClient, LlmError, detect_step
 from onair_engine.pipeline.pipeline import GenerationPipeline
 from onair_engine.pipeline.safety import SafetyChecker
-from onair_engine.prompt_data import ANGLE, TRACK
+from onair_engine.prompt_data import ANGLE
 from onair_engine.telemetry import Telemetry
 from test_scheduler import PROFILE, RULES, _engine, _glue
 
@@ -105,11 +105,33 @@ def test_quiet_broadcast_writes_each_break_in_one_call(tmp_path):
     assert materials.count("block") == 8, "문단마다 생성 결정이 하나씩 남는다"
 
 
-def test_every_third_quiet_break_talks_about_the_next_song(tmp_path):
+def test_every_third_quiet_break_talks_about_the_song_just_played(tmp_path):
     _, _, llm = _quiet_broadcast(tmp_path, segments=22)
-    third = _blocks(llm)[2]
-    assert "이어서 나갈 곡" in third and f'<data label="{TRACK}">' in third
-    assert ANGLE not in third and PREV_TRACK not in third, "주제 갈래와 방금 곡 받기는 쉰다"
+    blocks = _blocks(llm)
+    third = blocks[2]
+    assert "방금 나간 곡을 듣고 떠오른 이야기" in third and f'<data label="{PREV_TRACK}">' in third
+    assert ANGLE not in third and "한마디로 받고" not in third, "주제 갈래와 곡 받기 한마디는 쉰다"
+    assert "방금 나간 곡을 듣고 떠오른 이야기" not in blocks[0] + blocks[1]
+
+
+def test_song_story_does_not_need_the_next_track(tmp_path):
+    """다음 곡은 앞 곡 소개가 나간 뒤에야 백엔드가 알려 준다 — 덩어리는 그 전에 쓴다 (2026-11-12 실행에서 곡 이야기 0건)."""
+    engine, _ = _engine(tmp_path, block=True, corners=["topic_talk"], topic="겨울 간식")
+    scheduler = engine.scheduler
+    scheduler._run = _run(scheduler)
+    scheduler._run.after_song = True
+    scheduler._last_track = {"title": "첫눈 오는 밤", "artist": "가상의 가수"}
+    scheduler._quiet_visits = scheduler.chat_rules.song_story_every - 1
+    scheduler.sources.tracks.peek = lambda: None  # 다음 곡을 아직 모른다
+    material = Material(topic="겨울 간식")
+
+    async def open_thread():  # BlockScript는 도는 루프 안에서 만든다
+        scheduler._open_thread(material, BlockScript(4))
+
+    asyncio.run(open_thread())
+    engine.telemetry.close()
+    assert material.extra["song_story"]["title"] == "첫눈 오는 밤"
+    assert material.extra["back_announce"] is False
 
 
 def test_chat_keeps_the_broadcast_on_short_segments(tmp_path):
