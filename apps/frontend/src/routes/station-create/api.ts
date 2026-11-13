@@ -3,6 +3,7 @@ import { createStationClient } from './client'
 
 export const {
   getVoices, generatePersonaDrafts, checkPersonaDraft, createStation, getStation, getMyStation, switchPersona,
+  switchFormat,
 } =
   createStationClient(import.meta.env.VITE_API_BASE_URL ?? '', getAccessToken)
 

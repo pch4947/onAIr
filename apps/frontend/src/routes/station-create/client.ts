@@ -1,4 +1,6 @@
-import type { Persona, PersonaFieldError, PersonaForm, StationFormat, StationInfo, TalkCorner, Voice } from '../../shared/types'
+import type {
+  NewsSection, Persona, PersonaFieldError, PersonaForm, StationFormat, StationInfo, TalkCorner, Voice,
+} from '../../shared/types'
 
 type WirePersona = Omit<Persona, 'musicTaste' | 'djName' | 'signaturePhrases'> & {
   music_taste: string[]; dj_name: string; signature_phrases: string[]
@@ -121,6 +123,15 @@ export function createStationClient(base: string, getToken: () => string | null)
     // 어드민 전용. 202는 요청 접수이고, 안전 검사와 실제 전환은 엔진이 한다
     async switchPersona(id: string, persona: Persona): Promise<{ persona_id: string; dj_name: string; discarded: number }> {
       return request(`/stations/${encodeURIComponent(id)}/persona`, { persona: toWire(persona) })
+    },
+    // 어드민 전용. 생략한 코너·분야는 엔진 기본값을 쓴다
+    async switchFormat(id: string, options: { format: StationFormat; corners?: TalkCorner[]; newsSections?: NewsSection[] }):
+      Promise<{ format: StationFormat; discarded: number }> {
+      return request(`/stations/${encodeURIComponent(id)}/format`, {
+        format: options.format,
+        ...(options.corners ? { corners: options.corners } : {}),
+        ...(options.newsSections ? { news_sections: options.newsSections } : {}),
+      })
     },
   }
 }

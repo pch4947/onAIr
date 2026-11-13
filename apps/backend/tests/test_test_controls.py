@@ -1,5 +1,6 @@
-"""테스트 화면 코너 건너뛰기: 어드민만, 재생 안 한 멘트만 버리고 엔진에 corner.skip·segment.discarded 발행."""
+"""테스트 화면 코너·페르소나·형식 전환: 어드민만, 재생 안 한 멘트만 버리고 엔진에 segment.discarded와 전환 이벤트 발행."""
 from collections import deque
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ import httpx
 from redis.asyncio import Redis
 
 from app.auth import get_current_user
+from app.board_stories import POSTS_KEY, READ_KEY, STORIES_SINCE_KEY, STORY_STATIONS_KEY
 from app.config import Settings
 from app.main import create_app
 from app.test_controls import discardable_segments, public_decision
@@ -201,6 +203,100 @@ class PersonaSwitchApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(await self.redis.get(self.prefix + ':station'))['config']['persona']['dj_name'],
                          '고요')
         self.assertEqual(await self.redis.llen(self.prefix + ':queue'), 3)
+
+
+@unittest.skipUnless(os.environ.get('ONAIR_INTEGRATION_TEST') == '1', 'Requires Redis')
+class FormatSwitchApiTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.station = 'st_format_' + uuid.uuid4().hex
+        self.prefix = f'backend:{self.station}'
+        self.redis = Redis.from_url('redis://127.0.0.1:6379/15', decode_responses=True)
+        await self.redis.delete(POSTS_KEY, READ_KEY, STORY_STATIONS_KEY)
+        await self.redis.set(STORIES_SINCE_KEY, '0')
+        self.app = create_app(Settings('127.0.0.1', 3000, station_id=self.station, hls_enabled=True))
+        self.app.state.redis = self.redis
+        default_runtime(self.app).hls = publisher(current='playing')
+        self.user = {'id': 'a1', 'kind': 'admin'}
+        self.app.dependency_overrides[get_current_user] = lambda: self.user
+        self.record = {'station_id': self.station, 'owner_id': 'a1', 'status': 'started', 'created_at': 1.0,
+                       'config': {'broadcast_minutes': 30, 'persona': persona_body('고요', 'kore', persona_id='psn_1'),
+                                  'format': 'talk', 'corners': ['topic_talk', 'story_corner', 'dj_vs_listeners'],
+                                  'news_sections': None, 'intensity': 'mid'}}
+        await self.set_record(self.record)
+        await self.redis.rpush(self.prefix + ':queue', 'playing', 'speech1')
+        await self.redis.hset(self.prefix + ':segments', mapping={key: segment(key) for key in ('playing', 'speech1')})
+        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(self.app), base_url='http://test')
+        self.path = f'/api/stations/{self.station}/format'
+
+    async def asyncTearDown(self):
+        await self.client.aclose()
+        keys = [k async for k in self.redis.scan_iter(match=f'{self.prefix}:*')]
+        keys += [k async for k in self.redis.scan_iter(match=f'engine:{self.station}:*')]
+        await self.redis.delete(POSTS_KEY, READ_KEY, STORIES_SINCE_KEY, STORY_STATIONS_KEY, *keys)
+        await self.redis.aclose()
+
+    async def set_record(self, record):
+        await self.redis.set(self.prefix + ':station', json.dumps(record, ensure_ascii=False))
+
+    async def config(self):
+        return json.loads(await self.redis.get(self.prefix + ':station'))['config']
+
+    async def events(self):
+        return [(f['type'], json.loads(f['payload'])) for _, f in await self.redis.xrange(f'engine:{self.station}:in')]
+
+    async def test_switch_to_news_keeps_the_rest_and_tells_the_engine(self):
+        response = await self.client.post(self.path, json={'format': 'news', 'news_sections': ['it', 'economy']})
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json(), {'format': 'news', 'discarded': 1})
+        config = await self.config()
+        self.assertEqual((config['format'], config['corners'], config['news_sections']), ('news', None, ['it', 'economy']))
+        self.assertEqual({k: v for k, v in config.items() if k not in ('format', 'corners', 'news_sections')},
+                         {k: v for k, v in self.record['config'].items() if k not in ('format', 'corners', 'news_sections')})
+        self.assertEqual(await self.events(), [('segment.discarded', {'segment_ids': ['speech1']}),
+                                               ('station.format_changed', {'format': 'news',
+                                                                           'news_sections': ['it', 'economy']})])
+        self.assertEqual(await self.redis.lrange(self.prefix + ':queue', 0, -1), ['playing'])
+
+    async def test_omitted_options_use_engine_defaults(self):
+        response = await self.client.post(self.path, json={'format': 'music'})
+        self.assertEqual(response.status_code, 202)
+        config = await self.config()
+        self.assertEqual((config['format'], config['corners'], config['news_sections']), ('music', None, None))
+        self.assertEqual((await self.events())[-1], ('station.format_changed', {'format': 'music'}))
+
+    async def test_back_to_talk_offers_stories_that_were_never_sent(self):
+        await self.set_record(dict(self.record, config=dict(self.record['config'], format='music', corners=None)))
+        written = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(timespec='milliseconds')
+        await self.redis.hset(POSTS_KEY, 'p1', json.dumps({
+            'id': 'p1', 'authorId': 'u9', 'authorName': '글쓴이', 'title': '제목', 'body': '오늘 시험 끝났어요',
+            'songRequestUrl': None, 'createdAt': written}, ensure_ascii=False))
+        response = await self.client.post(self.path, json={
+            'format': 'talk', 'corners': ['topic_talk', 'story_corner']})
+        self.assertEqual(response.status_code, 202)
+        kinds = [kind for kind, _ in await self.events()]
+        self.assertEqual(kinds, ['segment.discarded', 'station.format_changed', 'board.story'])
+
+        # 다시 보내지 않는다 — 같은 사연은 방송마다 한 번
+        await self.client.post(self.path, json={'format': 'news'})
+        await self.client.post(self.path, json={'format': 'talk', 'corners': ['topic_talk', 'story_corner']})
+        self.assertEqual([kind for kind, _ in await self.events()].count('board.story'), 1)
+
+    async def test_rejects_same_format_bad_options_non_admins_and_unstarted_stations(self):
+        same = {'format': 'talk', 'corners': ['topic_talk', 'story_corner', 'dj_vs_listeners']}
+        self.assertEqual((await self.client.post(self.path, json=same)).status_code, 409)
+        for body in [{'format': 'radio'}, {'format': 'news', 'corners': ['topic_talk', 'story_corner']},
+                     {'format': 'talk', 'news_sections': ['it', 'economy']}, {'format': 'news', 'news_sections': ['it']},
+                     {'format': 'news', 'news_sections': ['it', 'it']}, {'format': 'news', 'topic': 'x'}]:
+            with self.subTest(body=body):
+                self.assertEqual((await self.client.post(self.path, json=body)).status_code, 422)
+        self.user = {'id': 'u1', 'kind': 'member'}
+        self.assertEqual((await self.client.post(self.path, json={'format': 'news'})).status_code, 403)
+        self.user = {'id': 'a1', 'kind': 'admin'}
+        await self.set_record(dict(self.record, status='draining'))
+        self.assertEqual((await self.client.post(self.path, json={'format': 'news'})).status_code, 409)
+        self.assertEqual(await self.events(), [])
+        self.assertEqual((await self.config())['format'], 'talk')
+        self.assertEqual(await self.redis.llen(self.prefix + ':queue'), 2)
 
 
 

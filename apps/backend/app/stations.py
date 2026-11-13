@@ -68,16 +68,31 @@ return 1
 """
 
 
+StationFormat = Literal['music', 'talk', 'news']
+TalkCorner = Literal['story_corner', 'text_corner', 'topic_talk', 'dj_vs_listeners']
+NewsSection = Literal['general', 'economy', 'it', 'sports', 'culture']
+
+
+def check_format_options(station_format, corners, news_sections):
+    """corners는 talk에만, news_sections는 news에만, 중복 없이 — 방 생성과 방송 중 형식 전환이 같은 규칙을 쓴다."""
+    for name, values, expected in (('corners', corners, 'talk'), ('news_sections', news_sections, 'news')):
+        if values is not None:
+            if station_format != expected:
+                raise ValueError(f'{name} is only valid for {expected}')
+            if len(set(values)) != len(values):
+                raise ValueError(f'{name} must not contain duplicates')
+
+
 class StationInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
     broadcast_minutes: int = Field(ge=30, le=60)
     persona: Persona
     topic: text(60) | None = None
     policy: Literal['naive_fifo'] = 'naive_fifo'
-    format: Literal['music', 'talk', 'news'] = Field(default='talk', description='M3 engine required for format selection')
-    corners: list[Literal['story_corner', 'text_corner', 'topic_talk', 'dj_vs_listeners']] | None = Field(
+    format: StationFormat = Field(default='talk', description='M3 engine required for format selection')
+    corners: list[TalkCorner] | None = Field(
         default=None, min_length=2, max_length=3, description='Talk format only; omitted uses engine defaults')
-    news_sections: list[Literal['general', 'economy', 'it', 'sports', 'culture']] | None = Field(
+    news_sections: list[NewsSection] | None = Field(
         default=None, min_length=2, max_length=3, description='News format only; omitted uses engine defaults')
     intensity: Literal['low', 'mid', 'high'] = Field(default='mid', description='Ignored by the engine for news')
     first_song_url: str | None = Field(default=None, max_length=2048,
@@ -94,13 +109,7 @@ class StationInput(BaseModel):
 
     @model_validator(mode='after')
     def validate_format_options(self):
-        for name, expected in (('corners', 'talk'), ('news_sections', 'news')):
-            values = getattr(self, name)
-            if values is not None:
-                if self.format != expected:
-                    raise ValueError(f'{name} is only valid for {expected}')
-                if len(set(values)) != len(values):
-                    raise ValueError(f'{name} must not contain duplicates')
+        check_format_options(self.format, self.corners, self.news_sections)
         return self
 
     def format_options(self):

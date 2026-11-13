@@ -1,11 +1,11 @@
-// 방송 화면에 붙는 테스트 패널 — 코너·페르소나 변경과, 엔진의 판단 흐름(입력 라우팅·선별·생성·코너·송출)을 보여주는 로그
+// 방송 화면에 붙는 테스트 패널 — 코너·페르소나·스테이션 변경과, 엔진의 판단 흐름(입력 라우팅·선별·생성·코너·송출)을 보여주는 로그
 
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { getVoices, switchPersona } from '@/routes/station-create/api'
+import { getVoices, switchFormat, switchPersona } from '@/routes/station-create/api'
 import { StationApiError } from '@/routes/station-create/client'
 import { cornerLabel, skippableCorners } from '@/routes/test/corners'
-import { PERSONA_PRESETS, presetVoice } from '@/routes/test/presets'
+import { FORMAT_SWITCH, PERSONA_PRESETS, presetVoice } from '@/routes/test/presets'
 import { TEST_STATION_KEY, testStationQuery } from '@/routes/test/testStation'
 import {
   describeEvent, describeInputChange, describePolicy, type LogEntry,
@@ -136,6 +136,22 @@ export function TestPanel({ state }: { state: BroadcastStateResponse }) {
   const personaError = personaMutation.error instanceof StationApiError && personaMutation.error.status === 409
     ? '방송 중일 때만 바꿀 수 있어요.' : '페르소나 전환 요청을 보내지 못했어요.'
 
+  const formatMutation = useMutation({
+    mutationFn: (next: StationFormat) => switchFormat(stationId, FORMAT_SWITCH[next]),
+    onSuccess: ({ format: next, discarded }) => {
+      push([{
+        id: `format-${Date.now()}`, at: Date.now() / 1000, tone: 'control',
+        title: `스테이션 전환 요청 → ${FORMAT_LABEL[next]}`,
+        detail: `아직 내보내지 않은 멘트 ${discarded}개를 버렸어요. 엔진이 새 형식의 첫 코너로 이어가요`,
+      }])
+      // 코너 버튼은 저장된 설정의 코너 목록으로 그린다
+      void cache.invalidateQueries({ queryKey: [TEST_STATION_KEY, stationId] })
+      void cache.invalidateQueries({ queryKey: ['broadcast-state', stationId] })
+    },
+  })
+  const formatError = formatMutation.error instanceof StationApiError && formatMutation.error.status === 409
+    ? '방송 중일 때만, 다른 형식으로만 바꿀 수 있어요.' : '스테이션 전환 요청을 보내지 못했어요.'
+
   // 로그가 바뀌면 맨 아래로 — 위로 올려 지난 로그를 읽는 중이면 그대로 둔다.
   // 줄 수나 마지막 줄로는 못 잡는다: 300줄에서 길이가 멈추고, 늦게 온 결정은 시간순으로 앞에 끼어든다
   const logRef = useRef<HTMLOListElement>(null)
@@ -194,14 +210,21 @@ export function TestPanel({ state }: { state: BroadcastStateResponse }) {
           {personaMutation.isError && <span role="alert" className="text-[11px] text-danger">{personaError}</span>}
         </div>
 
-        {/* 스테이션 변경은 엔진 지원 전이라 버튼만 둔다 */}
         <div className="flex flex-wrap items-center gap-1.5">
           <h2 className="shrink-0 text-xs font-semibold text-text">스테이션</h2>
           {(Object.keys(FORMAT_LABEL) as StationFormat[]).map((key) => (
-            <button key={key} type="button" aria-pressed={key === format} disabled title="준비 중" className={chipClass(key === format)}>
+            <button
+              key={key}
+              type="button"
+              aria-pressed={key === format}
+              disabled={!started || key === format || formatMutation.isPending}
+              onClick={() => formatMutation.mutate(key)}
+              className={chipClass(key === format)}
+            >
               {FORMAT_LABEL[key]}
             </button>
           ))}
+          {formatMutation.isError && <span role="alert" className="text-[11px] text-danger">{formatError}</span>}
         </div>
       </div>
 

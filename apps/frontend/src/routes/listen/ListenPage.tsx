@@ -550,7 +550,8 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
           onSubmitted={() => { void requestsQuery.refetch(); void musicQueueQuery.refetch() }}
         />
       )}
-      {isMessageOpen && (
+      {/* 방송 중 형식이 음악·뉴스로 바뀌면 열려 있던 창도 닫는다 — 보내도 방송에 반영되지 않는다 */}
+      {isMessageOpen && canSendMessage && (
         <MessageModal
           stationId={stationId}
           listenerName={currentUser?.name}
