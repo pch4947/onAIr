@@ -172,17 +172,19 @@ async def viewer_count(station):
         return None
 
 
-async def station_summary(request: Request, station) -> tuple[str, str | None]:
+async def station_summary(request: Request, station) -> tuple[str, str | None, str | None]:
     try:
         async with asyncio.timeout(3):
             raw = await request.app.state.redis.get(f'backend:{station.station_id}:station')
     except (RedisError, TimeoutError):
-        return 'unknown', None
+        return 'unknown', None, None
     if not raw:
-        return 'idle', None
+        return 'idle', None, None
     record = json.loads(raw)
+    config = record.get('config') or {}
     # 방 생성 때 형식을 고르지 않으면 config에 format이 빠지고 엔진은 talk로 방송한다.
-    return record['status'], record.get('config', {}).get('format', 'talk')
+    # DJ 이름은 방송 중 페르소나 전환으로 바뀔 수 있어 매번 기록에서 읽는다.
+    return record['status'], config.get('format', 'talk'), (config.get('persona') or {}).get('dj_name')
 
 
 async def current_corner(request: Request, station) -> dict | None:
@@ -214,11 +216,12 @@ async def stream_state(request: Request, response: Response,
     result = request.app.state.broadcast.snapshot()
     result["stationId"] = station.station_id
     # 둘 다 Redis 호출이라 순차 await하면 각자의 연결 타임아웃이 합산돼 버림; 동시에 실행.
-    viewers, metrics, (status, station_format), corner = await asyncio.gather(
+    viewers, metrics, (status, station_format, dj_name), corner = await asyncio.gather(
         viewer_count(station), request_metrics(station), station_summary(request, station),
         current_corner(request, station))
     result['stationStatus'] = status
     result['stationFormat'] = station_format
+    result['djName'] = dj_name
     result['currentCorner'] = corner if status in ('started', 'draining') else None
     result["viewerCount"] = viewers
     result.update(metrics)
