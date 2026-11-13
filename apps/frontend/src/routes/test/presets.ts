@@ -1,11 +1,24 @@
 // 테스트 페이지 프리셋
-import type { Persona, StationFormat, TalkCorner } from '@/shared/types'
+import type { NewsSection, Persona, StationFormat, TalkCorner } from '@/shared/types'
 
 // 테스트 화면에 들어오면 바로 여는 방송. 고를 수 있는 최대 3개 코너를 넣어 모든 토크 코너 버튼이 순환 안에 있게 한다
 export const TEST_STATION = {
   format: 'talk' as StationFormat,
   corners: ['topic_talk', 'story_corner', 'dj_vs_listeners'] as TalkCorner[],
   broadcastMinutes: 30,
+}
+
+export interface FormatOptions {
+  format: StationFormat
+  corners?: TalkCorner[]
+  newsSections?: NewsSection[]
+}
+
+// 스테이션 버튼이 보내는 형식. 토크로 돌아오면 처음 코너 그대로, 뉴스는 데모 문서의 IT·경제 (docs/DEMO_SCENARIO.md 6:00)
+export const FORMAT_SWITCH: Record<StationFormat, FormatOptions> = {
+  talk: { format: 'talk', corners: TEST_STATION.corners },
+  news: { format: 'news', newsSections: ['it', 'economy'] },
+  music: { format: 'music' },
 }
 
 export interface PersonaPreset {
