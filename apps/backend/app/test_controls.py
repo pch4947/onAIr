@@ -1,4 +1,4 @@
-"""테스트 화면 전용 — 어드민만. 방송을 끊지 않고 코너를 바꾸고, 엔진의 편성 결정과 판단 흐름(이벤트)을 보여준다."""
+"""테스트 화면 전용 — 어드민만. 방송을 끊지 않고 코너·페르소나를 바꾸고, 엔진의 편성 결정과 판단 흐름(이벤트)을 보여준다."""
 import asyncio
 import json
 import time
@@ -6,6 +6,7 @@ from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from onair_schema import Persona
 from pydantic import BaseModel, ConfigDict, Field
 from redis.exceptions import RedisError
 
@@ -49,35 +50,94 @@ def event_fields(kind, station_id, payload):
             'station_id': station_id, 'at': str(time.time()), 'payload': json.dumps(payload)}
 
 
+async def discard_and_send(state, station_id, kind, payload):
+    """아직 내보내지 않은 멘트를 버리고 엔진에 알린 뒤 kind 이벤트를 보낸다. 버린 개수를 돌려준다."""
+    prefix = f'backend:{station_id}'
+    async with state.redis.pipeline(transaction=True) as pipe:
+        pipe.lrange(prefix + ':queue', 0, -1)
+        pipe.hgetall(prefix + ':segments')
+        ids, records = await pipe.execute()
+    discarded = discardable_segments(state.hls, ids, records)
+    inbox = f'engine:{station_id}:in'
+    async with state.redis.pipeline(transaction=True) as pipe:
+        for key in discarded:
+            pipe.lrem(prefix + ':queue', 0, key)
+        if discarded:
+            # 엔진이 버려진 세그먼트의 입력(인용 채팅·사연)을 되돌리고 버퍼 계산에서 빼게 한다
+            pipe.xadd(inbox, event_fields('segment.discarded', station_id, {'segment_ids': discarded}))
+        pipe.xadd(inbox, event_fields(kind, station_id, payload))
+        await pipe.execute()
+    return len(discarded)
+
+
+def require_hls(state):
+    if not state.settings.hls_enabled:
+        raise HTTPException(503, 'HLS is disabled')
+
+
 @router.post('/stations/{station_id}/corner-skip', status_code=202)
 async def skip_corner(station_id: str, body: CornerSkipInput, request: Request, user: Admin):
     """지금 코너를 끝내고 고른 코너로 넘어가게 엔진에 요청한다. 202는 요청 접수이지 전환 완료가 아니다."""
     state = admin_station(user, request, station_id)
-    if not state.settings.hls_enabled:
-        raise HTTPException(503, 'HLS is disabled')
-    prefix = f'backend:{station_id}'
+    require_hls(state)
     try:
         async with asyncio.timeout(3):
-            raw = await state.redis.get(prefix + ':station')
+            raw = await state.redis.get(f'backend:{station_id}:station')
             if not raw or json.loads(raw)['status'] != 'started':
                 raise HTTPException(409, 'Station must be started')
-            async with state.redis.pipeline(transaction=True) as pipe:
-                pipe.lrange(prefix + ':queue', 0, -1)
-                pipe.hgetall(prefix + ':segments')
-                ids, records = await pipe.execute()
-            discarded = discardable_segments(state.hls, ids, records)
-            inbox = f'engine:{station_id}:in'
-            async with state.redis.pipeline(transaction=True) as pipe:
-                for key in discarded:
-                    pipe.lrem(prefix + ':queue', 0, key)
-                if discarded:
-                    # 엔진이 버려진 세그먼트의 입력(인용 채팅·사연)을 되돌리고 버퍼 계산에서 빼게 한다
-                    pipe.xadd(inbox, event_fields('segment.discarded', station_id, {'segment_ids': discarded}))
-                pipe.xadd(inbox, event_fields('corner.skip', station_id, {'corner': body.corner}))
-                await pipe.execute()
+            discarded = await discard_and_send(state, station_id, 'corner.skip', {'corner': body.corner})
     except (RedisError, TimeoutError):
         raise HTTPException(503, 'Redis unavailable') from None
-    return {'corner': body.corner, 'discarded': len(discarded)}
+    return {'corner': body.corner, 'discarded': discarded}
+
+
+class PersonaSwitchInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    persona: Persona
+
+
+# 방송 기록은 종료 처리·엔진 결과도 고치므로, 읽은 그대로일 때만 바꾼다
+SWAP_PERSONA = """
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+redis.call('SET', KEYS[1], ARGV[2])
+redis.call('HSET', KEYS[2], ARGV[3], ARGV[4])
+return 1
+"""
+PERSONA_SWAP_ATTEMPTS = 3
+
+
+@router.post('/stations/{station_id}/persona', status_code=202)
+async def switch_persona(station_id: str, body: PersonaSwitchInput, request: Request, user: Admin):
+    """방송을 끊지 않고 DJ 페르소나(목소리 포함)를 바꾸게 엔진에 요청한다.
+
+    아직 내보내지 않은 멘트는 버려서 새 DJ가 빨리 나오게 한다. 202는 요청 접수이고, 안전 검사와 실제 전환은 엔진이 한다.
+    """
+    state = admin_station(user, request, station_id)
+    if body.persona.persona_id is not None:
+        raise HTTPException(422, 'Submit a persona without persona_id; the backend assigns it')
+    require_hls(state)
+    prefix = f'backend:{station_id}'
+    persona = body.persona.model_copy(update={'persona_id': 'psn_' + uuid4().hex})
+    persona_data = persona.model_dump(mode='json')
+    try:
+        async with asyncio.timeout(3):
+            for _ in range(PERSONA_SWAP_ATTEMPTS):
+                raw = await state.redis.get(prefix + ':station')
+                record = json.loads(raw) if raw else None
+                if not record or record['status'] != 'started':
+                    raise HTTPException(409, 'Station must be started')
+                config = dict(record.get('config') or {}, persona=persona_data)
+                updated = dict(record, config=config, updated_at=time.time())
+                if await state.redis.eval(SWAP_PERSONA, 2, prefix + ':station', prefix + ':personas', raw,
+                                          json.dumps(updated, ensure_ascii=False), persona.persona_id,
+                                          persona.model_dump_json()):
+                    break
+            else:
+                raise HTTPException(409, 'Station changed during the switch; retry')
+            discarded = await discard_and_send(state, station_id, 'station.persona_changed', {'persona': persona_data})
+    except (RedisError, TimeoutError):
+        raise HTTPException(503, 'Redis unavailable') from None
+    return {'persona_id': persona.persona_id, 'dj_name': persona.dj_name, 'discarded': discarded}
 
 
 # 엔진 결정 로그(계약 6.1절)는 초당 1~2건이고 대부분 "wait"다. 화면에는 무엇을 만들었는지만 보낸다

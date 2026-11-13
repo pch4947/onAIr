@@ -118,5 +118,9 @@ export function createStationClient(base: string, getToken: () => string | null)
       return (await request<{ station: StationResult }>(`/stations/${encodeURIComponent(id)}/stop`,
         { created_at: createdAt })).station
     },
+    // 어드민 전용. 202는 요청 접수이고, 안전 검사와 실제 전환은 엔진이 한다
+    async switchPersona(id: string, persona: Persona): Promise<{ persona_id: string; dj_name: string; discarded: number }> {
+      return request(`/stations/${encodeURIComponent(id)}/persona`, { persona: toWire(persona) })
+    },
   }
 }

@@ -120,6 +120,89 @@ class CornerSkipApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.redis.llen(self.prefix + ':queue'), 4)
 
 
+def persona_body(dj_name='번개', voice='puck', **extra):
+    return {'style': {'formality': 'casual', 'energy': 'high', 'humor': 'often'}, 'music_taste': [],
+            'voice': voice, 'dj_name': dj_name, 'concept': '불금 하이텐션 수다 라디오', 'tone': '친구 같은 반말',
+            'examples': ['와 다들 모였어?', '이거 실화야?', '가자 가자!'], 'signature_phrases': ['가자 가자!'],
+            'forbidden': []} | extra
+
+
+@unittest.skipUnless(os.environ.get('ONAIR_INTEGRATION_TEST') == '1', 'Requires Redis')
+class PersonaSwitchApiTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.station = 'st_persona_' + uuid.uuid4().hex
+        self.prefix = f'backend:{self.station}'
+        self.redis = Redis.from_url('redis://127.0.0.1:6379/15', decode_responses=True)
+        self.app = create_app(Settings('127.0.0.1', 3000, station_id=self.station, hls_enabled=True))
+        self.app.state.redis = self.redis
+        default_runtime(self.app).hls = publisher(current='playing')
+        self.user = {'id': 'a1', 'kind': 'admin'}
+        self.app.dependency_overrides[get_current_user] = lambda: self.user
+        self.old = persona_body('고요', 'kore', persona_id='psn_old')
+        self.record = {'station_id': self.station, 'owner_id': 'a1', 'status': 'started', 'created_at': 1.0,
+                       'config': {'broadcast_minutes': 30, 'format': 'talk', 'persona': self.old},
+                       'control_id': '1-0'}
+        await self.redis.set(self.prefix + ':station', json.dumps(self.record, ensure_ascii=False))
+        ids = ['playing', 'song', 'speech1']
+        await self.redis.rpush(self.prefix + ':queue', *ids)
+        await self.redis.hset(self.prefix + ':segments', mapping={
+            key: segment(key, 'music' if key == 'song' else 'speech') for key in ids})
+        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(self.app), base_url='http://test')
+        self.path = f'/api/stations/{self.station}/persona'
+
+    async def asyncTearDown(self):
+        await self.client.aclose()
+        keys = [k async for k in self.redis.scan_iter(match=f'{self.prefix}:*')]
+        keys += [k async for k in self.redis.scan_iter(match=f'engine:{self.station}:*')]
+        if keys:
+            await self.redis.delete(*keys)
+        await self.redis.aclose()
+
+    async def events(self):
+        return [(f['type'], json.loads(f['payload'])) for _, f in await self.redis.xrange(f'engine:{self.station}:in')]
+
+    async def test_switch_updates_record_and_tells_the_engine(self):
+        response = await self.client.post(self.path, json={'persona': persona_body()})
+        self.assertEqual(response.status_code, 202)
+        body = response.json()
+        self.assertEqual((body['dj_name'], body['discarded']), ('번개', 1))
+        self.assertTrue(body['persona_id'].startswith('psn_'))
+
+        record = json.loads(await self.redis.get(self.prefix + ':station'))
+        persona = record['config']['persona']
+        self.assertEqual((persona['dj_name'], persona['voice'], persona['persona_id']), ('번개', 'puck', body['persona_id']))
+        self.assertEqual(persona['music_taste'], [])  # 빈 배열이 객체로 바뀌지 않는다
+        # 페르소나 말고는 그대로다
+        self.assertEqual({k: v for k, v in record.items() if k not in ('config', 'updated_at')},
+                         {k: v for k, v in self.record.items() if k != 'config'})
+        self.assertEqual(record['config']['format'], 'talk')
+        self.assertEqual(json.loads(await self.redis.hget(self.prefix + ':personas', body['persona_id']))['dj_name'],
+                         '번개')
+
+        self.assertEqual(await self.redis.lrange(self.prefix + ':queue', 0, -1), ['playing', 'song'])
+        events = await self.events()
+        self.assertEqual(events[0], ('segment.discarded', {'segment_ids': ['speech1']}))
+        self.assertEqual(events[1][0], 'station.persona_changed')
+        self.assertEqual(events[1][1]['persona'], persona)
+
+    async def test_rejects_non_admins_unstarted_stations_and_bad_personas(self):
+        self.user = {'id': 'u1', 'kind': 'member'}
+        self.assertEqual((await self.client.post(self.path, json={'persona': persona_body()})).status_code, 403)
+        self.user = {'id': 'a1', 'kind': 'admin'}
+        for persona in [persona_body(persona_id='psn_x'), persona_body(dj_name=''),
+                        persona_body(examples=['하나']), persona_body(unknown='x')]:
+            with self.subTest(persona=persona):
+                self.assertEqual((await self.client.post(self.path, json={'persona': persona})).status_code, 422)
+        self.assertEqual((await self.client.post(
+            '/api/stations/other/persona', json={'persona': persona_body()})).status_code, 404)
+        await self.redis.set(self.prefix + ':station', json.dumps(dict(self.record, status='preparing')))
+        self.assertEqual((await self.client.post(self.path, json={'persona': persona_body()})).status_code, 409)
+        self.assertEqual(await self.events(), [])
+        self.assertEqual(json.loads(await self.redis.get(self.prefix + ':station'))['config']['persona']['dj_name'],
+                         '고요')
+        self.assertEqual(await self.redis.llen(self.prefix + ':queue'), 3)
+
+
 
 def decision(key, at, action='generate', quotes=()):
     chat = {'request_id': 'r1', 'kind': 'chat', 'body': '안녕', 'requester_ref': 'u1', 'chat_type': 'reaction',

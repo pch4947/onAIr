@@ -23,6 +23,8 @@ export interface BroadcastStateResponse {
   stationStatus?: 'idle' | 'preparing' | 'started' | 'draining' | 'stopping' | 'cleaning' | 'ended' | 'rejected' | 'unknown'
   stationFormat?: StationFormat | null
   currentCorner?: CurrentCorner | null
+  // 방송 중 페르소나 전환(#270)으로 바뀔 수 있다
+  djName?: string | null
   stream: StreamInfo
   stationId: string
   viewerCount: number | null

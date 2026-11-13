@@ -130,7 +130,7 @@ StationRuntime
 | API | 변경 |
 | --- | --- |
 | `/api/stream/state`, `/api/requests` 등 방송 ID 없는 경로 | 기본 채널로 동작 (응답 형식 그대로). **프론트가 6.1 경로로 옮긴 다음 배포에서 지운다** |
-| `/api/stations/{sid}`, `.../stop`, `.../presence`, `.../tracks*`, `.../replays*`, `.../corner-skip`, `.../decisions`, `/hls/{sid}/...` | 설정한 채널이면 받는다 (지금은 하나만) |
+| `/api/stations/{sid}`, `.../stop`, `.../presence`, `.../tracks*`, `.../replays*`, `.../corner-skip`, `.../persona`, `.../decisions`, `/hls/{sid}/...` | 설정한 채널이면 받는다 (지금은 하나만) |
 | `/api/replays/bookmarked`, 북마크 추가·삭제, `DELETE /api/replays/{session_id}` | 세션 ID로 채널을 찾는다. 세션 ID→채널 색인 해시(`backend:replay-stations`)를 새로 둔다. 색인 전에 만든 세션은 채널마다 찾아보고, 어디에도 없으면 기본 채널을 쓴다. 북마크 목록은 채널별 북마크를 북마크 시각순으로 합친다 |
 | `/api/stations/{sid}/replays/mine` | 그대로 두고, 채널을 모은 `GET /api/replays/mine`을 추가 |
 | `/api/scheduler/tick` | 디버그용. 기본 채널만 |

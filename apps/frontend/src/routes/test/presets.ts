@@ -15,6 +15,11 @@ export interface PersonaPreset {
   persona: Omit<Persona, 'voice'>
 }
 
+// 프리셋마다 보이스 목록의 다른 칸을 써서 전환할 때 목소리도 바뀌게 한다. 테스트 방송은 0번(고요)으로 시작한다
+export function presetVoice(voices: { id: string }[] | undefined, index: number): string | undefined {
+  return voices?.length ? voices[index % voices.length].id : undefined
+}
+
 // 두 페르소나는 말투·에너지·농담을 모두 정반대로 잡아 차이가 바로 들리게 했다.
 // DJ 생성 폼 선택지(PersonaFormStep)와 초안 수정 제한(PersonaEditStep) 안의 값만 쓴다 — 실제 호스트가 만들 수 있는 DJ여야 한다
 export const PERSONA_PRESETS: PersonaPreset[] = [

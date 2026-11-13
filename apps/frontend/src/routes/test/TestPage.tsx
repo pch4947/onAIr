@@ -9,7 +9,7 @@ import { createStation, getMyStation, getVoices } from '@/routes/station-create/
 import { StationApiError } from '@/routes/station-create/client'
 import { ListenPage } from '@/routes/listen/ListenPage'
 import { TestPanel } from '@/routes/test/TestPanel'
-import { PERSONA_PRESETS, TEST_STATION } from '@/routes/test/presets'
+import { PERSONA_PRESETS, presetVoice, TEST_STATION } from '@/routes/test/presets'
 import { TEST_STATION_KEY } from '@/routes/test/testStation'
 import { getBroadcastState } from '@/shared/api'
 import { randomId } from '@/shared/randomId'
@@ -38,7 +38,7 @@ export function TestPage() {
     refetchInterval: BROADCAST_STATE_POLL_INTERVAL_MS,
   })
   const voicesQuery = useQuery({ queryKey: ['voices'], queryFn: getVoices, enabled: isAdmin })
-  const voice = voicesQuery.data?.[0]?.id
+  const voice = presetVoice(voicesQuery.data, 0)
   const state = broadcastStateQuery.data
   const busy = BUSY_STATUSES.has(state?.stationStatus ?? '')
 
