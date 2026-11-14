@@ -92,7 +92,7 @@ class RequestIntegrationTests(unittest.TestCase):
         self.assertTrue(entry['mine'])
         self.assertEqual(self.redis.xlen(f'engine:{self.station}:in'), 1)
         fields = self.redis.xrange(f'engine:{self.station}:in')[0][1]
-        self.assertEqual(fields['contract_version'], '1')
+        self.assertEqual(fields['contract_version'], '2')  # request.arrived는 v2로 보낸다 (#157 3단계)
         self.assertEqual(fields['station_id'], self.station)
         self.assertEqual(json.loads(fields['payload']), dict(request_id=entry['id'], kind='chat',
             body=body['prompt'], requester_ref=self.user_id))

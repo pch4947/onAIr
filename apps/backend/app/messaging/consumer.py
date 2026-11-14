@@ -67,6 +67,9 @@ redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
 local previous = redis.call('HGET', KEYS[2], ARGV[1])
 local oldstate = previous and cjson.decode(previous).state or 'requested'
 local newstate = cjson.decode(ARGV[3]).state
+-- v1 상태 다음에 v2 상태가 와도 된다: 엔진이 방송 중에 보내는 계약 버전을 올릴 수 있다 (10.10절)
+local v2 = {pooled=1,inboxed=1,collected=1,held=1,selected=1,
+ reflected=1,not_on_air=1,expired=1,rejected=1,cancelled=1}
 local allowed = {
  requested={screened=1,queued=1,generating=1,generated=1,rejected=1,expired=1},
  screened={queued=1,generating=1,generated=1,rejected=1,expired=1},
@@ -74,6 +77,10 @@ local allowed = {
  generating={queued=1,generated=1,rejected=1},
  generated={rejected=1}
 }
+-- v2 종결 상태(reflected·not_on_air·expired·rejected·cancelled)에서는 더 바뀌지 않는다.
+-- selected는 생성 실패나 인용 누락으로 pooled·inboxed로 되돌아갈 수 있다 (10.4절)
+local open = {requested=1,screened=1,queued=1,generating=1,pooled=1,inboxed=1,collected=1,held=1,selected=1}
+if open[oldstate] and v2[newstate] then allowed[oldstate] = allowed[oldstate] or {}; allowed[oldstate][newstate] = 1 end
 if oldstate == newstate then return 0 end
 if not allowed[oldstate] or not allowed[oldstate][newstate] then
  redis.call('RPUSH', KEYS[3], cjson.encode({state=newstate, previous=oldstate,
@@ -168,8 +175,8 @@ class EngineConsumer:
                 await StoryFeed(self.redis, self.settings.station_id).offer_recent()
         elif isinstance(event, CornerChanged):
             # The engine schedules ahead of the broadcast; this waits for the segment to start playing.
-            await self.redis.hset(self.prefix + ':corner-pending', event.segment_id,
-                                  json.dumps(event.model_dump(exclude={'segment_id'}), ensure_ascii=False))
+            await self.redis.hset(self.prefix + ':corner-pending', event.segment_id, json.dumps(
+                event.model_dump(exclude={'segment_id'}, exclude_none=True), ensure_ascii=False))
         elif event.request_id.startswith(MUSIC_SEGMENT_PREFIX):
             # The engine tracks the comment and introduction; the song's own audio decides its state.
             await self.redis.rpush(self.prefix + ":request-history:" + event.request_id, json.dumps(dict(
@@ -179,7 +186,8 @@ class EngineConsumer:
             # Source stream ID prevents older pending events overwriting newer states.
             await self.redis.eval(STATE, 3, self.prefix + ":request-versions",
                                   self.prefix + ":request-states", self.prefix + ":request-history:" + event.request_id,
-                                  event.request_id, entry_id, json.dumps(event.model_dump()), fields['at'], fields['event_id'])
+                                  event.request_id, entry_id, json.dumps(event.model_dump(exclude_none=True)),
+                                  fields['at'], fields['event_id'])
         await self.ack(entry_id)
 
     async def run(self):
