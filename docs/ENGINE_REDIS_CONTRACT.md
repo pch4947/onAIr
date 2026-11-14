@@ -672,6 +672,7 @@ wsl redis-cli XADD engine:st_local_dev:in '*' type request.arrived contract_vers
 - 한 청취자 한 표 — 중복 방지는 백엔드가 `requester_ref`로 한다. `vote.result`가 재전달되면 엔진은 `vote_id`로 한 번만 반영한다.
 - 엔진은 투표 창이 열린 동안 방송이 비지 않도록 다른 단계(DJ 이야기, 곡)와 겹쳐 연다. DJ의 선택은 결과를 보기 전에 정해 저장한다.
 - 투표한 청취자의 입력 상태(`collected`)는 백엔드가 직접 표시해도 된다 — 엔진이 표마다 `request.state`를 보내지 않는다.
+- **백엔드 구현 (2026-11-14, #279)** — `vote.open`(계약 v1·v2 봉투 모두)을 기준 세그먼트별로 들고 있다가 그 세그먼트의 `segment.started`(청취자 기준 재생 시작 = `started_at`)에 열고, `started_at + window_sec`에 닫아 `vote.result`(`contract_version` `"2"`)를 한 번 보낸다. 선택지는 정확히 두 개이고 서로 달라야 하며, `window_sec`는 10~600초다. 기준 세그먼트가 버려지거나(코너·페르소나·형식 버튼, `segment.discarded`) 인코딩에 실패하면 그 투표는 열지 않는다. 창이 열린 뒤 코너가 바뀌어도 예정대로 닫는다. 표는 `requester_ref`와 같은 로그인 사용자 기준 한 표다. 열린 동안 화면에는 표 수를 내리지 않고 닫힌 뒤 60초 동안 결과를 보여 준다. `last_song`의 결과 곡을 `track.queued`(`source: "vote"`)로 보내는 부분은 아직 없다.
 
 ### 10.9 `segment.insert_before` (E→B, 신설 `[실험 조건 후보]` `[확정 전 — M6 별도 작업]`)
 

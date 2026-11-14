@@ -87,6 +87,17 @@ class CornerChanged(BaseModel):
     format: Literal['talk', 'music', 'news'] | None = None
 
 
+class VoteOpen(BaseModel):
+    """vote.open (E→B, 10.8절). 기준 세그먼트의 재생이 시작될 때 열고 window_sec 뒤에 닫는다."""
+    model_config = ConfigDict(strict=True, extra='forbid')
+    vote_id: Text
+    kind: Literal['game', 'last_song']
+    question: Annotated[str, Field(min_length=1, max_length=200)]
+    options: Annotated[list[Annotated[str, Field(min_length=1, max_length=100)]], Field(min_length=2, max_length=2)]
+    segment_id: Text
+    window_sec: Annotated[int, Field(ge=10, le=600)]
+
+
 def decode(fields: dict, station_id: str):
     required = {"type", "contract_version", "event_id", "station_id", "at", "payload"}
     if not required <= fields.keys() or not all(isinstance(v, str) for v in fields.values()):
@@ -119,6 +130,11 @@ def decode(fields: dict, station_id: str):
         return StationRejected.model_validate(payload)
     if fields['type'] == 'corner.changed':
         return CornerChanged.model_validate(payload)
+    if fields['type'] == 'vote.open':
+        result = VoteOpen.model_validate(payload)
+        if len(set(result.options)) != len(result.options):
+            raise ValueError('duplicate_vote_options')
+        return result
     raise ValueError("unsupported_event")
 
 

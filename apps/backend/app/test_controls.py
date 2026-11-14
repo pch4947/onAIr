@@ -63,6 +63,8 @@ for i = 1, #ARGV do
   redis.call('HDEL', KEYS[3], ARGV[i])
   if redis.call('HGET', KEYS[2], 'frozen') == reserved then redis.call('HDEL', KEYS[2], 'frozen') end
  end
+ -- 기준 세그먼트가 버려진 투표는 열지 않는다 (#279 C4)
+ redis.call('HDEL', KEYS[4], ARGV[i])
 end
 return #ARGV
 """
@@ -79,7 +81,8 @@ async def discard_and_send(state, station_id, kind, payload):
     inbox = f'engine:{station_id}:in'
     async with state.redis.pipeline(transaction=True) as pipe:
         if discarded:
-            pipe.eval(DISCARD, 3, prefix + ':queue', prefix + ':track-plan', prefix + ':intro-tracks', *discarded)
+            pipe.eval(DISCARD, 4, prefix + ':queue', prefix + ':track-plan', prefix + ':intro-tracks',
+                      prefix + ':vote-pending', *discarded)
             # 엔진이 버려진 세그먼트의 입력(인용 채팅·사연)을 되돌리고 버퍼 계산에서 빼게 한다
             pipe.xadd(inbox, event_fields('segment.discarded', station_id, {'segment_ids': discarded}))
         pipe.xadd(inbox, event_fields(kind, station_id, payload))
