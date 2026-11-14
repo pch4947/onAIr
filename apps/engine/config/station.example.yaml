@@ -23,6 +23,9 @@ pipeline:
   # llm_reasoning_effort: low    # openai 추론 모델의 추론량 — 낮을수록 빠르다
   emit_corner_changed: true   # corner.changed 발행 — 청취 화면의 "지금 · 코너" 안내에 쓰인다 (계약 10.7절).
                               # VM의 엔진 서비스가 이 파일을 읽는다. PR #189 이전 백엔드와는 켜지 않는다 (이벤트가 격리됨)
+  # emit_votes: true          # DJ 대 청취자 코너의 투표(vote.open)를 연다 (#279, 계약 10.8절).
+                              # 백엔드가 vote.open을 받고 vote.result를 돌려주게 배포된 뒤에 켠다. 꺼져 있으면 그 코너는 주제 토크로 대체된다
+  # vote_window_sec: 60       # 투표 창 길이(초) — 고민을 소개하는 멘트의 재생 시작부터
   # emit_corner_format: true  # corner.changed에 형식(format)을 싣는다 — 방송 중 형식 전환 때 화면이 소리에 맞춰 바뀐다 (#260).
                               # 백엔드가 이 필드를 받게 배포된 뒤에 켠다. 그 전에 켜면 corner.changed가 통째로 격리된다
   tts: dummy                  # dummy(무음 wav) | gemini(운영 TTS, GEMINI_API_KEY 필요)

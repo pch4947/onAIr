@@ -6,6 +6,7 @@
 - 남은 분량(backpressure)을 상태가 바뀔 때나 10초마다 보낸다
 - 다음 곡(track.queued)을 미리 알려 주고, 신청곡이 오면 다음 곡으로 올린다
 - 테스트 화면의 버튼(코너 변경, 페르소나 전환, 형식 전환)을 누르면 아직 내보내지 않은 멘트를 버리고 엔진에 알린다
+- 투표(vote.open)를 받으면 기준 세그먼트의 재생 시작에 창을 열고, 닫힐 때 가짜 표를 세어 vote.result를 보낸다
 Redis·HLS·플레이어 지연은 흉내 내지 않는다.
 """
 from __future__ import annotations
@@ -147,6 +148,8 @@ class SimBackend:
         self.skips: list[dict] = []  # 코너 변경 기록 — 버튼부터 새 코너 첫 멘트의 제출·재생까지
         self.persona_switches: list[dict] = []  # 페르소나 전환 기록 — 버튼부터 새 DJ 첫 멘트의 제출·재생까지
         self.format_switches: list[dict] = []  # 형식 전환 기록 — 버튼부터 새 형식 첫 멘트의 제출·재생까지
+        self.votes: list[dict] = []  # 투표 기록 — 받은 vote.open과 창을 연·닫은 시각, 보낸 결과
+        self._vote_tasks: set[asyncio.Task] = set()
 
     @property
     def engine_done(self) -> bool:
@@ -188,6 +191,9 @@ class SimBackend:
         if event_type == "station.started":
             self.started_at = time.time()
             self.started.set()
+        elif event_type == "vote.open":  # 기준 세그먼트의 재생이 시작될 때 연다 (계약 10.8절)
+            self.votes.append({**payload, "at": round(self.now(), 1), "opened_at": None, "closed_at": None,
+                               "counts": None, "discarded": False})
 
     # ── 곡 ───────────────────────────────────────────────────────────
     def queue_next_track(self, request: dict | None = None) -> None:
@@ -289,6 +295,10 @@ class SimBackend:
                 discarded.append(sub)
         self._queue = kept
         record.update(discarded=len(discarded), ahead_sec=round(ahead, 1))
+        gone = {s.id for s in discarded}
+        for vote in self.votes:  # 기준 세그먼트가 버려진 투표는 열지 않는다
+            if vote["opened_at"] is None and vote["segment_id"] in gone:
+                vote["discarded"] = True
         if discarded:
             await self.engine.on_segments_discarded({"segment_ids": [s.id for s in discarded]})
         intro = next((s for s in discarded if s.music_ref in self._payloads), None)
@@ -343,6 +353,15 @@ class SimBackend:
         for record in (*self.skips, *self.persona_switches, *self.format_switches):
             if record["segment_id"] == sub.id:
                 record["play_sec"] = round(self.now() - record["at"], 1)
+        for vote in self.votes:
+            if vote["segment_id"] == sub.id and vote["opened_at"] is None and not vote["discarded"]:
+                # 창은 청취자가 그 멘트를 듣기 시작할 때 연다 — segment.started의 started_at과 같은 시각이다
+                vote["opened_at"] = round(self.now() + self.sim.broadcast_delay_sec, 1)
+                self.played.append(Played(self._at() + self.sim.broadcast_delay_sec, "input", 0,
+                                          text=f"투표 열림 {vote['vote_id']}: {' / '.join(vote['options'])}"))
+                task = asyncio.create_task(self._close_vote(vote))
+                self._vote_tasks.add(task)
+                task.add_done_callback(self._vote_tasks.discard)
         if not self.engine_done:
             self.engine.on_segment_published(sub.id, time.time())
             self.engine.on_segment_started(sub.id, time.time() + self.sim.broadcast_delay_sec)
@@ -357,6 +376,23 @@ class SimBackend:
                 self.engine.on_track_started({"track_ref": sub.music_ref,
                                               "started_at": time.time() + self.sim.broadcast_delay_sec})
             await self._advance(track_sec)
+
+    async def _close_vote(self, vote: dict) -> None:
+        """창이 닫히면 표를 세어 vote.result를 보낸다. 표는 청취자마다 한쪽을 고른 것으로 흉내 낸다."""
+        await self._wait_any(self.finished, timeout=self.sim.broadcast_delay_sec + vote["window_sec"])
+        first, second = vote["options"]
+        lean = self.rng.uniform(0.25, 0.75)  # 투표마다 쏠림이 다르다
+        ayes = sum(self.rng.random() < lean for _ in range(self.sim.vote_people))
+        vote["counts"] = {first: ayes, second: self.sim.vote_people - ayes}
+        vote["closed_at"] = round(self.now(), 1)
+        if self.sim.vote_result_delay_sec:
+            await self._wait_any(self.finished, timeout=self.sim.vote_result_delay_sec)
+        if self.engine_done:
+            return
+        self.played.append(Played(self._at(), "input", 0, text=(
+            f"투표 닫힘 {vote['vote_id']}: {first} {ayes} / {second} {self.sim.vote_people - ayes}")))
+        self.engine.on_vote_result({"vote_id": vote["vote_id"], "counts": vote["counts"],
+                                    "total": self.sim.vote_people})
 
     def _at(self) -> float:
         """기록할 송출 시각. 엔진이 끝난 뒤에는 기다리지 않으므로 앞 송출이 끝나는 시각을 쓴다."""

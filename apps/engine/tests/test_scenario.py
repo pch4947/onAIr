@@ -60,6 +60,8 @@ def test_parse_at():
     {"controls": [{"at": 1, "type": "format_switch"}]},  # format 없음
     {"controls": [{"at": 1, "type": "format_switch", "format": "podcast"}]},  # 모르는 형식
     {"expect": [{"type": "not_reflected"}]},  # input 없음
+    {"expect": [{"type": "min_vote_rounds"}]},  # value 없음
+    {"sim": {"vote_people": -1}},
     {"news": [{"summary": "제목 없는 기사"}]},
     {"expect": [{"type": "corner_entered", "control": "none"}]},  # 없는 조작
     {"expect": [{"type": "corner_entered"}]},  # control 없음
@@ -212,7 +214,7 @@ def _sub(sid, ms=200, music_ref=None):
 
 
 def _backend(**sim):
-    backend = SimBackend(sim=SimSpec(broadcast_delay_sec=12, **sim),
+    backend = SimBackend(sim=SimSpec(**{"broadcast_delay_sec": 12, **sim}),
                          tracks=[TrackSpec(title="곡1", artist="가수", sec=0.2),
                                  TrackSpec(title="곡2", artist="가수", sec=0.2)], rng=random.Random(1))
     backend.engine = FakeEngine()
@@ -378,6 +380,35 @@ def test_format_switch_discards_untouched_segments_and_times_the_new_format():
     assert (change["id"], change["format"], change["accepted"], change["segment_id"], change["corner"]) == (
         "to_news", "news", True, "new", "headline")
     assert change["submit_sec"] is not None and change["play_sec"] is not None
+
+
+def test_backend_opens_a_vote_when_its_segment_plays_and_reports_the_count():
+    backend = _backend(buffer_low_sec=1.5, vote_people=10, broadcast_delay_sec=0.02)
+    backend.engine = SkippableEngine()
+    vote = {"vote_id": "vote_1", "kind": "game", "question": "머리부터? 꼬리부터?", "options": ["머리부터", "꼬리부터"],
+            "segment_id": "ask", "window_sec": 0.05}
+
+    async def scenario():
+        await backend.notify_station("station.started", {})
+        await backend.notify_station("vote.open", vote)
+        await backend.notify_station("vote.open", {**vote, "vote_id": "vote_2", "segment_id": "gone"})
+        await backend.publish_segment(_sub("s1", ms=1000))
+        await backend.publish_segment(_sub("s2", ms=1000))
+        await backend.publish_segment(_sub("gone", ms=1000))
+        await backend.skip_corner("text_corner")  # gone이 버려진다 — 그 투표는 열리지 않는다
+        assert backend.votes[0]["opened_at"] is None, "기준 세그먼트가 재생되기 전에는 열지 않는다"
+        await backend._play_segment(_sub("ask", ms=10))
+        await backend._play_segment(_sub("gone", ms=10))
+        await asyncio.sleep(0.2)
+
+    asyncio.run(scenario())
+    opened, dropped = backend.votes
+    assert opened["opened_at"] is not None and opened["closed_at"] is not None
+    assert sum(opened["counts"].values()) == 10 and set(opened["counts"]) == {"머리부터", "꼬리부터"}
+    assert dropped["discarded"] and dropped["opened_at"] is None and dropped["counts"] is None
+    results = [args[0] for name, args in backend.engine.calls if name == "on_vote_result"]
+    assert results == [{"vote_id": "vote_1", "counts": opened["counts"], "total": 10}]
+    assert any(p.kind == "input" and p.text.startswith("투표 열림 vote_1") for p in backend.played)
 
 
 def test_fake_feeds_serve_the_scenario_news_by_section():

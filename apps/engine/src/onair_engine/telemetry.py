@@ -436,6 +436,34 @@ class Telemetry:
                     index=index, total=total)
         self._db.commit()
 
+    def log_dilemmas(self, count: int, method: str, dropped: int = 0) -> None:
+        """DJ 대 청취자 코너의 고민 준비 (#279) — method는 llm 또는 failed. 패널에만 남긴다."""
+        if method == "llm":
+            summary = f"투표 고민 {count}개 준비" + (f" (안전 검사로 {dropped}개 제외)" if dropped else "")
+        else:
+            summary = "투표 고민 만들기 실패 → DJ 대 청취자 코너는 대체됨"
+        self._event("vote", summary, method=method, count=count, dropped=dropped)
+        self._db.commit()
+
+    def log_vote_open(self, round_) -> None:
+        """vote.open을 보냈다 — 창은 기준 세그먼트의 재생이 시작될 때 열린다."""
+        options = " / ".join(round_.dilemma.options)
+        self._event("vote", f"투표 시작 · {options}", event="open", vote_id=round_.vote_id,
+                    segment_id=round_.segment_id, question=round_.dilemma.question,
+                    options=list(round_.dilemma.options), pick=round_.dilemma.pick)
+        self._db.commit()
+
+    def log_vote_result(self, round_, score: dict) -> None:
+        """결과 공개 멘트를 만들기 직전 — 표 수와 DJ의 적중 여부, 그때까지의 점수."""
+        first, second = round_.tally
+        a, b = round_.dilemma.options
+        verdict = {"match": "DJ 적중", "mismatch": "DJ 빗나감", "tie": "동률", "no_votes": "표 없음",
+                   "late": "결과를 받지 못함"}[round_.outcome]
+        tally = "" if round_.counts is None else f"{a} {first} : {b} {second} · "
+        self._event("vote", f"투표 결과 · {tally}{verdict}", event="result", vote_id=round_.vote_id,
+                    outcome=round_.outcome, counts=round_.counts, score=dict(score), talks=round_.talks)
+        self._db.commit()
+
     def log_callback(self, aired) -> None:
         """청취자 이야기 다시 꺼내기 — 패널에만 남긴다. 소재 출처는 decision_log의 material에 있다."""
         self._event("callback", f"다시 꺼내기 · \"{_excerpt(aired.body)}\"", kind=aired.kind)

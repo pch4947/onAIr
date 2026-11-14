@@ -17,12 +17,14 @@ from ..prompt_data import (
     CHAT,
     CORNERS,
     COVERED_ANGLES,
+    DILEMMA,
     NOW,
     SOURCES,
     STORY,
     TOPIC,
     TRACK,
     TREND,
+    VOTE_RESULT,
     data_block,
 )
 from .base import system_prompt
@@ -283,11 +285,82 @@ def _text_read(m: Material) -> str:
             + data_block(STORY, f"닉네임: {msg.get('nickname', '익명')}\n{msg['body']}"))
 
 
-def _game_round(m: Material) -> str:
-    vote = m.items[0]
+# DJ 대 청취자 코너 (CORNER_DESIGN 7.6절, #279) — 항목은 라운드의 지금 상태다 (inputs/votes.py view)
+# DJ의 선택은 결과를 공개하는 멘트에서만 밝힌다. 그 전에 새면 청취자가 따라 고른다
+HIDE_PICK_RULE = "DJ가 어느 쪽을 골랐는지는 아직 밝히지 않고, 짐작할 수 있는 말도 하지 않는다."
+_OUTCOME_RULES = {
+    "match": "DJ의 선택과 청취자 다수의 선택이 같았다. DJ가 맞혔다고 말한다.",
+    "mismatch": "DJ의 선택과 청취자 다수의 선택이 갈렸다. 이번에는 청취자가 이겼다고 말한다.",
+    "tie": "표가 똑같이 갈렸다. 무승부라고 말한다.",
+    "no_votes": "표가 들어오지 않았다. 표 수는 말하지 않고, 이번 고민은 무승부로 넘어간다고 말한다.",
+    "late": "집계가 늦어져 결과를 전하지 못한다. 결과를 지어내지 않고 DJ의 선택만 밝히며, 점수는 말하지 않는다.",
+}
+
+
+def _dilemma_block(vote: dict) -> str:
     options = " / ".join(vote.get("options", []))
-    return ("투표 주제와 선택지를 소개하고 청취자에게 투표를 권하는 멘트를 3문장 이내로 작성하라.\n"
-            + data_block(STORY, f"{vote.get('question', '')}\n선택지: {options}"))
+    return data_block(DILEMMA, f"{vote.get('question', '')}\n선택지: {options}")
+
+
+def _game_ask(m: Material) -> str:
+    vote = m.items[0]
+    return ("DJ와 청취자가 같은 쪽을 고르는지 겨루는 코너다. 아래 고민과 두 선택지를 소개하고 청취자에게 "
+            "투표를 권하는 멘트를 3문장 이내로 작성하라. 두 선택지는 적힌 말 그대로 부르고, 투표는 화면에서 "
+            f"할 수 있다고 알린다. {HIDE_PICK_RULE}\n" + _dilemma_block(vote))
+
+
+def _game_talk(m: Material) -> str:
+    vote = m.items[0]
+    options = vote.get("options") or ["", ""]
+    turn = int(vote.get("talks", 1))
+    phase = vote.get("phase", "open")
+    if phase == "closing":  # 이 멘트가 나갈 즈음 창이 닫힌다 — 권하지 않고 마감을 알린다
+        return ("청취자 투표를 기다리며 이야기를 잇는 자리다. 이제 투표를 마감한다고 알리고, 결과를 확인하는 동안 "
+                f"잠깐 기다려 달라고 말하는 멘트를 2문장 이내로 작성하라. 투표를 더 권하지 않는다. {HIDE_PICK_RULE} "
+                "투표 결과를 짐작하거나 지어내지 않는다.\n" + _dilemma_block(vote))
+    if phase == "closed":
+        # 창은 닫혔고 결과 공개 멘트를 만드는 중이다. 결과가 청취자에게 들리기까지 25초쯤 걸린다(공개 멘트 생성 +
+        # 방송 지연). "결과가 곧 나온다"고만 시켰더니 그 말이 서너 번 되풀이됐다 (2026-11-14 실제 LLM 10회)
+        return ("청취자 투표를 기다리며 이야기를 잇는 자리다. 투표는 이미 마감됐다. 결과를 확인하는 동안, 아래 고민을 "
+                "두고 떠오르는 장면 하나를 가볍게 이야기하는 멘트를 3문장 이내로 작성하라. 어느 한쪽 편을 들지 않고, "
+                f"투표를 더 권하지 않는다. {HIDE_PICK_RULE} 결과가 곧 나온다는 말은 하지 않아도 된다. "
+                "투표 결과를 짐작하거나 지어내지 않고, 직전 멘트와 같은 말을 되풀이하지 않는다.\n" + _dilemma_block(vote))
+    text = "청취자 투표를 기다리며 이야기를 잇는 멘트를 3문장 이내로 작성하라. "
+    if turn <= 2:  # 두 쪽을 한 번씩 편든다 — 한쪽만 말하면 DJ의 선택처럼 들린다
+        text += f"아래 고민에서 '{options[(turn - 1) % 2]}' 쪽을 고르는 마음을 풀어 말한다. "
+    elif turn % 2:  # 결과가 올 때까지 잇는다 — 권하는 말만 되풀이하지 않게 번갈아 한다
+        text += "아직 고르지 못한 청취자에게 가볍게 투표를 권하고, 두 선택지를 다시 한 번 부른다. "
+    else:
+        text += ("아래 고민을 두고 흔히 망설이게 되는 순간을 가볍게 이야기한다. 어느 한쪽 편을 들지 않고, "
+                 "두 선택지를 한 번씩 다시 부른다. ")
+    text += (f"{HIDE_PICK_RULE} 투표 결과를 짐작하거나 지어내지 않고, 직전 멘트와 같은 말을 되풀이하지 않는다.\n")
+    return text + _dilemma_block(vote)
+
+
+def _game_reveal(m: Material) -> str:
+    vote = m.items[0]
+    options = vote.get("options") or ["", ""]
+    outcome = vote.get("outcome", "late")
+    text = ("DJ의 선택과 청취자 투표 결과를 공개하는 멘트를 6문장 이내로 짧게 작성하라. 먼저 DJ가 "
+            f"'{options[int(vote.get('pick', 0))]}' 쪽을 골랐다고 밝히고 아래 까닭을 DJ의 말투로 한 문장으로 말한다. ")
+    if outcome in ("match", "mismatch", "tie"):
+        text += "이어서 아래 투표 결과의 표 수를 적힌 숫자 그대로 전한다. 숫자를 바꾸거나 지어내지 않는다. "
+    text += _OUTCOME_RULES[outcome]
+    if outcome != "late" and (score := vote.get("score")):
+        text += f" 끝으로 지금 점수가 DJ {score['dj']}점, 청취자 {score['listeners']}점이라고 알린다."
+    blocks = [data_block(DILEMMA, f"{vote.get('question', '')}\nDJ가 고른 까닭: {vote.get('reason', '')}")]
+    if outcome in ("match", "mismatch", "tie"):
+        first, second = vote.get("tally", (0, 0))
+        blocks.append(data_block(VOTE_RESULT, f"{options[0]}: {first}표\n{options[1]}: {second}표"))
+    return text + "\n" + "\n".join(blocks)
+
+
+def _game_final(m: Material) -> str:
+    score = m.extra.get("score") or {"dj": 0, "listeners": 0, "draw": 0}
+    dj, listeners = score["dj"], score["listeners"]
+    winner = ("DJ가 이겼다" if dj > listeners else "청취자가 이겼다" if listeners > dj else "비겼다")
+    return (f"코너를 마치며 최종 점수를 알리는 멘트를 2문장 이내로 작성하라. DJ {dj}점, 청취자 {listeners}점으로 "
+            f"{winner}고 숫자 그대로 말하고, 함께해 준 청취자에게 짧게 인사한다. 새 고민을 꺼내지 않는다.")
 
 
 def _news_headline(m: Material) -> str:
@@ -349,7 +422,10 @@ STEP_KINDS: dict[str, StepKind] = {
     "music_intro": StepKind("다음 곡을 소개", _music_intro, (10, 25), quotable=True),
     "story": StepKind("사연을 읽고", _story, (20, 60), quotable=True),
     "text_read": StepKind("짧은 문자를", _text_read, (8, 25)),
-    "game_round": StepKind("투표를 권하는", _game_round, (15, 40)),
+    "game_ask": StepKind("투표를 권하는", _game_ask, (10, 30)),
+    "game_talk": StepKind("투표를 기다리며", _game_talk, (10, 30), quotable=True),
+    "game_reveal": StepKind("투표 결과를 공개", _game_reveal, (15, 40)),
+    "game_final": StepKind("최종 점수", _game_final, (8, 20)),
     "news_headline": StepKind("헤드라인을", _news_headline, (15, 45)),
     "news_item": StepKind("기사 하나를", _news_item, (20, 60)),
     "news_recap": StepKind("전한 소식을", _news_recap, (10, 30)),

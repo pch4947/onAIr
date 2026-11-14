@@ -170,6 +170,7 @@ def _settings(args: argparse.Namespace, run_dir: Path) -> EngineSettings:
         # 실제 TTS는 리허설끼리 캐시를 나눠 한도를 아낀다. 흉내 TTS는 캐시하지 않는다
         tts_cache_dir=ENGINE_ROOT / "var" / "tts_cache" if args.tts == "gemini" else None,
         dummy_tracks=False,  # 곡은 가짜 백엔드가 track.queued로 알린다
+        emit_votes=True,  # 가짜 백엔드는 투표를 받는다 — 본 코너에 DJ 대 청취자가 있는 시나리오에서만 쓰인다
     )
     apply_llm_args(settings, args)
     return settings
@@ -375,6 +376,10 @@ async def run_one(spec: ScenarioSpec, index: int, run_dir: Path, args: argparse.
                              "heard_sec": None if change["play_sec"] is None
                              else round(change["play_sec"] + spec.sim.broadcast_delay_sec, 1)}
                             for change in backend.format_switches],
+        # 투표 — 받은 vote.open마다 창을 연·닫은 시각과 표. rounds는 엔진이 결과를 받아 공개한 라운드 수다
+        "votes": [{k: vote[k] for k in ("vote_id", "question", "options", "window_sec", "at", "opened_at",
+                                        "closed_at", "counts", "discarded")} for vote in backend.votes],
+        "vote_rounds": engine.sources.votes.rounds, "vote_score": dict(engine.sources.votes.score),
         "error": error,
     }
     reflected = _reflections(db, station_id)
@@ -457,6 +462,9 @@ def _check(spec: ScenarioSpec, backend: SimBackend, report: dict,
             passed = heard is not None and (e.within_sec is None or heard <= e.within_sec)
             detail = ("버튼 전에 방송이 끝남" if change is None else "엔진이 거절함" if not change["accepted"]
                       else "새 형식의 멘트가 나가지 않음" if heard is None else f"{heard:.0f}초 뒤 들림")
+        elif e.type == "min_vote_rounds":
+            value = report["sim"]["vote_rounds"]
+            passed, detail = value >= e.value, f"결과까지 공개한 투표 {value}번"
         elif e.type == "max_silence_sec":
             value = report["sim"]["silence_max_sec"]
             passed, detail = value <= e.value, f"최대 무음 {value}초"
@@ -536,6 +544,16 @@ def _write_run(run_dir: Path, spec: ScenarioSpec, index: int, seed: int, args: a
             f"{s['ahead_sec']}초 | "
             + " | ".join("-" if s[k] is None else f"{s[k]}초" for k in ("submit_sec", "play_sec", "heard_sec"))
             + " |\n" for s in sim["persona_switches"])
+    if sim["votes"]:
+        score = sim["vote_score"]
+        text += (f"\n## 투표\n\n결과까지 공개한 라운드 {sim['vote_rounds']}번 · 점수 DJ {score['dj']} : "
+                 f"청취자 {score['listeners']} (무승부 {score['draw']})\n\n"
+                 "| 알림 | 열림 | 닫힘 | 고민 | 표 |\n|---|---|---|---|---|\n")
+        text += "".join(
+            f"| {_clock(v['at'])} | {'버려짐' if v['discarded'] else '-' if v['opened_at'] is None else _clock(v['opened_at'])} | "
+            f"{'-' if v['closed_at'] is None else _clock(v['closed_at'])} | {v['question']} | "
+            + ("-" if v["counts"] is None else " / ".join(f"{k} {n}" for k, n in v["counts"].items()))
+            + " |\n" for v in sim["votes"])
     if sim["format_switches"]:
         text += ("\n## 형식 전환\n\n청취는 재생에 방송 지연을 더한 값이다. 남은 분량은 버튼을 눌렀을 때 버리지 못하고 "
                  "이전 형식으로 그대로 나간 분량이다.\n\n"
