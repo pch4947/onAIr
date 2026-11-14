@@ -65,11 +65,15 @@ CREATE TABLE IF NOT EXISTS quote_log (
 CREATE TABLE IF NOT EXISTS event_log (
     station_id TEXT, at REAL, kind TEXT, summary TEXT, data_json TEXT
 );
+CREATE TABLE IF NOT EXISTS subjective_log (
+    job_id TEXT, station_id TEXT, at REAL, corner_type TEXT, step TEXT, rule TEXT, matched TEXT, sentence TEXT
+);
 """
 
 # 이벤트 요약 문구 — 엔진 패널에 그대로 보인다 (계약 6.1절 events)
 _STAGES = {"llm": "LLM", "l1": "LLM 거부", "quote": "인용", "l2": "안전 검사", "tts": "TTS",
-           "fallback": "대체 멘트로 전환"}
+           "fallback": "대체 멘트로 전환", "subjective": "주관 표현"}
+_SUBJECTIVE = {"rewritten": "주관 표현 → 다시 씀", "trimmed": "주관 표현 문장 뺌", "reject": "주관 표현 차단"}
 _KINDS = {"chat": "채팅", "story": "채팅", "mood": "채팅", "message": "문자", "song_request": "신청곡",
           "board_story": "게시판 사연"}
 _ROUTES = {"pool": "채팅 후보", "inbox": "문자 받은편지함", "song_request": "곡 대기",
@@ -137,6 +141,8 @@ def _stage_text(s: dict) -> str:
         return name
     if s["stage"] == "quote":
         return "인용 확인" if s["result"] == "ok" else "인용 누락"
+    if s["stage"] == "subjective":
+        return _SUBJECTIVE.get(s["result"], name)
     return f"{name} {s['elapsed_sec']:.1f}초"
 
 
@@ -234,6 +240,14 @@ class Telemetry:
             "INSERT INTO quote_log VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (job_id, self.station_id, time.time() if at is None else at, corner_type, step, request_ref,
              kind, result, round(match, 3), chat, script))
+        self._db.commit()
+
+    def log_subjective(self, job_id: str, corner_type: str, step: str, found: list) -> None:
+        """뉴스 대본에서 걸린 주관 표현 (CORNER_DESIGN 6.4절) — 어느 묶음의 어떤 표현이 걸렸는지 문장과 함께 남긴다."""
+        now = time.time()
+        self._db.executemany(
+            "INSERT INTO subjective_log VALUES (?,?,?,?,?,?,?,?)",
+            [(job_id, self.station_id, now, corner_type, step, hit.rule, hit.match, hit.sentence) for hit in found])
         self._db.commit()
 
     def log_request_state(self, request_id: str, state) -> None:

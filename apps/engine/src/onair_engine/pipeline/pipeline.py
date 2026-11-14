@@ -31,7 +31,7 @@ from ..domain import (
 from ..prompt_data import RECENT, data_block
 from ..telemetry import Telemetry
 from .llm import REJECT, DummyLlmClient, LlmClient, LlmError
-from .safety import SafetyChecker
+from .safety import SafetyChecker, Subjective, split_sentences
 from .tts import TtsClient, TtsQuotaError
 
 _ATTEMPTS = 2  # 최초 1회 + 재시도 1회
@@ -40,6 +40,8 @@ _ATTEMPTS = 2  # 최초 1회 + 재시도 1회
 _CONTEXT_WAIT_SEC = 3.0
 BLOCK_MAX_TOKENS = 1500  # 덩어리는 멘트 서너 개 분량이다. 추론 모델은 생각하는 데도 출력 한도를 쓴다
 _FAILED = object()  # _write: LLM이 재시도까지 실패했다
+# 뉴스 내용을 전하는 단계 — 주관 표현 규칙은 여기에만 건다. 뉴스 형식의 오프닝·엔딩 인사에는 걸지 않는다
+_NEWS_STEP = "news_"
 _PENDING_AIR_MAX = 256
 # 인용 검사 — 채팅 글자 bigram 중 이만큼이 대본에 있으면 인용한 것으로 본다 [예시].
 # LLM은 "컵라면이요"를 "컵라면이라고"처럼 어미를 바꿔 인용하므로 문자열 그대로는 비교하지 않는다
@@ -194,6 +196,14 @@ class GenerationPipeline:
             self._log(job, "l1", t1, t1, "reject")
             return None
 
+        # 뉴스 대본에 DJ의 의견·평가·전망이 섞였으면 한 번 다시 쓰고, 그래도 남으면 그 문장을 뺀다 (CORNER_DESIGN 6.4절)
+        if job.step.startswith(_NEWS_STEP):
+            script = await self._objective(job, prompt, script)
+            if script is None:
+                return None
+            texts = [script.text]
+            job.script_chars = len(script.text)
+
         # [3] 인용 검사 — 입력마다 본다. 빠진 입력은 싣지 않아 스케줄러가 되돌리게 한다
         refs: list[str] = []
         feature = job.material.feature_ref
@@ -217,6 +227,45 @@ class GenerationPipeline:
         if job.block is not None:
             job.block.resolve(clean)
         return script, refs
+
+    async def _objective(self, job: GenerationJob, prompt: Prompt, script: Script) -> Script | None:
+        """뉴스 대본에서 주관 표현을 걷어낸다 — 깨끗하면 그대로, 걸리면 다시 쓴 것이나 걸린 문장을 뺀 것. 남는 게 없으면 None.
+
+        프롬프트 지시만으로는 결정적으로 지킬 수 없다. 다시 쓰기는 한 번만 한다 — 뉴스 멘트는 방송을 채우는
+        분량이라 오래 붙잡지 않는다. 설계의 "소재 문장 요약 템플릿" 대신 걸린 문장만 뺀다: DJ 말투가 유지되고,
+        남은 문장은 이미 소재에 근거한 사실이다.
+        """
+        phrases = self.profile.signature_phrases
+        found = self.safety.check_news(script.text, phrases)
+        if not found:
+            return script
+        started = time.time()
+        self._note_subjective(job, found)
+        note = ("\n방금 쓴 대본에 DJ의 의견·평가·전망으로 읽히는 표현이 있었다: "
+                + ", ".join(sorted({hit.match for hit in found}))
+                + ". 이런 표현과 그 문장 없이, 소재에 있는 사실만으로 다시 쓴다.")
+        try:
+            again = await self.llm.generate(Prompt(system=prompt.system, user=prompt.user + note))
+        except Exception:  # 다시 쓰지 못했다 — 처음 대본에서 걸린 문장을 뺀다
+            logger.exception("SUBJECTIVE_REWRITE_FAILED %s %s", job.job_id, job.corner_type)
+            again = None
+        if again is not None and again.text.strip() and again.text.strip() != REJECT:
+            still = self.safety.check_news(again.text, phrases)
+            if not still:
+                self._log(job, "subjective", started, time.time(), "rewritten")
+                return again
+            self._note_subjective(job, still)
+            if len(still) <= len(found):
+                script, found = again, still
+        bad = {hit.sentence for hit in found}
+        kept = [s for s in split_sentences(script.text) if s not in bad]
+        self._log(job, "subjective", started, time.time(), "trimmed" if kept else "reject")
+        return Script(text=" ".join(kept)) if kept else None
+
+    def _note_subjective(self, job: GenerationJob, found: list[Subjective]) -> None:
+        for hit in found:
+            logger.info("SUBJECTIVE %s [%s] %s: %s", job.job_id, hit.rule, hit.match, hit.sentence)
+        self.telemetry.log_subjective(job.job_id, job.corner_type, job.step, found)
 
     async def _write_block(self, prompt: Prompt, parts: int) -> list[str]:
         """이야기 덩어리를 한 번에 쓰고 문단으로 나눈다. 문단을 못 얻으면 LlmError — 다시 부른다."""
