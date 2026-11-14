@@ -1,5 +1,6 @@
 """화제 전환 STEER — 판별, 조건, 인용 뒤 화제 변경 (CORNER_DESIGN 5.2절)."""
 import asyncio
+import itertools
 import sqlite3
 from pathlib import Path
 
@@ -131,9 +132,12 @@ def test_question_becomes_topic_of_the_very_next_step(tmp_path):
     quoted_at = next(i for i, job in enumerate(jobs) if job[2] == ["req_1"])
     assert jobs[quoted_at][3] is True
     assert all(job[1] == "오늘의 주제" for job in jobs[:quoted_at + 1])
+    # 화제 전환은 그 코너에 들어와 있는 동안만 이어진다 — 곡을 지나 다시 들어온 주제 토크(talk_resume)는
+    # 원래 주제로 돌아간다. 채팅이 일찍 인용된 회차에는 그 멘트까지 만들어지므로 같은 진입의 멘트만 본다 (#280)
+    same_entry = list(itertools.takewhile(lambda job: job[0] == "talk", jobs[quoted_at + 1:]))
     # 동시 생성이 2개여도 바로 다음 단계부터 새 화제다 — 인용 결과를 기다린다
-    assert [job[1] for job in jobs[quoted_at + 1:]] == [QUESTION] * (len(jobs) - quoted_at - 1)
-    assert len(jobs) > quoted_at + 1
+    assert same_entry and [job[1] for job in same_entry] == [QUESTION] * len(same_entry)
+    assert all(job[1] == "오늘의 주제" for job in jobs[quoted_at + 1 + len(same_entry):])
     assert steers == [("req_1", "question", "오늘의 주제", QUESTION)]
 
 
