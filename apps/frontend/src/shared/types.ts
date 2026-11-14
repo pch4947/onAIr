@@ -19,12 +19,27 @@ export interface CurrentCorner {
   contract: Partial<Record<'chat' | 'message' | 'song_request' | 'board_story' | 'vote', CornerInputMode>>
 }
 
+// 청취자 투표 (#279, 계약 10.8절). 표 수는 창이 닫힌 뒤에만 온다 — 화면에는 띄우지 않는다(DJ가 방송에서 발표)
+export interface CurrentVote {
+  vote_id: string
+  kind: string
+  question: string
+  options: string[]
+  status: 'open' | 'closed'
+  opens_at: number
+  closes_at: number
+  remaining_sec: number
+  // /votes/current에만 — 내가 고른 선택지, 안 했으면 null
+  mine?: string | null
+}
+
 export interface BroadcastStateResponse {
   stationStatus?: 'idle' | 'preparing' | 'started' | 'draining' | 'stopping' | 'cleaning' | 'ended' | 'rejected' | 'unknown'
   stationFormat?: StationFormat | null
   currentCorner?: CurrentCorner | null
   // 방송 중 페르소나 전환(#270)으로 바뀔 수 있다
   djName?: string | null
+  currentVote?: CurrentVote | null
   stream: StreamInfo
   stationId: string
   viewerCount: number | null
