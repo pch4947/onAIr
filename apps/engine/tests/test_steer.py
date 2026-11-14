@@ -114,7 +114,7 @@ def _broadcast(tmp_path, body, *, intensity="mid", drop_quote=False):
                          bool(job.material.extra.get("steer"))))
         sub = await original(job)
         if drop_quote and sub is not None and job.material.quotes:
-            sub.request_ref = None  # LLM이 인용을 빠뜨린 경우
+            sub.request_ref, sub.input_refs = None, []  # LLM이 인용을 빠뜨린 경우
         return sub
 
     pipeline.run = spy
