@@ -669,7 +669,7 @@ wsl redis-cli XADD engine:st_local_dev:in '*' type request.arrived contract_vers
 
 - `kind`: `game`(`dj_vs_listeners` 코너) \| `last_song`(엔딩 선곡 투표, F-36). `last_song`의 결과 곡은 v1처럼 `track.queued`(`source: "vote"`)로도 보낸다.
 - **창은 방송 시점 기준이다 (PR #101 백엔드 리뷰)** — 엔진은 열 시각(`closes_at`)을 정할 수 없다. 대신 **기준 세그먼트**(`segment_id`, 선택지를 소개하는 멘트)와 창 길이(`window_sec`)를 보낸다. 백엔드는 그 세그먼트의 재생이 시작될 때 투표를 열고 `window_sec` 뒤에 닫아 `vote.result`를 보낸다. 엔진은 결과를 받은 뒤에 결과 공개 멘트를 만든다.
-- **구현 상태 (#279)** — 엔진은 `kind: game`만 구현했고 설정 `pipeline.emit_votes`가 켜져 있을 때만 보낸다(기본 꺼짐). 백엔드·프론트는 미구현이다. 지금 백엔드는 모르는 이벤트를 격리하므로, 백엔드가 `vote.open`을 받고 `vote.result`를 돌려주게 배포된 뒤에 켠다. 꺼져 있으면 `dj_vs_listeners`는 지금처럼 주제 토크로 대체된다. `last_song`은 아직 없다.
+- **구현 상태 (#279)** — 엔진은 `kind: game`만 구현했고 설정 `pipeline.emit_votes`가 켜져 있을 때만 보낸다(기본 꺼짐). 백엔드는 구현됐고(PR #285, 아래) 프론트의 투표 화면은 아직 없다. 투표를 받는 백엔드가 배포된 환경에서 켠다 — 그 전의 백엔드는 모르는 이벤트를 격리한다. 꺼져 있으면 `dj_vs_listeners`는 지금처럼 주제 토크로 대체된다. `last_song`은 아직 없다.
 - **창을 여는 시각은 기준 세그먼트의 `segment.started`가 싣는 `started_at`이다** — 청취자가 그 멘트를 듣기 시작하는 시각(재생 시작 + 방송 지연)이다. 거기서 `window_sec` 뒤에 닫는다. 엔진은 `started_at + window_sec`을 닫히는 시각으로 보고 DJ의 말을 맞춘다: 닫히기 25초 `[예시]` 전부터 나갈 멘트는 투표를 권하지 않고 마감을 알린다. 창이 그보다 일찍 닫히면 청취자는 닫힌 뒤에 투표를 권하는 말을 듣는다.
 - `vote.open`은 기준 세그먼트를 제출하기 **전에** 보낸다(`corner.changed`와 같다). 선택지는 항상 두 개이고, `counts`의 키는 `options`의 문자열 그대로다. 표가 없으면 `counts`의 값이 모두 0이다. 엔진은 `total`을 쓰지 않는다.
 - **기준 세그먼트가 재생 전에 버려지면** (C4 `[엔진 구현 — 백엔드 확인 대기]`) 백엔드는 그 투표를 열지 않고 버린다. 새 이벤트는 없다 — 엔진은 `segment.discarded`로 알고 그 고민을 다음 차례로 되돌린다.
