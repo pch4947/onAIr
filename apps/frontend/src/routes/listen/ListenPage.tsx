@@ -97,6 +97,7 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
   const notFound = broadcastStateQuery.error instanceof ApiError && broadcastStateQuery.error.status === 404
   const stationStatus = broadcastStateQuery.data?.stationStatus
   const stationFormat = broadcastStateQuery.data?.stationFormat
+  const djName = broadcastStateQuery.data?.djName
   // 음악·뉴스 형식은 엔진이 사연(message)을 방송에 반영하지 않는다
   const canSendMessage = stationFormat !== 'music' && stationFormat !== 'news'
   const ended = stationStatus === 'ended' || stationStatus === 'rejected'
@@ -236,7 +237,7 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
           <div className={`relative h-72 overflow-hidden rounded-lg bg-thumbnail md:block md:h-full md:flex-1 ${testPanel ? 'hidden' : ''}`}>
             <div className="absolute inset-x-4 top-4 flex flex-wrap items-center justify-between gap-y-2">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[13px] font-semibold text-white">{STATION_INFO.name}</span>
+                <span className="text-[13px] font-semibold text-white">{djName ? `${djName}의 방송` : STATION_INFO.name}</span>
                 {/* 테스트 방송은 다시듣기를 남기지 않는다 */}
                 {!testPanel && (
                   <>
@@ -549,7 +550,8 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
           onSubmitted={() => { void requestsQuery.refetch(); void musicQueueQuery.refetch() }}
         />
       )}
-      {isMessageOpen && (
+      {/* 방송 중 형식이 음악·뉴스로 바뀌면 열려 있던 창도 닫는다 — 보내도 방송에 반영되지 않는다 */}
+      {isMessageOpen && canSendMessage && (
         <MessageModal
           stationId={stationId}
           listenerName={currentUser?.name}

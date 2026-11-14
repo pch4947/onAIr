@@ -72,7 +72,7 @@ _V1_QUOTES_PER_SEGMENT = 1
 # 주 소재(사연·신청곡)가 있는 멘트에 함께 싣는 채팅 수 — 주 소재가 밀리지 않게 한 건만
 _QUOTES_WITH_FEATURE = 1
 # 한 건만 싣는 단계. 오프닝의 코너 예고는 쌓아 둔 버퍼 없이 나간다 — 두 건을 실으면 대본과 합성이
-# 길어져 오프닝 도중의 무음이 늘었다 (ENGINE_TUNING_LOG T-009, O-004)
+# 길어져 오프닝 도중의 무음이 늘었다 (ENGINE_TUNING_LOG T-010, O-004)
 _SINGLE_QUOTE_STEPS = frozenset({"corner_preview"})
 _TEXT_CORNER = "text_corner"  # 예고가 가리키는 코너
 # 곡 연속 방지로 연달아 건너뛸 수 있는 곡 수 (#228). 건너뛰기는 시간이 들지 않는 결정이고, 클락이 코너를

@@ -43,7 +43,15 @@ from ..telemetry import _read
 from . import compare, review
 from .metrics import METRICS, aggregate
 from .sim import LoopLag, Played, SimBackend, SimTts, tune_dummy_llm
-from .spec import ControlSpec, ScenarioSpec, SimSpec, StationSpec, TrackSpec, load_scenario
+from .spec import (
+    ControlSpec,
+    ScenarioSpec,
+    SimSpec,
+    StationSpec,
+    StorySpec,
+    TrackSpec,
+    load_scenario,
+)
 
 ENGINE_ROOT = Path(__file__).resolve().parents[3]  # apps/engine
 CALLS_PER_MINUTE = 2.5  # 실제 LLM 확인 프롬프트의 추정치 — 2026-11-07 실측(호출 13회)과 말:곡 5:5 기준
@@ -168,10 +176,12 @@ async def _inject(spec: ScenarioSpec, backend: SimBackend, engine: StationEngine
                   rng: random.Random, finished: asyncio.Event) -> None:
     """시각별 입력과 배경 채팅을 station.started 기준으로 보낸다."""
     await backend.started.wait()
-    for i, story in enumerate(spec.board_stories):  # 백엔드는 station.started 직후 후보를 보낸다 (#196)
-        engine.on_board_story({"story_id": f"story_sim_{i}", "body": story.body,
-                               "nickname": story.nickname, "posted_at": time.time() - 3600})
+    for story in spec.board_stories:  # 백엔드는 station.started 직후 후보를 보낸다 (#196)
+        if story.at is None:
+            engine.on_board_story({"story_id": f"story_sim_{story.id}", "body": story.body,
+                                   "nickname": story.nickname, "posted_at": time.time() - 3600})
     events = [(item.at, item) for item in (*spec.inputs, *spec.controls)]
+    events += [(story.at, story) for story in spec.board_stories if story.at is not None]
     if spec.chatter is not None:
         c = spec.chatter
         end = c.end if c.end is not None else spec.station.broadcast_minutes * 60
@@ -188,6 +198,13 @@ async def _inject(spec: ScenarioSpec, backend: SimBackend, engine: StationEngine
             await SimBackend._wait_any(finished, timeout=wait)
         if finished.is_set():
             return
+        if isinstance(item, StorySpec):  # 방송 중에 올라온 글 — 백엔드가 바로 후보로 보낸다
+            rid = f"story_sim_{item.id}"
+            backend.played.append(Played(backend.now(), "input", 0,
+                                         text=f"게시판 사연 {rid} ({item.nickname or '익명'}): {item.body}"))
+            engine.on_board_story({"story_id": rid, "body": item.body, "nickname": item.nickname,
+                                   "posted_at": time.time()})
+            continue
         if isinstance(item, tuple):  # 배경 채팅
             _, n, body, who = item
             rid = f"chatter_{n}"
@@ -338,12 +355,17 @@ def _reflections(db: Path, station_id: str) -> dict[str, tuple[str, float]]:
 def _check(spec: ScenarioSpec, backend: SimBackend, report: dict,
            reflected: dict[str, tuple[str, float]]) -> list[dict]:
     aired = " ".join(p.script or "" for p in backend.played if p.kind == "speech")
+    kinds = spec.request_kinds()
     out = []
     for e in spec.expect:
         if e.type == "reflected":
-            hit = reflected.get(f"in_{e.input}")
+            story = f"story_sim_{e.input}"
+            hit = reflected.get(story if story in kinds else f"in_{e.input}")
             passed = hit is not None and (e.within_sec is None or hit[1] <= e.within_sec)
             detail = "반영 안 됨" if hit is None else f"{hit[1]:.0f}초 뒤 재생"
+        elif e.type == "min_reflected":
+            count = sum(1 for rid in reflected if kinds.get(rid, "chat") == e.kind)  # 나머지는 배경 채팅
+            passed, detail = count >= e.value, f"{count}건 반영"
         elif e.type == "aired_contains":
             passed, detail = e.text in aired, ""
         elif e.type == "not_aired":
@@ -358,7 +380,7 @@ def _check(spec: ScenarioSpec, backend: SimBackend, report: dict,
         else:  # max_fallback
             value = report.get("generation", {}).get("outcomes", {}).get("fallback", 0)
             passed, detail = value <= e.value, f"대체 멘트 {value}건"
-        out.append({"type": e.type, "target": e.input or e.control or e.text or e.value, "note": e.note,
+        out.append({"type": e.type, "target": e.input or e.control or e.kind or e.text or e.value, "note": e.note,
                     "passed": passed, "detail": detail})
     return out
 

@@ -66,7 +66,7 @@ def _engine(tmp_path, contract_version: int, **config) -> tuple[StationEngine, C
 
 
 async def _opening_done(engine) -> None:
-    """오프닝 멘트가 다 정해질 때까지 기다린다 — 오프닝은 채팅을 한 건만 싣는다 (T-009)."""
+    """오프닝 멘트가 다 정해질 때까지 기다린다 — 오프닝은 채팅을 한 건만 싣는다 (T-010)."""
     while all(s.corner_type == "opening" for s in engine.transport.segments):
         await asyncio.sleep(0.005)
 
@@ -222,7 +222,7 @@ def _pick_two(tmp_path, step_kind: str) -> list[str]:
 
 
 def test_opening_quotes_one_chat_even_on_v2_high(tmp_path):
-    """오프닝은 버퍼 없이 나간다 — 두 건을 실으면 멘트가 길어져 무음이 된다 (T-009)."""
+    """오프닝은 버퍼 없이 나간다 — 두 건을 실으면 멘트가 길어져 무음이 된다 (T-010)."""
     assert len(_pick_two(tmp_path, "corner_preview")) == 1
     assert len(_pick_two(tmp_path / "talk", "talk")) == 2
 
