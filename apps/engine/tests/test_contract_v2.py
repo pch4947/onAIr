@@ -127,9 +127,13 @@ def test_contract_version_comes_from_config_and_env(tmp_path, monkeypatch):
     path = tmp_path / "station.yaml"
     path.write_text((ROOT / "config" / "station.example.yaml").read_text(encoding="utf-8"), encoding="utf-8")
     monkeypatch.delenv("ONAIR_CONTRACT_VERSION", raising=False)
-    assert load_config(path)[1].contract_version == 1, "기본은 v1이다 — 백엔드가 v2를 받게 된 뒤에 올린다"
-    monkeypatch.setenv("ONAIR_CONTRACT_VERSION", "2")
-    assert load_config(path)[1].contract_version == 2
+    assert load_config(path)[1].contract_version == 2, "운영 설정은 v2다 — 백엔드가 v2를 받게 배포된 뒤에 올렸다 (#157)"
+    monkeypatch.setenv("ONAIR_CONTRACT_VERSION", "1")
+    assert load_config(path)[1].contract_version == 1, "환경변수로 되돌릴 수 있다"
+    path.write_text("station:\n  id: st_x\n  profile: {dj_name: 새벽, tone: 차분, concept: 심야}\n"
+                    "  broadcast_minutes: 30\n", encoding="utf-8")
+    monkeypatch.delenv("ONAIR_CONTRACT_VERSION")
+    assert load_config(path)[1].contract_version == 1, "설정에 없으면 v1이다"
 
 
 # ── 방송 ───────────────────────────────────────────────────────────────

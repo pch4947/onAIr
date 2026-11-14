@@ -23,11 +23,13 @@ pipeline:
   # llm_reasoning_effort: low    # openai 추론 모델의 추론량 — 낮을수록 빠르다
   emit_corner_changed: true   # corner.changed 발행 — 청취 화면의 "지금 · 코너" 안내에 쓰인다 (계약 10.7절).
                               # VM의 엔진 서비스가 이 파일을 읽는다. PR #189 이전 백엔드와는 켜지 않는다 (이벤트가 격리됨)
-  # emit_votes: true          # DJ 대 청취자 코너의 투표(vote.open)를 연다 (#279, 계약 10.8절).
-                              # 백엔드가 vote.open을 받고 vote.result를 돌려주게 배포된 뒤에 켠다. 꺼져 있으면 그 코너는 주제 토크로 대체된다
+  emit_votes: true            # DJ 대 청취자 코너의 투표(vote.open)를 연다 (#279, 계약 10.8절).
+                              # 백엔드(PR #285)와 프론트의 투표 카드(PR #288)가 배포돼 2026-11-15에 켰다.
+                              # 끄면 그 코너는 주제 토크로 대체된다. 투표를 받지 않는 백엔드와는 켜지 않는다 (이벤트가 격리됨)
   # vote_window_sec: 60       # 투표 창 길이(초) — 고민을 소개하는 멘트의 재생 시작부터
-  # emit_corner_format: true  # corner.changed에 형식(format)을 싣는다 — 방송 중 형식 전환 때 화면이 소리에 맞춰 바뀐다 (#260).
-                              # 백엔드가 이 필드를 받게 배포된 뒤에 켠다. 그 전에 켜면 corner.changed가 통째로 격리된다
+  emit_corner_format: true    # corner.changed에 형식(format)을 싣는다 — 방송 중 형식 전환 때 화면이 소리에 맞춰 바뀐다 (#260).
+                              # 백엔드가 이 필드를 받게 배포돼(PR #284) 2026-11-15에 켰다. 받지 않는 백엔드와 켜면
+                              # corner.changed가 통째로 격리된다
   tts: dummy                  # dummy(무음 wav) | gemini(운영 TTS, GEMINI_API_KEY 필요)
                               # | cartesia(비교 측정용, CARTESIA_API_KEY) | google(Cloud TTS, GOOGLE_TTS_API_KEY)
                               # | edge(청취 테스트용, pip install -e ".[tts]")
@@ -47,9 +49,10 @@ transport:
   base_url: http://localhost:3000   # kind: http 일 때 백엔드 주소
                                     # 토큰은 ONAIR_ENGINE_TOKEN 환경변수로 주입
   redis_url: redis://localhost:6379/0  # kind: redis 일 때. 비밀번호가 있으면 ONAIR_REDIS_URL로 주입
-  contract_version: 1         # 엔진→백엔드 이벤트의 계약 버전. 2면 input_refs·reflection_levels와 v2 request.state 값을
-                              # 보낸다 (계약 10.4·10.5·10.10절). 백엔드가 v1·v2를 함께 받게 배포된 뒤에 올린다.
-                              # 환경변수 ONAIR_CONTRACT_VERSION이 있으면 그 값이 먼저다
+  contract_version: 2         # 엔진→백엔드 이벤트의 계약 버전. 2면 input_refs·reflection_levels와 v2 request.state 값을
+                              # 보내고, 한 멘트에 입력 여러 건을 싣는다 (계약 10.4·10.5·10.10절, #267).
+                              # 백엔드가 v1·v2를 함께 받게 배포돼(PR #284) 2026-11-15에 2로 올렸다 (#157).
+                              # 문제가 생기면 1로 되돌린다. 환경변수 ONAIR_CONTRACT_VERSION이 있으면 그 값이 먼저다
   audio_dir: var/audio        # 백엔드와 공유하는 오디오 루트.
                               # 제출 페이로드의 audio_ref는 이 경로 기준 상대 경로다
 

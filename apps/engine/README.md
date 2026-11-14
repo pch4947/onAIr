@@ -100,7 +100,7 @@ onair-engine --tts cartesia --max-segments 15 --demo-request "요즘 잠이 안 
 - **문자**: `text_corner`가 도착 순으로 낭독합니다. 대본에 글이 빠지면 한 번 되돌리고, 또 빠지면 `rejected`입니다.
 - **게시판 사연**: 받은 사연을 모아 LLM으로 주제 관련도를 판정하고, 관련 있는 사연만 `story_corner` 후보로 남깁니다. LLM이 실패하면 주제와 단어가 겹치는 사연만 남기고, 더미 LLM은 모두 남깁니다. 결과는 `story_judge_log`에 기록합니다. 후보 중에서는 주제 일치, 최근 순으로 고릅니다. 제출의 `request_ref`는 `story_id`입니다.
 - **신청곡 한마디**: 같은 `request_id`의 `track.queued`가 오면 곡 소개에 넣습니다.
-- **계약 버전**: 엔진이 백엔드로 보내는 이벤트의 버전은 `transport.contract_version`(환경변수 `ONAIR_CONTRACT_VERSION`이 먼저)으로 정합니다. 기본값 1은 지금까지와 같은 형식입니다. 2로 올리면 `segment.submitted`가 `request_ref` 대신 `input_refs`·`reflection_levels`를 싣고, `request.state`가 `pooled`·`inboxed`·`selected`·`reflected` 같은 v2 값으로 나갑니다(계약 10.4·10.5절). 방송 동작도 하나 달라집니다 — 한 멘트에 입력을 여러 건 싣습니다(참여 강도 `high`는 채팅 2건 — 오프닝은 1건, 사연·신청곡 소개 멘트에는 채팅 1건을 함께, #267). 백엔드가 v1·v2를 함께 받게 배포된 뒤에 올리고, 문제가 생기면 1로 되돌립니다(전환 순서는 계약 10.10절). 받는 쪽은 버전을 가리지 않습니다.
+- **계약 버전**: 엔진이 백엔드로 보내는 이벤트의 버전은 `transport.contract_version`(환경변수 `ONAIR_CONTRACT_VERSION`이 먼저)으로 정합니다. 기본값 1은 지금까지와 같은 형식입니다. 2로 올리면 `segment.submitted`가 `request_ref` 대신 `input_refs`·`reflection_levels`를 싣고, `request.state`가 `pooled`·`inboxed`·`selected`·`reflected` 같은 v2 값으로 나갑니다(계약 10.4·10.5절). 방송 동작도 하나 달라집니다 — 한 멘트에 입력을 여러 건 싣습니다(참여 강도 `high`는 채팅 2건 — 오프닝은 1건, 사연·신청곡 소개 멘트에는 채팅 1건을 함께, #267). 백엔드가 v1·v2를 함께 받게 배포된 뒤에 올리고, 문제가 생기면 1로 되돌립니다(전환 순서는 계약 10.10절). 받는 쪽은 버전을 가리지 않습니다. **운영 설정(`apps/engine/config/station.example.yaml`)에서는 2026-11-15에 켰다 (#157).**
 - **코너 알림**: `pipeline.emit_corner_changed`로 켜고 끕니다. `config/station.example.yaml`에서 켜 두었고, VM의 엔진 서비스가 이 파일을 읽습니다. 코드 기본값은 꺼짐입니다. `corner.changed`를 모르는 백엔드(PR #189 이전)는 이벤트를 격리하므로 그런 백엔드와는 끕니다.
 - 백엔드가 모르는 상태는 바꿔 보내거나 보내지 않습니다 (`domain.wire_state`).
 
@@ -156,7 +156,7 @@ onair-engine --tts cartesia --max-segments 15 --demo-request "요즘 잠이 안 
 - **뉴스**: 이벤트를 받으면 바로 기사 수집을 시작합니다. 편성은 첫 수집이 끝날 때까지 최대 8초 기다립니다. 그동안은 백엔드에 남은 분량이 나갑니다.
   - 8초 안에 끝나지 않으면 기다리지 않습니다. 기사가 없는 동안 뉴스 코너는 건너뛰고, 들어오는 대로 들어갑니다.
 - **연결 멘트**: 새 형식의 문구로 뒤에서 다시 합성합니다. 끝날 때까지는 연결 멘트 없이 코너에 들어갑니다.
-- **화면**: 설정 `pipeline.emit_corner_format`을 켜면 `corner.changed`에 `format`을 실어, 화면이 새 형식의 첫 멘트가 들릴 때 바뀌게 할 수 있습니다. 백엔드가 이 필드를 받게 배포된 뒤에 켭니다(기본 꺼짐 — 계약 10.7절).
+- **화면**: 설정 `pipeline.emit_corner_format`을 켜면 `corner.changed`에 `format`을 실어, 화면이 새 형식의 첫 멘트가 들릴 때 바뀌게 할 수 있습니다. 백엔드가 이 필드를 받게 배포된 뒤에 켭니다(기본 꺼짐 — 계약 10.7절). **운영 설정(`apps/engine/config/station.example.yaml`)에서는 2026-11-15에 켰다 (#157).**
 - 엔진 패널에는 `형식 전환 · 사연토크 → 뉴스 · 만들던 멘트 2개 버림`, `기사 수집 · IT 4건, 경제 3건`, `코너 진입 · 헤드라인`으로 남습니다.
 - 버튼을 눌러도 재생 중인 것과 백엔드가 미리 인코딩한 분량은 이전 형식으로 나갑니다. 곡이 나가는 중이면 곡이 끝나야 새 형식이 들립니다.
 
@@ -164,7 +164,7 @@ onair-engine --tts cartesia --max-segments 15 --demo-request "요즘 잠이 안 
 
 사연토크의 본 코너 `dj_vs_listeners`입니다. DJ가 양자택일 고민을 내면 청취자가 투표하고, DJ의 선택과 청취자 다수의 선택이 같은지 겨룹니다 (CORNER_DESIGN 7.6절, 계약 10.8절).
 
-- **켜기**: 설정 `pipeline.emit_votes`(기본 꺼짐). 백엔드가 `vote.open`을 받고 `vote.result`를 돌려주게 된 뒤에 켭니다. 꺼져 있으면 이 코너는 주제 토크로 대체됩니다.
+- **켜기**: 설정 `pipeline.emit_votes`(기본 꺼짐). 백엔드가 `vote.open`을 받고 `vote.result`를 돌려주게 된 뒤에 켭니다. 꺼져 있으면 이 코너는 주제 토크로 대체됩니다. **운영 설정(`apps/engine/config/station.example.yaml`)에서는 2026-11-15에 켰다 (#157).**
 - **고민**: 방송 시작과 함께 오늘의 주제에서 다섯 개를 뒤에서 만듭니다. 고민마다 선택지 둘과 DJ의 선택, 그 까닭이 함께 정해집니다. DJ의 선택을 투표 전에 정해 두는 것은 겨루기를 공정하게 하려는 것입니다.
   - 만들기에 실패하거나 아직 끝나지 않았으면 코너가 주제 토크로 대체되고, 준비된 뒤의 차례부터 열립니다.
 - **라운드** (코너 한 번에 세 번):
