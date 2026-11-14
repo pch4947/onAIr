@@ -24,13 +24,21 @@ if previous then
   if entry.fingerprint ~= ARGV[2] then return {0, ''} end
   return {1, entry.id}
 end
-redis.call('XADD', KEYS[3], '*', 'type', 'request.arrived', 'contract_version', '1',
+redis.call('XADD', KEYS[3], '*', 'type', 'request.arrived', 'contract_version', '2',
   'event_id', ARGV[5], 'station_id', ARGV[6], 'at', ARGV[7], 'payload', ARGV[8])
 redis.call('HSET', KEYS[1], ARGV[3], ARGV[4])
 redis.call('HSET', KEYS[2], ARGV[1], cjson.encode({id=ARGV[3], fingerprint=ARGV[2]}))
 redis.call('RPUSH', KEYS[4], cjson.encode({state='requested', at=tonumber(ARGV[7]), source='api', accepted=true}))
 return {1, ARGV[3]}
 """
+
+
+# Request states that end a request; everything else still counts as pending.
+# v1: rejected·expired·played·failed, v2 (contract 10.4): reflected·not_on_air·cancelled as well.
+TERMINAL_STATES = ('rejected', 'expired', 'played', 'failed', 'reflected', 'not_on_air', 'cancelled')
+# request.arrived goes out as contract v2 (10.3, #157 step 3). The player chat box still sends the
+# v1 kind story, which the engine already reads as chat, so it is renamed on the wire only.
+WIRE_KINDS = {'story': 'chat'}
 
 
 class IdempotencyConflict(ValueError):
@@ -53,7 +61,7 @@ class RequestStore:
         fingerprint = hashlib.sha256(json.dumps([prompt, listener_id, kind], ensure_ascii=False).encode()).hexdigest()
         # Separate automatic keys from client-provided keys.
         key = 'client:' + hashlib.sha256(idempotency_key.encode()).hexdigest() if idempotency_key else 'auto:' + request_id
-        arrived = dict(request_id=request_id, kind=kind, body=prompt, requester_ref=listener_id)
+        arrived = dict(request_id=request_id, kind=WIRE_KINDS.get(kind, kind), body=prompt, requester_ref=listener_id)
         if listener_name:
             arrived['nickname'] = listener_name
         accepted, stored_id = await self.redis.eval(CREATE, 5, self.prefix + ':requests',
@@ -98,7 +106,7 @@ class RequestStore:
         return sorted(entries, key=lambda entry: (entry['createdAt'], entry['id']))
 
     async def metrics(self):
-        pending = [entry for entry in await self.list() if entry['status'] not in ('rejected', 'expired', 'played', 'failed')]
+        pending = [entry for entry in await self.list() if entry['status'] not in TERMINAL_STATES]
         age = max(0, int((datetime.now(timezone.utc) - datetime.fromisoformat(pending[0]['createdAt'])).total_seconds())) if pending else 0
         return dict(pendingRequestCount=len(pending), oldestRequestAgeSeconds=age,
                     requestStatsAvailable=True)

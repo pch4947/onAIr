@@ -98,19 +98,22 @@ class Journal:
             # Music requests are completed by their own audio, not by an unrelated introduction.
             ref = segment.get('request_ref')
             # A board story is not a request: it is settled as read once it goes on air.
-            request_id = ref if (segment.get('kind') == 'speech'
+            # Contract v2 (10.4): request state comes only from the engine, so a v2 segment never sets it.
+            v2 = segment.get('input_refs') is not None
+            request_id = ref if (segment.get('kind') == 'speech' and not v2
                                  and not (ref or '').startswith((MUSIC_SEGMENT_PREFIX, STORY_PREFIX))) or (
                 segment.get('kind') == 'music' and ref == segment.get('id')) else None
-            story = ref if (segment.get('kind') == 'speech' and state == 'PUBLISHED'
-                            and (ref or '').startswith(STORY_PREFIX)) else None
+            refs = segment.get('input_refs') if v2 else [ref] if ref else []
+            stories = [r for r in refs if r.startswith(STORY_PREFIX)] if (
+                segment.get('kind') == 'speech' and state == 'PUBLISHED') else []
             self._enqueue('encoding.failed' if state == 'FAILED' else 'state.transition',
-                          dict(segment_id=segment['id'], state=state, at=at), request_id or '', at, story)
+                          dict(segment_id=segment['id'], state=state, at=at), request_id or '', at, stories)
 
-    def _enqueue(self, kind, payload, request_id='', at=None, story=None):
+    def _enqueue(self, kind, payload, request_id='', at=None, stories=()):
         at = time.time() if at is None else at
         event = dict(type=kind, station_id=self.station, at=at, payload=payload)
-        if story:
-            event['story_id'] = story
+        if stories:
+            event['story_ids'] = list(stories)
         self.db.execute('INSERT INTO outbox(id,body,request_id) VALUES(?,?,?)',
                         ('evt_' + uuid.uuid4().hex, json.dumps(event), request_id))
 
@@ -165,8 +168,9 @@ class Journal:
                       prefix + ':track-plan', prefix + ':intro-tracks',
                     prefix + ':corner-pending', prefix + ':current-corner',
                     event_id, body, request_id)
-            if event.get('story_id'):
-                await settle_read(redis, self.station, event['story_id'])
+            # story_id is the single-story form written before v2; outbox rows can outlive a deploy
+            for story in event.get('story_ids') or ([event['story_id']] if event.get('story_id') else []):
+                await settle_read(redis, self.station, story)
             with self.db:
                 self.db.execute('DELETE FROM outbox WHERE seq=?', (seq,))
 

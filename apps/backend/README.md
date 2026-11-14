@@ -172,7 +172,7 @@ tick은 정책 판단만 수행하며 요청을 소비하거나 오디오를 생
 본문에 `comment`(60자, 신청곡 전용)를 넣으면 곡 소개에 쓰도록 `track.queued` 앞에 `request.arrived`(`kind: song_request`)를 보냅니다. 없으면 보내지 않습니다.
 `anonymous: true`(신청곡 전용)이면 신청자 닉네임을 기록과 엔진 이벤트에서 빼고, 엔진은 `익명`으로 소개합니다.
 신청곡 상태는 음악 세그먼트의 송출로만 정해집니다. 곡 소개 멘트의 전이와 엔진의 `request.state`는 상태를 바꾸지 않고, 엔진 통보는 이력에 `accepted: false`로 남습니다.
-kind는 story(기본), chat, message입니다. 신청곡은 `mood`가 아니라 위의 신청곡 경로로 접수합니다. message 본문은 200자까지이며, listenerId는 받지 않고 토큰의 사용자로 기록합니다. listenerName을 보내면 값과 상관없이 로그인 사용자 이름을 request.arrived의 nickname으로 전달하고, 생략하면 익명으로 처리합니다. 초기 상태는 queued에서 requested로 변경했습니다.
+kind는 story(기본), chat, message입니다. 엔진에는 계약 v2로 보내며 story는 chat으로 바꿔 보냅니다(엔진이 이미 채팅으로 읽던 값). 엔진→백엔드 이벤트는 계약 v1·v2를 모두 받습니다. v2 요청 상태(`pooled`, `inboxed`, `selected`, `reflected`, `not_on_air`, `cancelled` 등)는 엔진이 보낸 값 그대로 표시하고, `reflected`·`not_on_air`·`cancelled`도 대기 집계에서 뺍니다. 신청곡은 `mood`가 아니라 위의 신청곡 경로로 접수합니다. message 본문은 200자까지이며, listenerId는 받지 않고 토큰의 사용자로 기록합니다. listenerName을 보내면 값과 상관없이 로그인 사용자 이름을 request.arrived의 nickname으로 전달하고, 생략하면 익명으로 처리합니다. 초기 상태는 queued에서 requested로 변경했습니다.
 엔진이 먼저 응답하면 POST에도 최신 상태가 반환될 수 있으며, 202 자체는 엔진 처리 완료를 뜻하지 않습니다.
 
 ```powershell
