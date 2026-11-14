@@ -7,6 +7,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from onair_schema import Persona, error_detail
 from pydantic import BaseModel, ValidationError
@@ -29,7 +30,7 @@ from .pipeline.llm import make_llm
 from .pipeline.pipeline import GenerationPipeline
 from .pipeline.safety import SafetyChecker
 from .pipeline.tts import TtsClient, make_tts
-from .scheduler.scheduler import PersonaSwitch, Scheduler
+from .scheduler.scheduler import FormatSwitch, PersonaSwitch, Scheduler
 from .sources.rss import Feed, RssCollector, load_news_feeds
 from .telemetry import Telemetry
 from .transport import Transport
@@ -65,6 +66,11 @@ class EngineSettings:
     target_buffer_sec: float = 30.0
     # 켜면 코너 진입을 백엔드에 알린다. 지금 백엔드는 모르는 이벤트를 격리하므로 #170 전까지 끈다
     emit_corner_changed: bool = False
+    # 켜면 corner.changed에 형식(format)을 싣는다 — 방송 중 형식 전환 때 화면이 새 형식의 첫 멘트에 맞춰 바뀐다 (#260).
+    # 백엔드가 이 필드를 받게 배포된 뒤에 켠다: 그 전에는 모르는 필드라 이벤트째 격리된다
+    emit_corner_format: bool = False
+    # 뉴스 피드 읽기를 바꿔 끼운다 (URL → 바이트). 시나리오 실행기와 테스트가 네트워크 없이 돌릴 때 쓴다
+    rss_fetch: Callable[[str], bytes] | None = None
     # 엔진→백엔드 이벤트의 계약 버전. 2면 segment.submitted에 input_refs·reflection_levels를, request.state에
     # v2 값을 보낸다 (계약 10.4·10.5절). 백엔드가 v1·v2를 함께 받게 배포된 뒤에 올린다 (#157)
     contract_version: int = 1
@@ -84,6 +90,14 @@ class StationRejected(Exception):
         super().__init__(f"{reason}: {detail}")
         self.reason = reason
         self.detail = detail
+
+
+class FormatChanged(BaseModel):
+    """station.format_changed 페이로드 (계약 3.2절) — 필드 뜻은 station.created와 같다."""
+
+    format: Literal["talk", "music", "news"]
+    corners: list[str] | None = None  # talk: 본 코너. 없으면 형식 기본값
+    news_sections: list[str] | None = None  # news: 분야. 없으면 형식 기본값
 
 
 class PersonaChanged(BaseModel):
@@ -150,29 +164,16 @@ class StationEngine:
             recent_segments=config.recent_segments,
         )
         self.tracks = TrackSource(Catalog(), dummy=settings.dummy_tracks)
-        self.rss = RssCollector()
-        if news_feeds is not None:
-            # 호스트가 고른 분야만 폴링한다. section은 코너의 label(분야 이름)과 맞춘다
-            self.rss = RssCollector(
-                feeds=[Feed(entry.source, entry.url, fmt.section_names.get(code, code))
-                       for code in config.news_sections or fmt.default_sections
-                       for entry in news_feeds.feeds.get(code, [])],
-                poll_sec=news_feeds.poll_sec, max_age_sec=news_feeds.max_age_hours * 3600,
-                violates=safety.check_l0, on_refresh=self.telemetry.log_rss,
-            )
+        self._safety = safety
+        self.rss = self._make_rss(fmt, config.news_sections, news_feeds)
         self.sources = MaterialSources(
             tracks=self.tracks, rss=self.rss,
             inbox=MessageInbox(max_chars=chat_rules.message_max_chars, violates=safety.check_l2),
             stories=StoryPool(topic_words=keywords(self.topic), violates=safety.check_l2, judged=True),
         )
         self.story_judge = StoryJudge(llm, self.topic, self.sources.stories, telemetry=self.telemetry)
-        # 호스트가 정한 주제가 있고 이 형식에 주제 토크가 있을 때만 — 컨셉을 갈래로 펼치지는 않는다
-        talks = any({s.kind, s.again} & {"talk_open", "talk_resume"}
-                    for c in fmt.corners.values() for s in c.steps)
-        self.topic_plan = TopicPlan(
-            llm, config.topic, count=angle_count(config.broadcast_minutes), violates=safety.check_l2,
-            forbidden=config.profile.forbidden, telemetry=self.telemetry,
-        ) if config.topic and talks else None
+        self._llm = llm
+        self.topic_plan = self._make_topic_plan(fmt)
         self.glue = GlueBank(tts=tts, audio_root=audio_root, station_id=config.station_id,
                              profile=config.profile, fmt=fmt, safety=safety)
         self.scheduler = Scheduler(
@@ -184,10 +185,16 @@ class StationEngine:
             max_concurrent=settings.max_concurrent_generations,
             emit_corner_changed=settings.emit_corner_changed, topic_plan=self.topic_plan,
             contract_version=settings.contract_version,
+            emit_corner_format=settings.emit_corner_format,
         )
         self._contract_version = settings.contract_version
-        self._safety = safety
+        # 방송 중 전환(#260, #261)이 받아들인 형식과 DJ — 편성 루프가 바꾸기 전이어도 다음 전환은 이 값을 쓴다.
+        # 형식과 페르소나를 잇달아 바꿀 때 연결 멘트가 둘 다 반영하게 한다
         self._fmt = fmt
+        self._profile = config.profile
+        self._tts = tts
+        self._poller: asyncio.Task | None = None  # 뉴스 피드 폴링
+        self._plan_task: asyncio.Task | None = None  # 이야기 갈래 계획
         self._audio_root = audio_root
         self._glue_no = 0  # 방송 중에 연결 멘트를 다시 합성한 횟수 — 폴더 이름에 쓴다
         self._glue_task: asyncio.Task | None = None
@@ -201,11 +208,37 @@ class StationEngine:
         """
         return self._topic
 
+    def _make_rss(self, fmt, sections: list[str] | None, news_feeds) -> RssCollector:
+        """뉴스 형식의 소재 수집기. 뉴스가 아니면(news_feeds 없음) 피드 없는 빈 수집기다."""
+        if news_feeds is None:
+            return RssCollector()
+        # 호스트가 고른 분야만 폴링한다. section은 코너의 label(분야 이름)과 맞춘다
+        return RssCollector(
+            feeds=[Feed(entry.source, entry.url, fmt.section_names.get(code, code))
+                   for code in sections or fmt.default_sections
+                   for entry in news_feeds.feeds.get(code, [])],
+            poll_sec=news_feeds.poll_sec, max_age_sec=news_feeds.max_age_hours * 3600,
+            violates=self._safety.check_l0, fetch=self.settings.rss_fetch,
+            on_refresh=self.telemetry.log_rss,
+        )
+
+    def _make_topic_plan(self, fmt) -> TopicPlan | None:
+        """호스트가 정한 주제가 있고 이 형식에 주제 토크가 있을 때만 — 컨셉을 갈래로 펼치지는 않는다."""
+        talks = any({s.kind, s.again} & {"talk_open", "talk_resume"}
+                    for c in fmt.corners.values() for s in c.steps)
+        if not (self.config.topic and talks):
+            return None
+        return TopicPlan(
+            self._llm, self.config.topic, count=angle_count(self.config.broadcast_minutes),
+            violates=self._safety.check_l2, forbidden=self.config.profile.forbidden,
+            telemetry=self.telemetry,
+        )
+
     async def run(self, max_segments: int | None = None) -> None:
         # 수집은 사전 렌더링과 동시에 시작한다 — 방송 시작을 피드 시간만큼 더 늦추지 않는다
-        poller = asyncio.create_task(self.rss.run()) if self.rss.feeds else None
+        poller = self._poller = asyncio.create_task(self.rss.run()) if self.rss.feeds else None
         # 갈래 계획도 기다리지 않는다 — 오프닝과 첫 곡이 나가는 동안 끝나면 첫 주제 토크부터 쓴다
-        plan = asyncio.create_task(self.topic_plan.run()) if self.topic_plan else None
+        self._plan_task = asyncio.create_task(self.topic_plan.run()) if self.topic_plan else None
         judge: asyncio.Task | None = None
         try:
             # 접착 요소는 방송 시작 전에 이 스테이션의 보이스로 사전 렌더링한다 (설계 문서 4.5)
@@ -226,7 +259,8 @@ class StationEngine:
             self.telemetry.log_station("station.started", {"topic": self.topic})
             await self.scheduler.run(self._stop, max_segments=max_segments)
         finally:
-            tasks = [t for t in (poller, plan, judge, self._glue_task) if t is not None]
+            # 방송 중 형식 전환으로 폴링과 갈래 계획이 바뀌었을 수 있다 — 지금 것을 멈춘다
+            tasks = [t for t in (self._poller, self._plan_task, judge, self._glue_task) if t is not None]
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -323,22 +357,83 @@ class StationEngine:
             tts = CachedTts(self.tts_factory(persona.voice), cache_dir=self.settings.tts_cache_dir)
         except RuntimeError as exc:
             return self._reject_persona("tts_unavailable", str(exc)[:300])
-        self._glue_no += 1
-        glue = GlueBank(tts=tts, audio_root=self._audio_root, station_id=self.config.station_id,
-                        profile=profile, fmt=self._fmt, safety=self._safety,
-                        subdir=f"glue_{self._glue_no}")
+        glue = self._new_glue(self._fmt, profile, tts)
         try:
             glue.check()
         except ValueError as exc:
             return self._reject_persona("unsafe_persona", str(exc)[:300])
+        self._profile, self._tts = profile, tts
+        self._use_glue(glue)
+        self.scheduler.switch_persona(PersonaSwitch(
+            profile=profile, tts=tts, persona_id=persona.persona_id, voice=persona.voice,
+            snapshot=persona.model_dump(mode="json")))
+        return True
+
+    def on_format_changed(self, payload: dict) -> bool:
+        """운영자가 고른 형식으로 바꾼다 (계약 3.2절 station.format_changed). 받아들였으면 True.
+
+        방 생성 때와 같은 기준(형식 파일, 코너, 분야)으로 검사한다. 걸리면 바꾸지 않고 기록만 남긴다.
+        클락과 코너는 편성 루프의 다음 차례에 바뀐다 — 오프닝을 다시 하지 않고 새 형식의 순환으로 들어간다.
+        뉴스로 바꾸면 여기서 기사 수집을 시작하고, 연결 멘트는 새 형식의 문구로 뒤에서 다시 합성한다.
+        """
+        try:
+            change = FormatChanged.model_validate(payload)
+        except ValidationError as exc:
+            return self._reject_format("invalid_payload", error_detail(exc))
+        corners = change.corners if change.format == "talk" else None
+        sections = change.news_sections if change.format == "news" else None
+        if (change.format, corners, sections) == self.scheduler.upcoming_format:
+            return False  # at-least-once 재전달 — 이미 그 형식이다
+        try:
+            fmt = load_format(change.format, self.settings.formats_dir)
+            clock = Clock(fmt, main_corners=corners, sections=sections, skip_opening=True)
+            unknown = [code for code in sections or [] if code not in fmt.section_names]
+            if unknown:
+                raise ValueError(f"{fmt.format} 형식에 없는 분야: {unknown}")
+            news_feeds = load_news_feeds(self.settings.news_feeds_path) if fmt.format == "news" else None
+        except (ValueError, TypeError, KeyError, OSError) as exc:
+            return self._reject_format("invalid_payload", f"형식 설정: {exc}"[:300])
+        glue = self._new_glue(fmt, self._profile, self._tts)
+        try:
+            glue.check()
+        except ValueError as exc:
+            return self._reject_format("invalid_payload", str(exc)[:300])
+        rss = self._make_rss(fmt, sections, news_feeds)
+        if self._poller is not None:  # 이전 형식의 피드는 더 읽지 않는다
+            self._poller.cancel()
+        self._poller = asyncio.create_task(rss.run()) if rss.feeds else None
+        self.rss = rss
+        plan = None
+        if self.topic_plan is None and (plan := self._make_topic_plan(fmt)) is not None:
+            # 주제 토크가 없는 형식으로 시작한 방송 — 갈래 계획을 지금 세운다. 끝나기 전에는 주제 한 줄로 말한다
+            self.topic_plan = plan
+            self._plan_task = asyncio.create_task(plan.run())
+        self._fmt = fmt
+        self._use_glue(glue)
+        self.scheduler.switch_format(FormatSwitch(
+            fmt=fmt, clock=clock, intensity=fmt.intensity[self.config.intensity], rss=rss,
+            corners=corners, news_sections=sections, topic_plan=plan,
+            ready=rss.ready if rss.feeds else None))
+        return True
+
+    def _reject_format(self, reason: str, detail: str) -> bool:
+        logger.warning("FORMAT_REJECTED %s %s: %s", self.config.station_id, reason, detail)
+        self.telemetry.log_format_rejected(reason, detail)
+        return False
+
+    def _new_glue(self, fmt, profile: StationProfile, tts: TtsClient) -> GlueBank:
+        """방송 중 전환 뒤에 쓸 연결 멘트. 이전 문구 파일은 아직 재생 전일 수 있어 새 폴더에 합성한다."""
+        self._glue_no += 1
+        return GlueBank(tts=tts, audio_root=self._audio_root, station_id=self.config.station_id,
+                        profile=profile, fmt=fmt, safety=self._safety, subdir=f"glue_{self._glue_no}")
+
+    def _use_glue(self, glue: GlueBank) -> None:
+        """뒤에서 합성을 시작하고 편성 관리자에 넘긴다 — 전환이 적용될 때부터 쓰인다."""
         if self._glue_task is not None:  # 앞선 전환의 합성 — 이제 쓰지 않는다
             self._glue_task.cancel()
         self._glue_task = asyncio.create_task(self._rerender_glue(glue))
         self.glue = glue
-        self.scheduler.switch_persona(PersonaSwitch(
-            profile=profile, tts=tts, glue=glue, persona_id=persona.persona_id, voice=persona.voice,
-            snapshot=persona.model_dump(mode="json")))
-        return True
+        self.scheduler.use_glue(glue)
 
     def _reject_persona(self, reason: str, detail: str) -> bool:
         logger.warning("PERSONA_REJECTED %s %s: %s", self.config.station_id, reason, detail)
@@ -346,7 +441,9 @@ class StationEngine:
         return False
 
     async def _rerender_glue(self, glue: GlueBank) -> None:
-        """새 목소리의 연결 멘트 합성. 실패해도 방송은 이어진다 — 합성된 문구만 쓰고 나머지 코너는 문구 없이 들어간다."""
+        """전환 뒤의 연결 멘트 합성. 실패해도 방송은 이어진다 — 합성된 문구만 쓰고 나머지 코너는 문구 없이 들어간다."""
+        if not glue.texts():  # 뉴스·음악처럼 연결 멘트가 없는 형식 — 합성할 것도 남길 기록도 없다
+            return
         started = time.time()
         try:
             await glue.prerender()

@@ -282,6 +282,8 @@ class EngineManager:
             engine.on_corner_skip(payload)
         elif event_type == "station.persona_changed":  # 페르소나 전환 — 버린 멘트를 먼저 알린다 (#261)
             await engine.on_persona_changed(payload, voice_known=self.voice_known)
+        elif event_type == "station.format_changed":  # 형식 전환 (#260)
+            engine.on_format_changed(payload)
         elif event_type == "station.closed":
             engine.stop()  # 방송 태스크가 끝나면 _run_station이 방을 정리한다
         elif event_type:

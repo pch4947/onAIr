@@ -198,7 +198,7 @@ def test_glue_is_rendered_again_in_a_new_folder_and_used_after_the_switch(tmp_pa
     assert "/glue/" in old_ref and "/glue_1/" in new_ref
     audio = tmp_path / "audio"
     assert (audio / old_ref).exists() and (audio / new_ref).exists(), "이전 문구 파일은 재생 전일 수 있어 지우지 않는다"
-    assert any(s.startswith(f"연결 멘트 {len(new)}개 새 목소리로 합성") for s in _summaries(tmp_path))
+    assert any(s.startswith(f"연결 멘트 {len(new)}개 다시 합성") for s in _summaries(tmp_path))
     assert engine.scheduler.pipeline.profile.dj_name == "번개"
     assert engine.scheduler.pipeline.tts is not None and not transport.segments
 

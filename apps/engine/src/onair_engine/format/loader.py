@@ -48,6 +48,8 @@ def _reachable(own: dict, corners: dict) -> set[str]:
     """형식 파일이 가리키는 코너 — 오프닝·엔딩·순환·호스트 후보·대체 코너(연쇄)와 filler."""
     names = {own.get("opening", "opening"), own.get("closing", "closing"), "filler",
              *own.get("host_corners", []), *own.get("default_main", [])}
+    if own.get("entry_corner"):
+        names.add(own["entry_corner"])
     for entry in own.get("cycle", []):
         if entry.startswith("$section:"):
             names.add(entry.split(":", 1)[1])

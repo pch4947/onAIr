@@ -53,6 +53,7 @@ from ..inputs.selector import RELEVANCE, QuoteSelector
 from ..inputs.topic_plan import NEW, Angle, TopicPlan
 from ..pipeline.pipeline import GenerationPipeline
 from ..pipeline.tts import TtsClient
+from ..sources.rss import RssCollector
 from ..telemetry import Telemetry
 from ..transport import Transport
 
@@ -82,6 +83,9 @@ _TEXT_CORNER = "text_corner"  # 예고가 가리키는 코너
 # _MAX_EMPTY_CORNERS번 연달아 못 넣어야 기다린다. 1번이면 본 코너에 문자 소개가 있는 방송(빠짐 → 곡 → 빠짐 → 곡)에서
 # 곡이 여전히 이어졌다 (2026-11-07 quiet)
 _MAX_SONGS_HELD = 2
+# 뉴스로 바꾼 뒤 첫 기사 수집을 기다리는 상한 — 그동안은 백엔드에 남은 분량이 나간다. 넘으면 기다리지 않고
+# 편성을 잇는다(기사가 없으면 뉴스 코너는 건너뛰고, 들어오는 대로 들어간다) [임시값]
+_FORMAT_READY_WAIT_SEC = 8.0
 _OPENERS = ("talk_open", "talk_resume")  # 코너의 화제를 꺼내는 단계 — 갈래와 시간 맥락은 여기에만 붙인다
 _KST = timezone(timedelta(hours=9))  # 방송 시각은 한국 시간이다 (서머타임 없음)
 _WEEKDAYS = "월화수목금토일"
@@ -106,10 +110,23 @@ class PersonaSwitch:
 
     profile: StationProfile
     tts: TtsClient  # 새 목소리
-    glue: GlueBank  # 새 목소리의 연결 멘트 — 합성이 끝나는 대로 채워진다
     persona_id: str | None = None
     voice: str | None = None
     snapshot: dict | None = None  # 받은 persona 원문 — 계측에 사본으로 남긴다
+
+
+@dataclass
+class FormatSwitch:
+    """방송 중에 바꿀 형식 — 검사를 통과한 것만 편성 관리자에 온다 (계약 3.2절 station.format_changed)."""
+
+    fmt: FormatSpec
+    clock: Clock  # 오프닝 없이 순환부터 시작하는 새 형식의 클락
+    intensity: Intensity
+    rss: RssCollector  # 새 형식의 뉴스 소재 — 뉴스가 아니면 빈 수집기
+    corners: list[str] | None = None
+    news_sections: list[str] | None = None
+    topic_plan: TopicPlan | None = None  # 주제 토크가 처음 생기는 전환이면 새로 만든 갈래 계획
+    ready: asyncio.Event | None = None  # 첫 기사 수집이 끝났다 — 뉴스로 바꿀 때 잠깐 기다린다
 
 
 class Scheduler:
@@ -119,7 +136,7 @@ class Scheduler:
                  telemetry: Telemetry, chat_rules: ChatRules, violates,
                  target_buffer_sec: float = 30.0, max_concurrent: int = 2,
                  emit_corner_changed: bool = False, topic_plan: TopicPlan | None = None,
-                 contract_version: int = 1):
+                 contract_version: int = 1, emit_corner_format: bool = False):
         self.config = config
         self._contract_version = contract_version  # 엔진→백엔드 계약 버전 (10.10절)
         self._notices: set[asyncio.Task] = set()  # 동기 콜백에서 띄운 상태 통보 — 끝날 때까지 붙잡아 둔다
@@ -164,6 +181,7 @@ class Scheduler:
         self._discard: set[str] = set()  # 생성 중 취소·철회된 입력 — 결과를 버린다
         self._steer_pending = False  # 화제를 바꿀 인용을 생성 중 — 결과가 나와야 다음 단계의 화제가 정해진다
         self._emit_corner_changed = emit_corner_changed
+        self._emit_corner_format = emit_corner_format  # corner.changed에 형식을 싣는다 (#260)
         self._announced_corner: str | None = None
         self._inflight = 0
         # 첫 곡은 백엔드가 방송 시작과 함께 튼다 — 엔딩 시점 계산에는 넣지만 버퍼에는 넣지 않는다.
@@ -195,6 +213,10 @@ class Scheduler:
         self._jump: str | None = None
         self._forced: ClockEntry | None = None
         self._persona: PersonaSwitch | None = None  # 바꿀 페르소나 (#261) — 편성 루프가 다음 차례에 바꾼다
+        self._format: FormatSwitch | None = None  # 바꿀 형식 (#260)
+        self.format_switches = 0  # 방송 중에 형식을 바꾼 횟수
+        # 전환 뒤에 쓸 연결 멘트 — 페르소나와 형식을 잇달아 바꿔도 마지막에 받은 것이 둘 다 반영한 것이다
+        self._next_glue: GlueBank | None = None
         self._jobs: dict[int, GenerationJob] = {}  # 순번 → 생성 중인 작업
         self._settling: set[int] = set()  # 생성이 끝나 결과를 정리하는 중인 순번 — 입력은 그 작업이 정리한다
         self._abandoned: set[int] = set()  # 코너 변경으로 버린 순번 중 생성이 아직 끝나지 않은 것
@@ -284,6 +306,25 @@ class Scheduler:
     @property
     def pending_persona_id(self) -> str | None:
         return self._persona.persona_id if self._persona else None
+
+    def switch_format(self, switch: FormatSwitch) -> None:
+        """운영자가 고른 형식으로 바꾼다 (계약 3.2절 station.format_changed). 편성 루프가 다음 차례에 바꾼다."""
+        self._format = switch
+
+    @property
+    def upcoming_format(self) -> tuple[str, list[str] | None, list[str] | None]:
+        """바꾸는 중인 것까지 넣은 형식과 호스트 선택 — 재전달을 가린다."""
+        if self._format is not None:
+            return self._format.fmt.format, self._format.corners, self._format.news_sections
+        return self.config.format, self.config.corners, self.config.news_sections
+
+    def use_glue(self, glue: GlueBank) -> None:
+        """다음 전환부터 쓸 연결 멘트 — 합성이 끝나는 대로 채워진다."""
+        self._next_glue = glue
+
+    def _take_glue(self) -> None:
+        if self._next_glue is not None:
+            self.glue, self._next_glue = self._next_glue, None
 
     async def discard_segments(self, segment_ids: list[str]) -> None:
         """백엔드가 재생하지 않고 버린 세그먼트 (계약 3.2절 segment.discarded).
@@ -432,6 +473,8 @@ class Scheduler:
             await self._expire_inputs(time.time())
             if self._persona is not None:
                 await self._apply_persona()
+            if self._format is not None:
+                await self._apply_format()
             if self._jump is not None:
                 await self._cut_corner()
             ctx = self._snapshot()
@@ -613,13 +656,50 @@ class Scheduler:
         self.config.profile, self.config.persona_id = switch.profile, switch.persona_id
         self.config.voice = switch.voice
         self.pipeline.switch_persona(switch.profile, switch.tts)
-        self.glue = switch.glue
+        self._take_glue()
         # 새 DJ는 이전 DJ가 방금 누구를 인용했는지와 상관없이 바로 인용한다
         self._last_quote_at = float("-inf")
         self._last_requester = None
         self.telemetry.log_persona_switch(before, switch.profile.dj_name, switch.snapshot, dropped)
         if run is not None and self._forced is None and not self._plays_song(run.spec):
             self._forced = ClockEntry(run.spec, run.label)
+
+    async def _apply_format(self) -> None:
+        """새 형식으로 바꾼다 (#260) — 오프닝을 다시 하지 않고 새 형식의 순환으로 들어간다.
+
+        아직 제출하지 않은 멘트는 이전 형식의 것이라 내보내지 않는다. 페르소나·주제·남은 방송 시간·방송된
+        청취자 이야기는 그대로다. 쌓여 있던 입력도 그대로 둔다 — 문자·사연·신청곡은 그것을 읽는 형식으로
+        돌아오면 쓰이고, 채팅은 인용 창이 지나면 만료된다. 새로 오는 입력은 새 형식의 계약으로 받는다.
+        """
+        switch, self._format = self._format, None
+        dropped = await self._drop_unsubmitted()
+        before = self.fmt
+        self.fmt, self.clock, self.intensity = switch.fmt, switch.clock, switch.intensity
+        self.config.format, self.config.corners = switch.fmt.format, switch.corners
+        self.config.news_sections = switch.news_sections
+        self.sources.use_rss(switch.rss)
+        if switch.topic_plan is not None:
+            self.topic_plan = switch.topic_plan
+        self._take_glue()
+        self.telemetry.corner_titles.update({name: spec.title for name, spec in switch.fmt.corners.items()})
+        self._jump = None
+        # 형식에 전환용 첫 코너가 있으면 거기부터 — 음악은 곡보다 DJ의 이야기를 먼저 들려준다
+        entry = switch.fmt.entry_corner
+        self._forced = ClockEntry(switch.fmt.corner(entry)) if entry else None
+        # 새 형식의 흐름은 처음부터 센다 — 앞 형식의 곡·말 코너 기억으로 코너를 미루거나 문구를 빼지 않는다
+        self._last_talk_corner, self._song_since_talk = None, False
+        self._talk_since_song, self._songs_held = True, 0
+        self._previewed = False
+        self._skip_logged.clear()
+        self._announced_corner = None  # 같은 이름의 코너여도 새 형식의 계약으로 다시 알린다
+        self.format_switches += 1
+        self.telemetry.log_format_switch(before.label, switch.fmt.label, dropped)
+        if switch.ready is not None and not switch.ready.is_set():
+            try:
+                await asyncio.wait_for(switch.ready.wait(), _FORMAT_READY_WAIT_SEC)
+            except TimeoutError:
+                logger.warning("FORMAT_SOURCE_SLOW %s 기사 수집을 기다리지 않고 편성을 잇는다",
+                               self.config.station_id)
 
     async def _drop_unsubmitted(self) -> int:
         """아직 제출하지 않은 멘트를 버리고 지금 코너를 끝낸다 (#259). 버린 수를 돌려준다.
@@ -1210,10 +1290,13 @@ class Scheduler:
             return
         self._announced_corner = sub.corner_type
         self._announced_segment = sub.id
-        await self.transport.notify_station("corner.changed", {
+        payload = {
             "corner": sub.corner_type, "title": corner.title, "segment_id": sub.id,
             "contract": {kind: str(corner.mode(kind)) for kind in (CHAT, MESSAGE, SONG_REQUEST)},
-        })
+        }
+        if self._emit_corner_format:  # 방송 중에 형식이 바뀌면 화면도 이 코너가 들릴 때 바뀌게 한다 (#260)
+            payload["format"] = self.fmt.format
+        await self.transport.notify_station("corner.changed", payload)
 
     async def _publish(self, sub: SegmentSubmission, track_ms: int = 0,
                        anchor: Anchor | None = None, job: GenerationJob | None = None) -> None:
