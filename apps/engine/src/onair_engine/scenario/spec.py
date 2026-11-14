@@ -122,24 +122,34 @@ class ChatterSpec(_Spec):
 class StorySpec(_Spec):
     body: str
     nickname: str | None = None
+    id: str | None = None  # expect에서 가리킬 이름
+    at: float | None = None  # 방송 중에 올라온 글의 시각. 없으면 방송 시작 때 후보로 받는다
+
+    @field_validator("at", mode="before")
+    @classmethod
+    def _at(cls, value):
+        return None if value is None else parse_at(value)
 
 
 class ExpectSpec(_Spec):
     """회차마다 판정하는 기대 결과."""
 
-    type: Literal["reflected", "aired_contains", "not_aired", "max_silence_sec", "max_fallback",
-                  "corner_entered"]
-    input: str | None = None  # reflected: inputs의 id
+    type: Literal["reflected", "min_reflected", "aired_contains", "not_aired", "max_silence_sec",
+                  "max_fallback", "corner_entered"]
+    input: str | None = None  # reflected: inputs 또는 board_stories의 id
+    kind: Literal["chat", "message", "song_request", "board_story"] | None = None  # min_reflected
     control: str | None = None  # corner_entered: controls의 id
     # reflected: 도착부터 재생 시작까지, corner_entered: 버튼부터 새 코너 첫 멘트가 들리기까지 (둘 다 방송 지연 포함)
     within_sec: float | None = None
     text: str | None = None  # aired_contains, not_aired
-    value: float | None = None  # max_silence_sec, max_fallback
+    value: float | None = None  # min_reflected, max_silence_sec, max_fallback
     note: str | None = None  # 사람이 읽을 설명
 
     @model_validator(mode="after")
     def _check(self) -> ExpectSpec:
-        need = {"reflected": "input", "aired_contains": "text", "not_aired": "text",
+        if self.type == "min_reflected" and (self.kind is None or self.value is None):
+            raise ValueError("min_reflected에는 kind와 value가 필요하다")
+        need = {"reflected": "input", "min_reflected": "kind", "aired_contains": "text", "not_aired": "text",
                 "max_silence_sec": "value", "max_fallback": "value",
                 "corner_entered": "control"}[self.type]
         if getattr(self, need) is None:
@@ -163,9 +173,11 @@ class ScenarioSpec(_Spec):
     def _ids(self) -> ScenarioSpec:
         for i, item in enumerate(self.inputs):
             item.id = item.id or f"i{i}"
-        ids = [item.id for item in self.inputs]
+        for i, story in enumerate(self.board_stories):
+            story.id = story.id or str(i)
+        ids = [item.id for item in (*self.inputs, *self.board_stories)]
         if len(set(ids)) != len(ids):
-            raise ValueError("inputs의 id가 겹친다")
+            raise ValueError("inputs·board_stories의 id가 겹친다")
         unknown = [e.input for e in self.expect if e.input is not None and e.input not in ids]
         if unknown:
             raise ValueError(f"expect가 없는 입력을 가리킨다: {unknown}")
@@ -178,6 +190,11 @@ class ScenarioSpec(_Spec):
         if unknown:
             raise ValueError(f"expect가 없는 조작을 가리킨다: {unknown}")
         return self
+
+    def request_kinds(self) -> dict[str, str]:
+        """엔진에 보내는 request_id → 입력 종류. 배경 채팅은 들어 있지 않다 (runner._inject)."""
+        return {**{f"in_{item.id}": item.kind for item in self.inputs},
+                **{f"story_sim_{story.id}": "board_story" for story in self.board_stories}}
 
 
 def load_scenario(path: str | Path) -> ScenarioSpec:
