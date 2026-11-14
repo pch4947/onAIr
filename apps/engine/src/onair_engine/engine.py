@@ -2,14 +2,19 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from onair_schema import Persona, error_detail
+from pydantic import BaseModel, ValidationError
 
 from .audio import CachedTts
 from .catalog import Catalog
 from .corners.run import MaterialSources, TrackSource
-from .domain import ListenerRequest, RequestState, StationConfig, new_id
+from .domain import ListenerRequest, RequestState, StationConfig, StationProfile, new_id
 from .format import Clock, load_format
 from .glue import GlueBank
 from .inputs.classify import keywords
@@ -19,14 +24,17 @@ from .inputs.rules import load_chat_rules
 from .inputs.stories import StoryPool
 from .inputs.story_judge import StoryJudge
 from .inputs.topic_plan import TopicPlan, angle_count
+from .personas import unsafe_fields
 from .pipeline.llm import make_llm
 from .pipeline.pipeline import GenerationPipeline
 from .pipeline.safety import SafetyChecker
-from .pipeline.tts import make_tts
-from .scheduler.scheduler import Scheduler
+from .pipeline.tts import TtsClient, make_tts
+from .scheduler.scheduler import PersonaSwitch, Scheduler
 from .sources.rss import Feed, RssCollector, load_news_feeds
 from .telemetry import Telemetry
 from .transport import Transport
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -75,11 +83,31 @@ class StationRejected(Exception):
         self.detail = detail
 
 
+class PersonaChanged(BaseModel):
+    """station.persona_changed 페이로드 (계약 3.2절) — persona는 station.created의 것과 같은 구조다."""
+
+    persona: Persona
+
+
+def profile_from(persona: Persona) -> StationProfile:
+    """persona의 표현 층만 프롬프트용 프로필로 옮긴다 (docs/persona.md 2절)."""
+    return StationProfile(
+        dj_name=persona.dj_name, tone=persona.tone, concept=persona.concept,
+        examples=list(persona.examples), forbidden=list(persona.forbidden),
+        signature_phrases=list(persona.signature_phrases),
+    )
+
+
 class StationEngine:
     def __init__(self, config: StationConfig, settings: EngineSettings, transport: Transport):
         self.config = config
         self.settings = settings
         self.transport = transport
+        # 주제는 방송 시작 때 정해진다 — 호스트가 비워 컨셉을 썼어도 방송 중 페르소나 전환(#261)으로 바뀌지 않는다
+        self._topic = config.topic or config.profile.concept
+        # 보이스마다 TTS 클라이언트를 만든다. 시나리오 실행기는 흉내 TTS로 바꿔 끼운다
+        self.tts_factory: Callable[[str | None], TtsClient] = (
+            lambda voice: make_tts(settings.tts, voice=voice or settings.tts_voice))
 
         # 키·보이스 누락·형식 설정 오류는 방송 도중이 아니라 여기서 실패한다 — 계측 DB를 열기 전에 확인한다
         try:
@@ -92,7 +120,7 @@ class StationEngine:
             raise StationRejected("invalid_payload", f"형식 설정: {exc}"[:300]) from exc
         try:
             # 보이스는 방마다 다르다 (persona.md 9.3절). 엔진 설정 값은 로컬 실행용 기본값이다
-            tts_client = make_tts(settings.tts, voice=config.voice or settings.tts_voice)
+            tts_client = self.tts_factory(config.voice)
         except RuntimeError as exc:
             raise StationRejected("tts_unavailable", str(exc)) from exc
         try:
@@ -154,6 +182,10 @@ class StationEngine:
             emit_corner_changed=settings.emit_corner_changed, topic_plan=self.topic_plan,
         )
         self._safety = safety
+        self._fmt = fmt
+        self._audio_root = audio_root
+        self._glue_no = 0  # 방송 중에 연결 멘트를 다시 합성한 횟수 — 폴더 이름에 쓴다
+        self._glue_task: asyncio.Task | None = None
         self._stop = asyncio.Event()
 
     @property
@@ -162,7 +194,7 @@ class StationEngine:
 
         TODO(오프닝 코너): 호스트가 비웠으면 컨셉에서 LLM으로 만든다. 지금은 컨셉을 그대로 쓴다.
         """
-        return self.config.topic or self.config.profile.concept
+        return self._topic
 
     async def run(self, max_segments: int | None = None) -> None:
         # 수집은 사전 렌더링과 동시에 시작한다 — 방송 시작을 피드 시간만큼 더 늦추지 않는다
@@ -189,7 +221,7 @@ class StationEngine:
             self.telemetry.log_station("station.started", {"topic": self.topic})
             await self.scheduler.run(self._stop, max_segments=max_segments)
         finally:
-            tasks = [t for t in (poller, plan, judge) if t is not None]
+            tasks = [t for t in (poller, plan, judge, self._glue_task) if t is not None]
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -255,6 +287,69 @@ class StationEngine:
         if not isinstance(corner, str) or not corner:
             raise ValueError(f"corner.skip에 코너가 없다: {payload!r}"[:200])
         self.scheduler.skip_to(corner)
+
+    async def on_persona_changed(self, payload: dict,
+                                 voice_known: Callable[[str], Awaitable[bool]] | None = None) -> bool:
+        """운영자가 고른 페르소나로 바꾼다 (계약 3.2절 station.persona_changed). 받아들였으면 True.
+
+        방 생성 때와 같은 기준(형식, 보이스 목록, 안전 규칙)으로 검사한다. 걸리면 바꾸지 않고 기록만 남긴다 —
+        이전 페르소나로 계속 방송한다. 대본과 목소리는 편성 루프의 다음 차례에 바뀌고, 연결 멘트는 그동안
+        뒤에서 새 목소리로 다시 합성한다(끝날 때까지 연결 멘트 없이 코너에 들어간다).
+        """
+        try:
+            persona = PersonaChanged.model_validate(payload).persona
+        except ValidationError as exc:
+            return self._reject_persona("invalid_payload", error_detail(exc))
+        if persona.persona_id is None:  # station.created와 같다 — 백엔드가 발급한 값으로 전환을 구분한다
+            return self._reject_persona("invalid_payload", "persona.persona_id: Field required")
+        if persona.persona_id in (self.config.persona_id, self.scheduler.pending_persona_id):
+            return False  # at-least-once 재전달 — 이미 바꿨거나 바꾸는 중이다
+        try:
+            if voice_known is not None and not await voice_known(persona.voice):
+                return self._reject_persona(
+                    "unknown_voice", f"persona.voice: {persona.voice} — {self.settings.tts} 보이스 목록에 없음")
+        except StationRejected as exc:  # 보이스 목록 조회 실패
+            return self._reject_persona(exc.reason, exc.detail)
+        if unsafe := unsafe_fields(persona.model_dump(), self._safety):
+            name, rule = unsafe[0]
+            return self._reject_persona("unsafe_persona", f"persona.{name}: 안전 규칙에 걸렸습니다 ({rule})")
+        profile = profile_from(persona)
+        try:
+            tts = CachedTts(self.tts_factory(persona.voice), cache_dir=self.settings.tts_cache_dir)
+        except RuntimeError as exc:
+            return self._reject_persona("tts_unavailable", str(exc)[:300])
+        self._glue_no += 1
+        glue = GlueBank(tts=tts, audio_root=self._audio_root, station_id=self.config.station_id,
+                        profile=profile, fmt=self._fmt, safety=self._safety,
+                        subdir=f"glue_{self._glue_no}")
+        try:
+            glue.check()
+        except ValueError as exc:
+            return self._reject_persona("unsafe_persona", str(exc)[:300])
+        if self._glue_task is not None:  # 앞선 전환의 합성 — 이제 쓰지 않는다
+            self._glue_task.cancel()
+        self._glue_task = asyncio.create_task(self._rerender_glue(glue))
+        self.glue = glue
+        self.scheduler.switch_persona(PersonaSwitch(
+            profile=profile, tts=tts, glue=glue, persona_id=persona.persona_id, voice=persona.voice,
+            snapshot=persona.model_dump(mode="json")))
+        return True
+
+    def _reject_persona(self, reason: str, detail: str) -> bool:
+        logger.warning("PERSONA_REJECTED %s %s: %s", self.config.station_id, reason, detail)
+        self.telemetry.log_persona_rejected(reason, detail)
+        return False
+
+    async def _rerender_glue(self, glue: GlueBank) -> None:
+        """새 목소리의 연결 멘트 합성. 실패해도 방송은 이어진다 — 합성된 문구만 쓰고 나머지 코너는 문구 없이 들어간다."""
+        started = time.time()
+        try:
+            await glue.prerender()
+        except Exception as exc:
+            logger.exception("GLUE_RERENDER_FAILED %s", self.config.station_id)
+            self.telemetry.log_glue(len(glue), time.time() - started, error=str(exc)[:100] or type(exc).__name__)
+        else:
+            self.telemetry.log_glue(len(glue), time.time() - started)
 
     async def on_segments_discarded(self, payload: dict) -> None:
         """백엔드가 재생하지 않고 버린 멘트 (계약 3.2절 segment.discarded)."""

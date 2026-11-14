@@ -285,6 +285,31 @@ class Telemetry:
         self._event("corner", summary, event="discarded", segments=segments, returned=returned)
         self._db.commit()
 
+    def log_persona_switch(self, before: str, after: str, persona: dict | None, dropped: int) -> None:
+        """방송 중 페르소나 전환 (#261). 받은 persona 원문을 사본으로 남긴다 — 그 뒤 대본의 분석 기준이다."""
+        self._db.execute(
+            "INSERT INTO station_log VALUES (?,?,?,?)",
+            (self.station_id, time.time(), "station.persona_changed",
+             json.dumps({"persona": persona, "before": before}, ensure_ascii=False)),
+        )
+        summary = f"페르소나 전환 · {before} → {after}" + (f" · 만들던 멘트 {dropped}개 버림" if dropped else "")
+        self._event("station", summary, event="persona_changed", before=before, after=after, dropped=dropped)
+        self._db.commit()
+
+    def log_persona_rejected(self, reason: str, detail: str) -> None:
+        """받아들이지 않은 페르소나 전환 — 이전 페르소나로 계속 방송한다. 패널에만 남긴다."""
+        self._event("station", f"페르소나 전환 거절 · {detail}", event="persona_rejected",
+                    reason=reason, detail=detail)
+        self._db.commit()
+
+    def log_glue(self, count: int, elapsed_sec: float, error: str | None = None) -> None:
+        """페르소나 전환 뒤 연결 멘트를 새 목소리로 다시 합성한 결과 — 패널에만 남긴다."""
+        summary = (f"연결 멘트 합성 실패 → 연결 멘트 없이 진행 ({error})" if error
+                   else f"연결 멘트 {count}개 새 목소리로 합성 · {elapsed_sec:.1f}초")
+        self._event("station", summary, event="glue_failed" if error else "glue_ready",
+                    count=count, elapsed_sec=round(elapsed_sec, 1))
+        self._db.commit()
+
     def log_station(self, event: str, payload: dict) -> None:
         # station.created 원문 = 방송 시점의 persona 사본 (persona.md 9.4절). 분석은 이 사본을 기준으로 한다
         self._db.execute(

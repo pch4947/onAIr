@@ -126,6 +126,11 @@ def _texts(persona: dict) -> list[tuple[str, str]]:
     return out
 
 
+def unsafe_fields(persona: dict, safety: SafetyChecker) -> list[tuple[str, str]]:
+    """안전 규칙(L0)에 걸린 (필드 경로, 규칙) — 방 생성 화면의 검사와 방송 중 페르소나 전환이 같이 쓴다."""
+    return [(field, rule) for field, text in _texts(persona) if (rule := safety.check_l0(text))]
+
+
 class PersonaDrafter:
     def __init__(self, llm_factory, safety: SafetyChecker, *, max_tokens: int = 4000,
                  retries: int = 2):
@@ -210,7 +215,7 @@ class PersonaDrafter:
             return [{"field": "persona." + ".".join(str(p) for p in err["loc"]), "reason": err["msg"]}
                     for err in exc.errors()]
         return [{"field": f"persona.{field}", "reason": f"안전 규칙에 걸렸습니다 ({rule})"}
-                for field, text in _texts(persona) if (rule := self._safety.check_l0(text))]
+                for field, rule in unsafe_fields(persona, self._safety)]
 
 
 # ── 더미 LLM용 초안 — API 키 없이 방 생성 화면을 개발·시연할 수 있게 한다 ─────────

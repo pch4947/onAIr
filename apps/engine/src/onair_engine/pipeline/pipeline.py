@@ -112,6 +112,17 @@ class GenerationPipeline:
         # 대본은 한 번에 하나씩 쓴다 — 뒤 멘트가 앞 멘트의 대본을 보고 쓰게 한다. 합성은 그대로 동시에 돈다.
         # 예전에는 합성이 끝나야 맥락에 들어가서, 동시에 만든 멘트의 절반이 앞 멘트를 모르고 썼다 (#262)
         self._script_lock = asyncio.Lock()
+        self._persona_no = 0  # 페르소나를 바꾼 횟수 — 바꾸기 전에 쓰기 시작한 대본을 맥락에 넣지 않는다
+
+    def switch_persona(self, profile: StationProfile, tts: TtsClient) -> None:
+        """이 뒤로 쓰는 대본과 합성이 새 페르소나의 것이다 (#261).
+
+        직전 멘트 맥락은 비운다 — 이전 DJ가 한 말이라 "방금 한 말에 이어서"가 맞지 않고, 말투가 옮아간다.
+        """
+        self.profile = profile
+        self.tts = tts
+        self._recent.clear()
+        self._persona_no += 1
 
     def take_aired(self, segment_id: str) -> str | None:
         """PUBLISHED를 받은 세그먼트의 대본. 재전달이나 모르는 세그먼트면 None."""
@@ -161,6 +172,7 @@ class GenerationPipeline:
         """대본을 쓰고 검사해 맥락에 넣는다. (대본, 인용한 입력) · None(거부) · _FAILED(LLM 장애)."""
         # [1] 프롬프트 구성 (L1 지시 내장 + 방송 맥락)
         t0 = time.time()
+        persona_no = self._persona_no
         prompt = self._with_context(
             build_prompt(job.step, job.material, self.profile, plain=job.plain))
 
@@ -199,8 +211,10 @@ class GenerationPipeline:
         self._log(job, "l2", t1, time.time(), "ok" if clean else "reject")
         if not clean:
             return None
-        # 합성을 기다리지 않고 맥락에 넣는다 — 바로 뒤 멘트가 이 대본을 보고 쓴다
-        self._recent.extend(clean)
+        # 합성을 기다리지 않고 맥락에 넣는다 — 바로 뒤 멘트가 이 대본을 보고 쓴다.
+        # 쓰는 사이 페르소나가 바뀌었으면 이전 DJ의 대본이고 방송에도 나가지 않는다 — 넣지 않는다
+        if persona_no == self._persona_no:
+            self._recent.extend(clean)
         if job.block is not None:
             job.block.resolve(clean)
         return script, quote_ref
