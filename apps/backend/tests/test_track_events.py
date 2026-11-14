@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
@@ -17,6 +18,7 @@ from app.music import ENQUEUE
 from app.streaming.hls import HlsPublisher
 from app.music import run_process
 from app.streaming.journal import Journal
+from app.test_controls import discard_and_send
 from test_broadcast_runtime import segment
 
 
@@ -132,6 +134,37 @@ class TrackRedisTests(unittest.IsolatedAsyncioTestCase):
 
     async def events(self):
         return [fields for _, fields in await self.redis.xrange(f'engine:{self.station}:in')]
+
+    async def test_discarding_an_intro_releases_its_track_for_the_next_intro(self):
+        """#274: 버튼이 곡 소개를 버리면 예약이 풀려, 엔진이 같은 곡을 다시 소개할 수 있다."""
+        await self.enqueue('one')
+        intro = {**segment(), 'id': 'intro1', 'station_id': self.station, 'music_ref': 'yt:one'}
+        self.assertEqual(await self.reserve('intro1', 'yt:one', intro), 1)
+        self.assertEqual(await self.redis.hget(self.prefix + ':track-plan', 'frozen'), 'one')
+        again = {**intro, 'id': 'intro2'}
+        self.assertEqual(await self.reserve('intro2', 'yt:one', again), -3)  # 예약된 동안은 막힌다
+        publisher = SimpleNamespace(finishing=[], active_id=None, current=None, journal=None)
+        state = SimpleNamespace(redis=self.redis, hls=publisher)
+        self.assertEqual(await discard_and_send(state, self.station, 'corner.skip', {'corner': 'text_corner'}), 1)
+        self.assertIsNone(await self.redis.hget(self.prefix + ':track-plan', 'frozen'))
+        self.assertFalse(await self.redis.hexists(self.prefix + ':intro-tracks', 'intro1'))
+        self.assertEqual(await self.redis.lrange(self.prefix + ':queue', 0, -1), ['one'])  # 곡은 남는다
+        self.assertEqual(await self.reserve('intro2', 'yt:one', again), 1)
+        self.assertEqual(await self.redis.hget(self.prefix + ':track-plan', 'frozen'), 'one')
+        self.assertEqual(await self.redis.hget(self.prefix + ':intro-tracks', 'intro2'), 'one')
+
+    async def test_discarding_plain_speech_keeps_another_intros_reservation(self):
+        await self.enqueue('one')
+        intro = {**segment(), 'id': 'intro1', 'station_id': self.station, 'music_ref': 'yt:one'}
+        self.assertEqual(await self.reserve('intro1', 'yt:one', intro), 1)
+        publisher = SimpleNamespace(finishing=[], active_id='intro1', current=None, journal=None)  # 소개는 인코딩 중
+        talk = {**segment(), 'id': 'talk', 'station_id': self.station}
+        await self.redis.hset(self.prefix + ':segments', 'talk', json.dumps(talk))
+        await self.redis.rpush(self.prefix + ':queue', 'talk')
+        state = SimpleNamespace(redis=self.redis, hls=publisher)
+        self.assertEqual(await discard_and_send(state, self.station, 'corner.skip', {'corner': 'text_corner'}), 1)
+        self.assertEqual(await self.redis.hget(self.prefix + ':track-plan', 'frozen'), 'one')
+        self.assertEqual(await self.redis.hget(self.prefix + ':intro-tracks', 'intro1'), 'one')
 
     async def test_comment_reaches_engine_before_its_track_once(self):
         row = {**segment('music'), 'id': 'music_one', 'station_id': self.station, 'music_ref': 'yt:one', 'request_ref': 'music_one'}
