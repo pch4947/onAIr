@@ -49,14 +49,26 @@ corners:
     budget_sec: [180, 360]
     call: "{title}! 제 선택과 여러분의 선택, 오늘은 누가 이길까요."
     close: "오늘 {title}는 여기까지예요."
-    requires: {vote: 1}          # 투표(vote.open/result)는 M5부터
+    # 고민은 엔진이 주제에서 미리 만든다. 투표를 켜지 않았거나(pipeline.emit_votes) 고민이 없으면 주제 토크로 대체된다
+    requires: {vote: 1}
     fallback: topic_talk
+    # 라운드 하나: 고민과 선택지(투표가 열린다) → 결과가 올 때까지 DJ 이야기 → DJ의 선택과 결과 공개. 세 번 한다.
+    # 예산을 넘겨도 열어 둔 라운드는 끝까지 간다 (corners/run.py)
+    # 이야기는 횟수를 정하지 않고 결과가 올 때까지 잇는다(repeat는 안전 상한이다) — 다섯 번으로 묶었더니
+    # 창이 닫히기 전에 이야기가 떨어져 라운드마다 30초쯤 비었다 (2026-11-14 더미 6회)
     steps:
       - kind: glue
         glue: call
-      - kind: game_round
-        items: vote
-        repeat: 3
+      - {kind: game_ask, items: vote}
+      - {kind: game_talk, items: vote_wait, repeat: 20}
+      - {kind: game_reveal, items: vote_result}
+      - {kind: game_ask, items: vote}
+      - {kind: game_talk, items: vote_wait, repeat: 20}
+      - {kind: game_reveal, items: vote_result}
+      - {kind: game_ask, items: vote}
+      - {kind: game_talk, items: vote_wait, repeat: 20}
+      - {kind: game_reveal, items: vote_result}
+      - kind: game_final
       - kind: glue
         glue: close
     contract: {vote: solicit, chat: quote}
