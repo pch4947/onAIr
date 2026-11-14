@@ -66,6 +66,8 @@ def load_config(path: Path) -> tuple[StationConfig, EngineSettings]:
         transport_redis_url=(os.environ.get("ONAIR_REDIS_URL")
                              or tr.get("redis_url", "redis://localhost:6379/0")),
         audio_dir=Path(tr.get("audio_dir", "var/audio")),
+        # 배포 중에 파일을 고치지 않고 올리고 내릴 수 있게 환경변수가 먼저다
+        contract_version=int(os.environ.get("ONAIR_CONTRACT_VERSION") or tr.get("contract_version", 1)),
         sqlite_path=Path(tel.get("sqlite_path", "var/engine_metrics.sqlite")),
         safety_rules_path=Path(pipe.get("safety_rules", "config/safety_rules.yaml")),
         formats_dir=Path(pipe.get("formats_dir", "config/formats")),

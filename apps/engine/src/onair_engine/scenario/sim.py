@@ -172,7 +172,7 @@ class SimBackend:
         elif sub.music_ref in self._by_ref:
             self._forget_displaced(sub.music_ref)
 
-    async def notify_request_state(self, request_id: str, state) -> None:
+    async def notify_request_state(self, request_id: str, state, detail: dict | None = None) -> None:
         self.states.append((self.now(), request_id, str(state)))
 
     async def notify_station(self, event_type: str, payload: dict) -> None:

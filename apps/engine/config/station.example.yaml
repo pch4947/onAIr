@@ -42,6 +42,9 @@ transport:
   base_url: http://localhost:3000   # kind: http 일 때 백엔드 주소
                                     # 토큰은 ONAIR_ENGINE_TOKEN 환경변수로 주입
   redis_url: redis://localhost:6379/0  # kind: redis 일 때. 비밀번호가 있으면 ONAIR_REDIS_URL로 주입
+  contract_version: 1         # 엔진→백엔드 이벤트의 계약 버전. 2면 input_refs·reflection_levels와 v2 request.state 값을
+                              # 보낸다 (계약 10.4·10.5·10.10절). 백엔드가 v1·v2를 함께 받게 배포된 뒤에 올린다.
+                              # 환경변수 ONAIR_CONTRACT_VERSION이 있으면 그 값이 먼저다
   audio_dir: var/audio        # 백엔드와 공유하는 오디오 루트.
                               # 제출 페이로드의 audio_ref는 이 경로 기준 상대 경로다
 

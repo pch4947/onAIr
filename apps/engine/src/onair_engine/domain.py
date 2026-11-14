@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -42,7 +43,7 @@ class RequestState(StrEnum):
     GENERATED = "generated"
     REJECTED = "rejected"
     EXPIRED = "expired"
-    # 계약 v1 백엔드가 받지 않는 값 — wire_state로 바꿔 보내거나 계측에만 남긴다 (계약 10.4절 합의 전까지)
+    # 계약 v1 백엔드가 받지 않는 값 — wire_state로 바꿔 보내거나 계측에만 남긴다. v2는 그대로 보낸다 (계약 10.4절)
     INBOXED = "inboxed"
     NOT_ON_AIR = "not_on_air"
     CANCELLED = "cancelled"
@@ -53,8 +54,16 @@ _WIRE_STATES = {RequestState.INBOXED: RequestState.QUEUED, RequestState.NOT_ON_A
                 RequestState.CANCELLED: None, RequestState.REFLECTED: None}
 
 
-def wire_state(state: RequestState) -> RequestState | None:
+# 계약 v2의 request.state 값 (10.4절). 엔진 안의 이름은 v1 그대로 두고 보낼 때 바꾼다.
+# screened·generated는 v2에 없다 — 바로 뒤에 pooled/inboxed가, 재생이 시작되면 reflected가 나간다
+_WIRE_STATES_V2 = {RequestState.SCREENED: None, RequestState.QUEUED: "pooled",
+                   RequestState.GENERATING: "selected", RequestState.GENERATED: None}
+
+
+def wire_state(state: RequestState, version: int = 1) -> str | None:
     """백엔드에 보낼 값. None이면 보내지 않는다 — 모르는 값은 백엔드가 이벤트째 격리한다."""
+    if version >= 2:
+        return _WIRE_STATES_V2.get(state, str(state))
     return _WIRE_STATES.get(state, state)
 
 
@@ -222,6 +231,26 @@ class SegmentSubmission:
     request_ref: str | None = None
     music_ref: str | None = None
     created_at: float = field(default_factory=time.time)
+    # 계약 v2 (10.5절) — 이 멘트가 반영한 입력들과 입력별 반영 단계(1~4). v1로 보낼 때는 싣지 않는다
+    input_refs: list[str] = field(default_factory=list)
+    reflection_levels: dict[str, int] = field(default_factory=dict)
+
+
+QUOTE_LEVEL = 2  # 기획서 4.2절 ② — 인용·낭독
+
+
+def segment_payload(sub: SegmentSubmission, version: int = 1) -> dict:
+    """segment.submitted의 payload. v1은 request_ref 하나, v2는 input_refs와 reflection_levels (계약 10.5절)."""
+    payload = dataclasses.asdict(sub)
+    refs, levels = payload.pop("input_refs"), payload.pop("reflection_levels")
+    if version < 2:
+        return payload
+    ref = payload.pop("request_ref")
+    if not refs and ref:  # 반영 단계를 따로 정하지 않은 제출 — 인용으로 본다
+        refs, levels = [ref], {ref: QUOTE_LEVEL}
+    payload["input_refs"] = refs
+    payload["reflection_levels"] = {r: levels.get(r, QUOTE_LEVEL) for r in refs}
+    return payload
 
 
 @dataclass

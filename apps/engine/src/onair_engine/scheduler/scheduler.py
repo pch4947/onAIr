@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from ..corners.run import CornerRun, MaterialSources, PlannedStep, Thread
 from ..corners.steps import BLOCK_STEP, STEP_KINDS
 from ..domain import (
+    QUOTE_LEVEL,
     Anchor,
     BlockScript,
     ChatType,
@@ -111,8 +112,11 @@ class Scheduler:
                  pipeline: GenerationPipeline, glue: GlueBank, transport: Transport,
                  telemetry: Telemetry, chat_rules: ChatRules, violates,
                  target_buffer_sec: float = 30.0, max_concurrent: int = 2,
-                 emit_corner_changed: bool = False, topic_plan: TopicPlan | None = None):
+                 emit_corner_changed: bool = False, topic_plan: TopicPlan | None = None,
+                 contract_version: int = 1):
         self.config = config
+        self._contract_version = contract_version  # 엔진→백엔드 계약 버전 (10.10절)
+        self._notices: set[asyncio.Task] = set()  # 동기 콜백에서 띄운 상태 통보 — 끝날 때까지 붙잡아 둔다
         self.fmt = fmt
         self.clock = clock
         self.sources = sources
@@ -229,6 +233,10 @@ class Scheduler:
             await self._transition(req, RequestState.INBOXED)
         else:
             self.enqueue_request(req)
+            # v1은 직전의 screened가 "받았다"를 알렸다. v2에는 screened가 없어 후보 풀에 들어간 것을 알린다 (10.4절)
+            wire = wire_state(req.state, self._contract_version)
+            if self._contract_version >= 2 and wire is not None:
+                await self.transport.notify_request_state(req.request_id, wire)
 
     def attach_song_request(self, track: dict, request_id: str) -> None:
         """track.queued의 곡이 신청곡이면 한마디와 닉네임을 곡 소개 소재에 붙인다 (계약 3.4절)."""
@@ -313,11 +321,6 @@ class Scheduler:
     def on_track_started(self, track_ref: str, started_at: float) -> None:
         self.timeline.sync_track(track_ref, started_at)
 
-    def on_segment_played(self, segment_id: str, at: float) -> None:
-        speech_ms = self.timeline.speech_ms(segment_id)
-        if speech_ms is not None:  # 모르는 세그먼트 — 백엔드가 혼자 트는 곡 등
-            self.on_segment_started(segment_id, at - speech_ms / 1000)
-
     def on_segment_started(self, segment_id: str, started_at: float) -> None:
         """재생 시작 확인 — 인용이 들어 있으면 반영 확정 (CORNER_DESIGN 9.3, 9.4절). 재전달은 무시한다."""
         self._unaired.pop(segment_id, None)
@@ -329,6 +332,7 @@ class Scheduler:
         req, job = quoted
         req.state = RequestState.REFLECTED
         self.telemetry.log_request_state(req.request_id, req.state)
+        self._notify_reflected(req, segment_id, started_at)
         self.callbacks.add(req, started_at)
         # 곡 재생 중에 도착한 반응은 곡 위에서 말할 수 없어 기다린다 — 그 구조적 대기를 뺀다
         song_end = self.timeline.track_end(req.anchor_id)
@@ -341,6 +345,20 @@ class Scheduler:
             quote_age_net=started_at - req.received_at - waited,
             topic_match=topic_match, script_chars=job.script_chars,
         )
+
+    def _notify_reflected(self, req: ListenerRequest, segment_id: str, started_at: float) -> None:
+        """계약 v2 — 입력이 든 세그먼트가 재생되기 시작했다고 백엔드에 알린다 (10.4절). v1에는 이 값이 없다."""
+        wire = wire_state(RequestState.REFLECTED, self._contract_version)
+        if wire is None or req.kind == BOARD_STORY:  # 게시판 사연은 요청이 아니다 (계약 3.5절)
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:  # 루프 밖에서 부른 동기 호출 — 알릴 곳이 없다
+            return
+        task = loop.create_task(self.transport.notify_request_state(
+            req.request_id, wire, {"segment_id": segment_id, "started_at": started_at}))
+        self._notices.add(task)
+        task.add_done_callback(self._notices.discard)
 
     def report_backpressure(self, d_total_ms: float, severity: str, at: float | None = None) -> None:
         """백엔드가 잰 실제 남은 방송 분량(계약 3.2절 backpressure).
@@ -1003,6 +1021,8 @@ class Scheduler:
                 for req in inputs:
                     if sub.request_ref == req.request_id:
                         self._quoted[sub.id] = (req, job)
+                        sub.input_refs = [req.request_id]
+                        sub.reflection_levels = {req.request_id: _reflection_level(req, job)}
                         await self._transition(req, RequestState.GENERATED)
                         if job.material.extra.get("steer") and seq not in self._abandoned:
                             self._apply_steer(req, job, sub.id)
@@ -1117,7 +1137,7 @@ class Scheduler:
     async def _transition(self, req: ListenerRequest, state: RequestState) -> None:
         req.state = state
         self.telemetry.log_request_state(req.request_id, state)
-        wire = wire_state(state)
+        wire = wire_state(state, self._contract_version)
         if wire is not None and req.kind != BOARD_STORY:  # 게시판 사연은 요청이 아니다 (계약 3.5절)
             await self.transport.notify_request_state(req.request_id, wire)
 
@@ -1180,6 +1200,16 @@ class Scheduler:
         self._submitted += 1
         await self._announce_corner(sub)
         await self.transport.publish_segment(sub)
+
+
+def _reflection_level(req: ListenerRequest, job: GenerationJob) -> int:
+    """이 멘트에서 입력이 도달한 반영 단계 (기획서 4.2절, 계약 10.5절).
+
+    인용·낭독은 ②, 다음 화제가 되었거나(STEER) 한 단계의 주 소재(게시판 사연·신청곡)면 ③이다.
+    """
+    if job.material.extra.get("steer") or req.kind in (BOARD_STORY, SONG_REQUEST):
+        return 3
+    return QUOTE_LEVEL
 
 
 def _inputs(job: GenerationJob) -> list[ListenerRequest]:
