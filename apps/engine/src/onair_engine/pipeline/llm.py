@@ -195,9 +195,10 @@ class DummyLlmClient:
         step = detect_step(prompt.user) or "filler"
         text = self._rng.choice(_TEMPLATES[step]).format_map(_slots(prompt))
         m = _CHAT_RE.search(prompt.user)
-        if m and (not self.quote_miss_rate or self._rng.random() >= self.quote_miss_rate):
-            quote = m["body"].split("\n", 1)[0].strip()[:60]
-            text = _QUOTE_TEMPLATE.format(quote=quote) + text
+        # 채팅은 한 줄에 한 건이다 — 건마다 인용하고, 빠뜨릴지도 건마다 정한다 (한 멘트에 여러 건, #267)
+        for line in reversed(m["body"].splitlines() if m else []):
+            if line.strip() and (not self.quote_miss_rate or self._rng.random() >= self.quote_miss_rate):
+                text = _QUOTE_TEMPLATE.format(quote=line.strip()[:60]) + text
         return Script(text=text)
 
     async def complete(self, prompt: Prompt, *, max_tokens: int) -> str:
@@ -375,6 +376,9 @@ class GeminiLlmClient:
                       refused=reason in ("SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII"))
 
 
+OPENAI_MAX_TOKENS = 1000
+
+
 class OpenAiLlmClient:
     """Chat Completions 호환 API. base_url만 바꾸면 OpenAI 외 호환 서버에도 붙는다.
 
@@ -385,10 +389,14 @@ class OpenAiLlmClient:
 
     추론 모델은 temperature 변경을 거부하고 출력 한도를 추론 토큰으로 쓴다. 그래서
     temperature는 지정했을 때만 보내고, 지연을 줄이려면 reasoning_effort를 낮춘다.
+    출력 한도는 대본과 추론을 합친 것이라 다른 제공자보다 넉넉히 둔다. 400일 때는 채팅을 인용하는
+    멘트에서 추론이 한도를 다 써 빈 응답이 나왔다 — 한도를 풀고 재면 추론 466, 합계 564 토큰까지
+    쓴다 (ENGINE_TUNING_LOG T-010). 대본 길이는 프롬프트의 문장 수 지시가 정하고, 이 한도는
+    멈추지 않는 출력을 끊는 안전장치다.
     """
 
     def __init__(self, model: str | None, *, base_url: str = DEFAULT_OPENAI_BASE_URL,
-                 api_key: str | None = None, max_tokens: int = 400,
+                 api_key: str | None = None, max_tokens: int = OPENAI_MAX_TOKENS,
                  temperature: float | None = None, reasoning_effort: str | None = None,
                  timeout: float = 20.0):
         if not model:  # 방송 도중이 아니라 기동 시점에 실패시킨다

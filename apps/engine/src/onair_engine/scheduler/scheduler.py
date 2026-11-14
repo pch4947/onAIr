@@ -66,8 +66,14 @@ _BACKEND_REPORT_TTL_SEC = 30.0
 _MAX_EMPTY_CORNERS = 20
 _NO_MATERIAL_SLEEP_SEC = 3.0
 _WAIT = object()  # _next_planned: 낼 수 있는 단계가 지금은 없다
-# v1 계약은 세그먼트당 요청 하나(request_ref)만 싣는다 — 참여 강도가 2여도 1건 (계약 v2 input_refs 전까지)
+# v1 계약은 세그먼트당 요청 하나(request_ref)만 싣는다 — 참여 강도가 2여도 1건이고, 주 소재가 있는 멘트에는
+# 채팅을 함께 싣지 못한다. v2로 보낼 때(input_refs)만 여러 건을 싣는다 (#267)
 _V1_QUOTES_PER_SEGMENT = 1
+# 주 소재(사연·신청곡)가 있는 멘트에 함께 싣는 채팅 수 — 주 소재가 밀리지 않게 한 건만
+_QUOTES_WITH_FEATURE = 1
+# 한 건만 싣는 단계. 오프닝의 코너 예고는 쌓아 둔 버퍼 없이 나간다 — 두 건을 실으면 대본과 합성이
+# 길어져 오프닝 도중의 무음이 늘었다 (ENGINE_TUNING_LOG T-010, O-004)
+_SINGLE_QUOTE_STEPS = frozenset({"corner_preview"})
 _TEXT_CORNER = "text_corner"  # 예고가 가리키는 코너
 # 곡 연속 방지로 연달아 건너뛸 수 있는 곡 수 (#228). 건너뛰기는 시간이 들지 않는 결정이고, 클락이 코너를
 # _MAX_EMPTY_CORNERS번 연달아 못 넣어야 기다린다. 1번이면 본 코너에 문자 소개가 있는 방송(빠짐 → 곡 → 빠짐 → 곡)에서
@@ -137,7 +143,7 @@ class Scheduler:
         self._last_anchor: Anchor | None = None  # 생성 쪽 최신 앵커 — 접착 문구는 이것을 잇는다
         self._run_anchor: Anchor | None = None  # 지금 코너의 화제 앵커 — 항목 없는 단계가 처음 나올 때 만든다
         self._last_requester: str | None = None
-        self._quoted: dict[str, tuple[ListenerRequest, GenerationJob]] = {}  # segment_id -> 인용한 입력
+        self._quoted: dict[str, tuple[list[ListenerRequest], GenerationJob]] = {}  # segment_id -> 반영한 입력들
         self._song_requests: dict[str, ListenerRequest] = {}  # 곡 차례를 기다리는 신청곡의 한마디
         self._generating: dict[str, ListenerRequest] = {}  # 생성 중인 입력
         self._discard: set[str] = set()  # 생성 중 취소·철회된 입력 — 결과를 버린다
@@ -305,7 +311,11 @@ class Scheduler:
         quoted = self._quoted.pop(segment_id, None)
         if quoted is None:
             return
-        req, job = quoted
+        reqs, job = quoted
+        for req in reqs:
+            self._reflect(req, job, segment_id, started_at)
+
+    def _reflect(self, req: ListenerRequest, job: GenerationJob, segment_id: str, started_at: float) -> None:
         req.state = RequestState.REFLECTED
         self.telemetry.log_request_state(req.request_id, req.state)
         self._notify_reflected(req, segment_id, started_at)
@@ -823,19 +833,28 @@ class Scheduler:
         for req in requests:
             await self._transition(req, RequestState.EXPIRED)
 
-    def _quote_ready(self, chat_mode, step_kind: str) -> bool:
+    def _quote_limit(self, with_feature: bool = False, step_kind: str | None = None) -> int:
+        """이 멘트에 실을 수 있는 채팅 수 — 참여 강도 상한과 계약이 실을 수 있는 수 가운데 작은 쪽."""
+        if self._contract_version < 2:
+            return 0 if with_feature else min(self.intensity.quote_limit, _V1_QUOTES_PER_SEGMENT)
+        if with_feature or step_kind in _SINGLE_QUOTE_STEPS:
+            return min(self.intensity.quote_limit, _QUOTES_WITH_FEATURE)
+        return self.intensity.quote_limit
+
+    def _quote_ready(self, chat_mode, step_kind: str, with_feature: bool = False) -> bool:
         """지금 이 단계에 채팅을 인용할 수 있다 — 풀에 채팅이 있고 계약·참여 강도·인용 간격이 허용한다."""
         return (bool(len(self.pool)) and chat_mode in QUOTABLE and STEP_KINDS[step_kind].quotable
-                and min(self.intensity.quote_limit, _V1_QUOTES_PER_SEGMENT) > 0
+                and self._quote_limit(with_feature) > 0
                 and time.time() - self._last_quote_at >= self.intensity.quote_gap_sec)
 
     def _take_quotes(self, chat_mode, step_kind: str, anchor: Anchor,
                      material: Material) -> list[ListenerRequest]:
         """코너 계약과 참여 강도가 허용하면 선별기가 고른다 (CORNER_DESIGN 5.1, 5.7절)."""
-        # 계약 v1의 request_ref는 하나뿐이다 — input_refs 전까지 주 소재와 함께 싣지 못한다
-        if material.feature_ref or not self._quote_ready(chat_mode, step_kind):
+        # 계약 v1의 request_ref는 하나뿐이다 — v2로 보낼 때만 주 소재와 함께, 여러 건을 싣는다
+        with_feature = bool(material.feature_ref)
+        if not self._quote_ready(chat_mode, step_kind, with_feature):
             return []
-        limit = min(self.intensity.quote_limit, _V1_QUOTES_PER_SEGMENT)
+        limit = self._quote_limit(with_feature, step_kind)
         now = time.time()
         topic_words = anchor.keywords | keywords(material.topic)
         selection = self.selector.select(
@@ -962,16 +981,22 @@ class Scheduler:
                     return
                 if not job.provider_failed:  # 고정 문구로 대체됐으면 언급이 나가지 않았다
                     self._log_aggregate(job, sub.id)
+                # 대본에 실제로 들어간 입력만 반영된 것이다. 나머지는 인용이 빠졌거나 filler로 대체됐다
+                refs = sub.input_refs or ([sub.request_ref] if sub.request_ref else [])
+                reflected = [req for req in inputs if req.request_id in refs]
+                held = {req.request_id for req in reflected}
+                sub.input_refs = [ref for ref in refs if ref in held]  # 파이프라인이 실은 순서 — 첫 건이 request_ref다
+                sub.reflection_levels = {req.request_id: _reflection_level(req, job) for req in reflected}
+                if reflected:
+                    self._quoted[sub.id] = (reflected, job)
                 for req in inputs:
-                    if sub.request_ref == req.request_id:
-                        self._quoted[sub.id] = (req, job)
-                        sub.input_refs = [req.request_id]
-                        sub.reflection_levels = {req.request_id: _reflection_level(req, job)}
+                    if req in reflected:
                         await self._transition(req, RequestState.GENERATED)
-                        if job.material.extra.get("steer") and seq not in self._abandoned:
-                            self._apply_steer(req, job, sub.id)
-                    else:  # 인용이 빠졌거나 제공자 장애로 filler 대체됨 — 반영되지 않았다
+                    else:
                         await self._requeue_or_reject(req, job)
+                steering = _steering_quote(job)
+                if steering in reflected and seq not in self._abandoned:
+                    self._apply_steer(steering, job, sub.id)
         except Exception:
             # 생성 태스크는 아무도 await하지 않으므로 여기서 기록하지 않으면 실패가 사라진다.
             # 파이프라인이 재시도·filler 대체까지 했는데도 실패한 경우다 (TTS 전면 장애 등)
@@ -1027,8 +1052,9 @@ class Scheduler:
         quoted = self._quoted.pop(sub.id, None)
         if quoted is None:
             return 0
-        await self._return_input(quoted[0])
-        return 1
+        for req in quoted[0]:
+            await self._return_input(req)
+        return len(quoted[0])
 
     async def _return_input(self, req: ListenerRequest) -> None:
         """코너 변경으로 나가지 못한 입력 — 입력 탓이 아니므로 실패로 세지 않고 제자리로 되돌린다 (#259)."""
@@ -1151,9 +1177,14 @@ def _reflection_level(req: ListenerRequest, job: GenerationJob) -> int:
 
     인용·낭독은 ②, 다음 화제가 되었거나(STEER) 한 단계의 주 소재(게시판 사연·신청곡)면 ③이다.
     """
-    if job.material.extra.get("steer") or req.kind in (BOARD_STORY, SONG_REQUEST):
+    if req is _steering_quote(job) or req.kind in (BOARD_STORY, SONG_REQUEST):
         return 3
     return QUOTE_LEVEL
+
+
+def _steering_quote(job: GenerationJob) -> ListenerRequest | None:
+    """다음 화제가 될 채팅 — 화제 전환이 표시된 멘트의 첫 인용이다 (Scheduler._mark_steer)."""
+    return job.material.quotes[0] if job.material.extra.get("steer") and job.material.quotes else None
 
 
 def _inputs(job: GenerationJob) -> list[ListenerRequest]:
