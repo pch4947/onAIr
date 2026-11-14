@@ -105,8 +105,18 @@ _TEMPLATES: dict[str, list[str]] = {
     "text_read": [
         "문자 하나 볼게요. {story}. 고마워요, 잘 읽었어요.",
     ],
-    "game_round": [
-        "자, 이번 고민이에요. {story}. 투표 열어 둘게요, 여러분의 선택을 보여 주세요.",
+    "game_ask": [
+        "자, 이번 고민이에요. 둘 중에 하나만 골라 주세요. 화면에서 투표할 수 있어요, 여러분의 선택을 보여 주세요.",
+    ],
+    "game_talk": [
+        "이쪽을 고르는 마음도 알 것 같아요. 아직 고르지 못하셨다면 지금 투표해 주세요.",
+        "저쪽도 만만치 않죠. 여러분은 어느 쪽인가요, 투표는 아직 열려 있어요.",
+    ],
+    "game_reveal": [
+        "이제 결과를 볼게요. 제 선택은 이쪽이었어요. 여러분의 표도 확인했습니다. 다음 고민으로 가 볼게요.",
+    ],
+    "game_final": [
+        "오늘 승부는 여기까지예요. 함께 골라 주셔서 고마워요.",
     ],
     "news_headline": [
         "오늘의 주요 소식입니다. {headline}. 자세한 내용 이어서 전해 드리겠습니다.",
@@ -203,7 +213,7 @@ class DummyLlmClient:
 
     async def complete(self, prompt: Prompt, *, max_tokens: int) -> str:
         await self._wait()
-        from ..inputs import story_judge, topic_plan
+        from ..inputs import dilemmas, story_judge, topic_plan
         if BLOCK_MARKER in _DATA_RE.sub("", prompt.user):
             m = _PARTS_RE.search(prompt.user)
             lines = _TEMPLATES[BLOCK_STEP][:int(m.group(1)) if m else 3]
@@ -212,6 +222,8 @@ class DummyLlmClient:
             return story_judge.dummy_judgement_json(prompt)
         if topic_plan.MARKER in prompt.user:
             return topic_plan.dummy_plan_json(prompt)
+        if dilemmas.MARKER in prompt.user:
+            return dilemmas.dummy_dilemmas_json(prompt)
         # 나머지 구조화 출력은 persona 초안이다 — API 키 없이 방 생성 화면을 개발할 수 있게 한다
         from ..personas import dummy_drafts_json  # 순환 import 회피 (personas가 llm을 쓴다)
         return dummy_drafts_json(prompt)

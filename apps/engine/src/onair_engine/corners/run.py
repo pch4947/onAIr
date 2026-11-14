@@ -5,6 +5,7 @@ CornerRun은 "다음에 할 단계와 그 소재"만 정한다. 어떤 청취자
 """
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -14,6 +15,7 @@ from ..format.clock import ClockEntry
 from ..format.spec import CornerSpec, Intensity, StepSpec
 from ..inputs.inbox import MessageInbox
 from ..inputs.stories import StoryPool
+from ..inputs.votes import PENDING, VoteBoard
 from ..sources.rss import RssCollector, source_name
 from .steps import STEP_KINDS
 
@@ -94,7 +96,8 @@ class TrackSource:
 class MaterialSources:
     """단계가 꺼내 쓰는 항목의 출처 (spec.ItemSource).
 
-    vote는 M5에서 채운다. 항목이 모자라면 그 항목이 필요한 코너는 진입 조건(requires)에서 걸러진다.
+    항목이 모자라면 그 항목이 필요한 코너는 진입 조건(requires)에서 걸러진다.
+    투표 항목(vote, vote_wait, vote_result)은 라운드의 진행 상태를 따른다 (inputs/votes.py).
     """
 
     def __init__(self, *, tracks: TrackSource, rss: RssCollector,
@@ -106,7 +109,7 @@ class MaterialSources:
         # `or`로 받지 않는다 — 빈 inbox·풀은 길이가 0이라 거짓이어서 넘겨받은 설정이 사라진다
         self.inbox = MessageInbox() if inbox is None else inbox
         self.stories = StoryPool() if stories is None else stories
-        self.votes: list[dict] = []
+        self.votes = VoteBoard()  # DJ 대 청취자 코너의 고민과 라운드 — 엔진이 고민을 채운다 (#279)
         # 이야기 단계의 말할 거리 — 채팅 풀·다시 꺼낼 이야기·갈래를 아는 편성 관리자가 채운다. 없으면 이야기 단계는 건너뛴다
         self.talk_points: Callable[[CornerRun], dict | None] | None = None
 
@@ -127,7 +130,7 @@ class MaterialSources:
             return self.stories.count()
         if source == "talk_point":  # 진입 조건으로 쓰지 않는다 — 코너 안에서 단계마다 정한다
             return 0
-        return len(self.votes)
+        return self.votes.count()
 
     def take(self, source: str, n: int, section: str | None = None) -> list[dict]:
         if source == "track":
@@ -144,8 +147,26 @@ class MaterialSources:
             return self.inbox.take(n)
         if source == "board_story":
             return self.stories.take(n)
-        taken, self.votes[:] = self.votes[:n], self.votes[n:]
-        return taken
+        return self._take_vote(source)
+
+    def _take_vote(self, source: str):
+        """투표 항목. 결과를 기다리느라 아직 낼 수 없으면 PENDING, 낼 것이 없으면 빈 목록."""
+        board = self.votes
+        if source == "vote":  # 새 라운드 — 고민 하나를 꺼낸다
+            return [{"round": r}] if (r := board.start()) else []
+        round_ = board.active
+        if round_ is None:  # 고민 멘트가 나가지 못했다 — 이 라운드의 남은 단계는 건너뛴다
+            return []
+        now = time.time()
+        if source == "vote_wait":  # 결과가 올 때까지, 그리고 결과 공개까지 이을 만큼만 잇는다
+            phase = board.next_talk(now)
+            if phase is None:
+                return []
+            round_.talks += 1
+            round_.phase = phase
+            round_.closing_said = round_.closing_said or phase != "open"
+            return [{"round": round_}]
+        return PENDING if board.waiting(now) else [{"round": round_}]  # vote_result
 
     def _fresh_news(self, n: int, section: str | None = None) -> list[dict]:
         # 같은 방송에서 같은 기사를 두 번 전하지 않는다
@@ -193,8 +214,8 @@ class CornerRun:
         self._intensity = intensity
         self._done_in_step = 0
 
-    def next_step(self) -> PlannedStep | None:
-        """다음 단계. None이면 코너 종료."""
+    def next_step(self):
+        """다음 단계. None이면 코너 종료, PENDING이면 지금은 낼 수 없다(투표 결과 대기)."""
         over_budget = self.spent_ms / 1000 >= self.spec.budget_sec[1]
         while self.step_index < len(self.spec.steps):
             step = self.spec.steps[self.step_index]
@@ -208,6 +229,8 @@ class CornerRun:
             items: list[dict] = []
             if step.items is not None:
                 items = self._take(step)
+                if items is PENDING:  # 투표 결과를 기다린다 — 단계를 넘기지 않고 다음 차례에 다시 본다
+                    return PENDING
                 if not items:
                     self._advance()
                     continue
@@ -215,7 +238,7 @@ class CornerRun:
             return PlannedStep(self.spec, step.on_reentry() if self.again else step, items, self.label)
         return None
 
-    def _take(self, step: StepSpec) -> list[dict]:
+    def _take(self, step: StepSpec):
         if step.items != "talk_point":
             return self._sources.take(step.items, step.take, self.label)
         point = self._sources.talk_points(self) if self._sources.talk_points else None
@@ -253,4 +276,6 @@ class CornerRun:
 
 
 def _keeps_on_overrun(step: StepSpec) -> bool:
-    return step.glue == "close" or step.items == "track"
+    """예산을 넘겨도 하는 단계 — 마무리 문구, 곡 소개, 그리고 이미 열어 둔 투표 라운드의 마무리와 최종 점수."""
+    return (step.glue == "close" or step.items in ("track", "vote_wait", "vote_result")
+            or step.kind == "game_final")
