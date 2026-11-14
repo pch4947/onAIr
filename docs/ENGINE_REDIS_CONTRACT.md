@@ -654,7 +654,7 @@ wsl redis-cli XADD engine:st_local_dev:in '*' type request.arrived contract_vers
 - **구현 상태** — 구현 (#170: 엔진 #167, 백엔드 PR #189, 프론트 PR #193). 엔진은 설정 `pipeline.emit_corner_changed`가 켜져 있을 때 보내고, 운영 설정(`config/station.example.yaml`)에서 켜 두었다. 대체 filler와 같은 코너 연속에는 보내지 않는다.
 - **방송 시점에 맞춘다 (PR #101 백엔드 리뷰)** — 엔진은 코너를 실제 방송보다 앞서 편성하므로, 엔진이 코너에 들어간 시점에 화면을 바꾸면 청취자는 아직 앞 코너를 듣고 있다. 그래서 엔진은 `corner.changed`에 **그 코너의 첫 세그먼트 id**(`segment_id`, 보통 코너 콜)를 싣고, 그 세그먼트를 제출하기 **전에** 보낸다. 백엔드는 이 값을 들고 있다가 그 세그먼트의 **재생이 시작될 때**(10.6과 같은 시점) 프론트에 전달하고 현재 코너로 바꾼다. **기준 세그먼트가 송출되지 않으면**(폐기·교체) 그 코너는 활성화되지 않고 이전 코너 표시가 유지된다 (C3 확정 2026-11-12 — PR #189의 구현을 그대로 채택).
 - 백엔드는 `/api/stream/state`의 `currentCorner`(`corner`, `title`, `contract`)로 프론트에 전달한다. 프론트가 주기적으로 읽으므로 읽는 주기만큼 표시가 늦을 수 있고, 늦게 들어온 청취자도 같은 값(마지막으로 **활성화된** 코너)을 받는다(기획서 5.6절 늦은 합류). 방송 중이 아니면 `null`이다. 처음 안은 WebSocket 전달이었다.
-- **`format` (선택, #260)** — 방송 중에 형식이 바뀌면(3.2절 `station.format_changed`) 백엔드의 방송 기록은 바로 바뀌지만 소리는 이미 만든 멘트가 나간 뒤에 바뀐다. 화면(코너 안내, 사연 보내기 버튼)을 소리에 맞추려면 형식도 이 이벤트로 알려야 한다. 엔진은 설정 `pipeline.emit_corner_format`이 켜져 있으면 `"format": "talk"\|"music"\|"news"`를 함께 싣는다. **기본값은 꺼짐이다** — 백엔드의 `CornerChanged`가 모르는 필드를 거절하므로(`extra='forbid'`), 백엔드가 이 필드를 받게 배포된 뒤에 켠다. 프론트는 `currentCorner.format`이 있으면 그것을, 없으면 `stationFormat`을 쓴다 `[확정 전 — PR #273 답글의 제안, 백엔드·프론트 답 대기]`.
+- **`format` (선택, #260)** — 방송 중에 형식이 바뀌면(3.2절 `station.format_changed`) 백엔드의 방송 기록은 바로 바뀌지만 소리는 이미 만든 멘트가 나간 뒤에 바뀐다. 화면(코너 안내, 사연 보내기 버튼)을 소리에 맞추려면 형식도 이 이벤트로 알려야 한다. 엔진은 설정 `pipeline.emit_corner_format`이 켜져 있으면 `"format": "talk"\|"music"\|"news"`를 함께 싣는다. **기본값은 꺼짐이다** — 백엔드의 `CornerChanged`가 모르는 필드를 거절하므로(`extra='forbid'`), 백엔드가 이 필드를 받게 배포된 뒤에 켠다. 프론트는 `currentCorner.format`이 있으면 그것을, 없으면 `stationFormat`을 쓴다 백엔드는 이 필드를 받아 `currentCorner.format`으로 그대로 전달한다(2026-11-14, #157 1단계 PR). 엔진은 이 백엔드가 배포된 뒤에 켜면 된다. 프론트 표시는 `[프론트 답 대기]`.
 - 입력 라우팅은 엔진 기준 코너로 한다 — 화면 표시와 엔진 계약이 잠깐(버퍼 길이만큼) 어긋날 수 있다. 이 사이에 들어온 입력은 엔진이 다음 코너 계약으로 라우팅한다. 이 구간을 위한 안내 문구는 따로 두지 않는다 (C3 확정 2026-11-12).
 - 프론트는 `contract`로 "지금은 채팅이 인용될 수 있는 시간", "사연은 문자 소개 시간에 읽혀요" 같은 안내를 띄운다. 값은 `quote`\|`steer`\|`read`\|`feature`\|`solicit`\|`closed`\|`defer`.
 
@@ -678,6 +678,7 @@ wsl redis-cli XADD engine:st_local_dev:in '*' type request.arrived contract_vers
 - 한 청취자 한 표 — 중복 방지는 백엔드가 `requester_ref`로 한다. `vote.result`가 재전달되면 엔진은 `vote_id`로 한 번만 반영한다.
 - 엔진은 투표 창이 열린 동안 방송이 비지 않도록 다른 단계(DJ 이야기, 곡)와 겹쳐 연다. DJ의 선택은 결과를 보기 전에 정해 저장한다.
 - 투표한 청취자의 입력 상태(`collected`)는 백엔드가 직접 표시해도 된다 — 엔진이 표마다 `request.state`를 보내지 않는다.
+- **백엔드 구현 (2026-11-14, #279)** — `vote.open`(계약 v1·v2 봉투 모두)을 기준 세그먼트별로 들고 있다가 그 세그먼트의 `segment.started`(청취자 기준 재생 시작 = `started_at`)에 열고, `started_at + window_sec`에 닫아 `vote.result`(`contract_version` `"2"`)를 한 번 보낸다. 선택지는 정확히 두 개이고 서로 달라야 하며, `window_sec`는 10~600초다. 기준 세그먼트가 버려지거나(코너·페르소나·형식 버튼, `segment.discarded`) 인코딩에 실패하면 그 투표는 열지 않는다. 창이 열린 뒤 코너가 바뀌어도 예정대로 닫는다. 표는 `requester_ref`와 같은 로그인 사용자 기준 한 표다. 열린 동안 화면에는 표 수를 내리지 않고 닫힌 뒤 60초 동안 결과를 보여 준다. `last_song`의 결과 곡을 `track.queued`(`source: "vote"`)로 보내는 부분은 아직 없다.
 
 ### 10.9 `segment.insert_before` (E→B, 신설 `[실험 조건 후보]` `[확정 전 — M6 별도 작업]`)
 
@@ -705,9 +706,9 @@ v2 합의 전까지 엔진은 v1을 유지한다. 합의 후 [ENGINE_ARCHITECTUR
 
 **v1에서 v2로 넘어가는 순서** (#157, 2026-11-12 합의) — 어느 시점에 배포해도 깨지지 않게 받는 쪽을 먼저 넓힌다.
 
-1. 백엔드: 엔진→백엔드 이벤트를 `contract_version` 1·2 둘 다 받게 배포한다.
+1. 백엔드: 엔진→백엔드 이벤트를 `contract_version` 1·2 둘 다 받게 배포한다. — **구현 (2026-11-14)**: `segment.submitted`의 `input_refs`·`reflection_levels`, 10.4절의 v2 상태 값과 `reflected`의 `segment_id`·`started_at`, `corner.changed`의 `format`을 받는다. v2 세그먼트는 요청 상태를 송출 상태로 바꾸지 않고, `input_refs`의 모든 `story_id`를 읽힘 처리한다
 2. 엔진: 보내는 버전을 2로 올린다. 설정 `transport.contract_version`(환경변수 `ONAIR_CONTRACT_VERSION`이 먼저다)이고 기본값은 1이다. 값을 올리면 `segment.submitted`가 `input_refs`·`reflection_levels`로, `request.state`가 10.4절의 v2 값으로 나가고 envelope의 `contract_version`이 `"2"`가 된다. 문제가 생기면 1로 되돌린다.
-3. 백엔드·프론트: `request.arrived`를 v2로 바꾼다. 엔진은 `kind`의 `chat`·`message`와 v1의 `story`를 이미 모두 받고(#168), 받는 이벤트의 `contract_version`은 가리지 않는다.
+3. 백엔드·프론트: `request.arrived`를 v2로 바꾼다. 엔진은 `kind`의 `chat`·`message`와 v1의 `story`를 이미 모두 받고(#168), 받는 이벤트의 `contract_version`은 가리지 않는다. — **백엔드 구현 (2026-11-14)**: 백엔드가 보내는 `request.arrived`(신청곡 한마디 포함)는 `contract_version` `"2"`이고, 플레이어 채팅창이 아직 보내는 v1 `kind` `story`는 `chat`으로 바꿔 보낸다(엔진이 이미 채팅으로 읽던 값이라 동작은 같다). 저장된 요청 기록의 `kind`는 그대로다. 프론트가 `chat`을 직접 보내도록 바꾸는 것은 4단계 전에 하면 된다
 4. 양쪽에서 v1 처리를 지운다.
 
 ### 10.11 확정 전 항목 (PR #101 백엔드 리뷰 기준)

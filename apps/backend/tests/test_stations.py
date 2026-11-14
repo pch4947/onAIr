@@ -109,7 +109,7 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
         status = {'status': 'started', 'config': {}}
         async def get(key):
             return json.dumps(corner if key.endswith(':current-corner') else status)
-        app.state.redis = SimpleNamespace(get=get)
+        app.state.redis = SimpleNamespace(get=get, hget=AsyncMock(return_value=None))  # 투표 없음
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
             self.assertEqual((await client.get('/api/stream/state')).json()['currentCorner'], corner)
             status = {'status': 'stopping', 'config': {}}
@@ -120,7 +120,7 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
         default_runtime(app).hls = SimpleNamespace()
         default_runtime(app).presence = SimpleNamespace(count=AsyncMock(return_value=0))
         default_runtime(app).requests = SimpleNamespace(metrics=AsyncMock(return_value={}))
-        app.state.redis = SimpleNamespace(get=AsyncMock())
+        app.state.redis = SimpleNamespace(get=AsyncMock(), hget=AsyncMock(return_value=None))  # 투표 없음
         cases = [(json.dumps({'status': 'started', 'config': {}}), 'started', 'talk'),
                  (json.dumps({'status': 'started', 'config': {'format': 'music'}}), 'started', 'music'),
                  (None, 'idle', None)]
@@ -137,7 +137,7 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
         default_runtime(app).hls = SimpleNamespace()
         default_runtime(app).presence = SimpleNamespace(count=AsyncMock(return_value=0))
         default_runtime(app).requests = SimpleNamespace(metrics=AsyncMock(return_value={}))
-        app.state.redis = SimpleNamespace(get=AsyncMock())
+        app.state.redis = SimpleNamespace(get=AsyncMock(), hget=AsyncMock(return_value=None))  # 투표 없음
         cases = [(json.dumps({'status': 'started', 'config': {'persona': {'dj_name': '번개'}}}), '번개'),
                  (json.dumps({'status': 'started', 'config': {}}), None),
                  (json.dumps({'status': 'started', 'config': None}), None),

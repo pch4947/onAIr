@@ -146,6 +146,8 @@ macOS/Linux에서는 가상환경 실행 파일이 `.venv/bin/python`입니다.
 
 다중 방송: 위의 `/api/stream/state`, `/api/requests`, `/api/requests/{id}/state`·`/history`, `/api/broadcast/queue`, `/api/broadcast/segments/{id}/state`는 `/api/stations/{station_id}/...` 아래에도 있습니다 (예: `/api/stations/st_ch02/requests`). 응답 형식은 같고, 방송 ID가 없는 경로는 첫 채널(기본 채널)을 씁니다. 없는 채널은 404입니다. 방송 ID 없는 경로는 프론트가 방송별 경로로 옮긴 뒤 지웁니다. `/api/scheduler/tick`은 디버그용이라 기본 채널만 있습니다.
 
+투표(#279, 계약 10.8절): `GET /api/stations/{station_id}/votes/current`(로그인)는 지금 투표와 내가 고른 선택지(`mine`), `POST /api/stations/{station_id}/votes/{vote_id} {option}`은 한 사람 한 표입니다. 같은 선택지를 다시 보내면 그대로 200, 다른 선택지는 409(`detail.mine`), 열리지 않았거나 닫힌 투표는 409, 없는 선택지는 422입니다. `/api/stream/state`의 `currentVote`도 같은 투표를 싣습니다(표 수는 닫힌 뒤에만). 투표는 기준 멘트가 들리기 시작할 때 열리고 `window_sec` 뒤 닫히며, 그때 엔진에 `vote.result`를 보냅니다.
+
 다시듣기: `GET /api/replays/mine`은 내가 진행한 방송의 다시듣기를 모든 채널에서 모아 최신순으로 돌려줍니다. `/api/replays/bookmarked`도 모든 채널의 북마크를 북마크한 순서로 합칩니다. 북마크와 삭제(`/api/replays/{session_id}...`)는 세션→채널 색인(`backend:replay-stations`)으로 그 세션의 채널을 찾습니다. 다시듣기 항목에는 `stationId`가 들어 있습니다.
 
 Node 서버와 package.json은 제거했습니다. 실행은 `python -m app`입니다.
@@ -172,7 +174,7 @@ tick은 정책 판단만 수행하며 요청을 소비하거나 오디오를 생
 본문에 `comment`(60자, 신청곡 전용)를 넣으면 곡 소개에 쓰도록 `track.queued` 앞에 `request.arrived`(`kind: song_request`)를 보냅니다. 없으면 보내지 않습니다.
 `anonymous: true`(신청곡 전용)이면 신청자 닉네임을 기록과 엔진 이벤트에서 빼고, 엔진은 `익명`으로 소개합니다.
 신청곡 상태는 음악 세그먼트의 송출로만 정해집니다. 곡 소개 멘트의 전이와 엔진의 `request.state`는 상태를 바꾸지 않고, 엔진 통보는 이력에 `accepted: false`로 남습니다.
-kind는 story(기본), chat, message입니다. 신청곡은 `mood`가 아니라 위의 신청곡 경로로 접수합니다. message 본문은 200자까지이며, listenerId는 받지 않고 토큰의 사용자로 기록합니다. listenerName을 보내면 값과 상관없이 로그인 사용자 이름을 request.arrived의 nickname으로 전달하고, 생략하면 익명으로 처리합니다. 초기 상태는 queued에서 requested로 변경했습니다.
+kind는 story(기본), chat, message입니다. 엔진에는 계약 v2로 보내며 story는 chat으로 바꿔 보냅니다(엔진이 이미 채팅으로 읽던 값). 엔진→백엔드 이벤트는 계약 v1·v2를 모두 받습니다. v2 요청 상태(`pooled`, `inboxed`, `selected`, `reflected`, `not_on_air`, `cancelled` 등)는 엔진이 보낸 값 그대로 표시하고, `reflected`·`not_on_air`·`cancelled`도 대기 집계에서 뺍니다. 신청곡은 `mood`가 아니라 위의 신청곡 경로로 접수합니다. message 본문은 200자까지이며, listenerId는 받지 않고 토큰의 사용자로 기록합니다. listenerName을 보내면 값과 상관없이 로그인 사용자 이름을 request.arrived의 nickname으로 전달하고, 생략하면 익명으로 처리합니다. 초기 상태는 queued에서 requested로 변경했습니다.
 엔진이 먼저 응답하면 POST에도 최신 상태가 반환될 수 있으며, 202 자체는 엔진 처리 완료를 뜻하지 않습니다.
 
 ```powershell

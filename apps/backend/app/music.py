@@ -221,7 +221,7 @@ if ARGV[10] and ARGV[10] ~= '' then
 end
 -- The engine attaches the comment when track.queued arrives, so it must be sent first.
 if ARGV[11] and ARGV[11] ~= '' then
- redis.call('XADD', KEYS[7], '*', 'type', 'request.arrived', 'contract_version', '1',
+ redis.call('XADD', KEYS[7], '*', 'type', 'request.arrived', 'contract_version', '2',
   'event_id', 'evt_comment_' .. ARGV[1], 'station_id', ARGV[6], 'at', ARGV[7], 'payload', ARGV[11])
 end
 """ + REGISTER + "return ARGV[3]"
