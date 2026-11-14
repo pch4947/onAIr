@@ -23,6 +23,7 @@ TRACK = "곡 정보"
 DILEMMA = "고민과 선택지"  # DJ 대 청취자 코너의 고민 — LLM이 만든 글이라 데이터로 넣는다 (inputs/dilemmas.py)
 VOTE_RESULT = "투표 결과"  # 백엔드가 센 표 수 — 숫자를 지시문과 섞지 않는다
 RECENT = "직전 멘트"
+WORN = "이미 여러 번 쓴 표현"  # 방송에서 되풀이된 구절 — DJ 대본에서 뽑은 것이라 데이터로 넣는다 (pipeline/repeats.py)
 EXAMPLES = "말투 예시"  # persona 예시 멘트 — 호스트 입력이므로 데이터로 넣는다 (F-25)
 HOST_NOTE = "호스트 메모"  # 방 생성 폼의 자유 문장 — persona 초안 생성 프롬프트에만 들어간다
 GENRES = "선곡 취향"  # 방 생성 폼의 장르 — 고정 목록이 정해지기 전까지는 자유 문자열이다

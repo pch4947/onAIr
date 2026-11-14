@@ -4,7 +4,7 @@ import time
 
 from onair_engine.corners.run import CornerRun, PlannedStep, Thread
 from onair_engine.corners.steps import CALLBACK_RULE, build_prompt
-from onair_engine.domain import ListenerRequest, Material
+from onair_engine.domain import ChatType, ListenerRequest, Material
 from onair_engine.format.clock import ClockEntry
 from onair_engine.inputs.callbacks import CallbackStore
 from onair_engine.inputs.topic_plan import Angle, TopicPlan
@@ -40,6 +40,19 @@ def test_callback_text_names_only_readers_not_chatters():
     message, chat = store.take(1), store.take(1)
     assert message.text() == "종류: 문자\n닉네임: 밤샘러\n문자 본문"
     assert chat.text() == "종류: 채팅\n채팅 본문", "채팅은 닉네임을 말하지 않는다"
+
+
+def test_reactions_and_questions_are_not_called_back():
+    """그 자리에서 끝난 말은 몇 분 뒤에 다시 꺼내지 않는다 (2026-11-15 실제 방송)."""
+    store = CallbackStore(min_age_sec=0)
+    reaction = _req("chat", "오 그 말 들어보니까 맞는 것 같아요")
+    reaction.chat_type = ChatType.REACTION
+    store.add(reaction, aired_at=0)
+    store.add(_req("chat", "그게 무슨 말이에요?"), aired_at=0)
+    store.add(_req("chat", "저는 수능 날 도시락으로 김밥 싸 갔어요"), aired_at=0)
+    store.add(_req("message", "내일 시험인데 잘 볼 수 있을까요?"), aired_at=0)  # 낭독한 문자는 그대로 남긴다
+    assert [a.body for a in store.lookback(5)] == ["저는 수능 날 도시락으로 김밥 싸 갔어요",
+                                                    "내일 시험인데 잘 볼 수 있을까요?"]
 
 
 def test_lookback_spreads_over_the_broadcast():

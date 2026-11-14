@@ -22,6 +22,7 @@ class ChatRules(BaseModel):
     steer_questions: list[str] = Field(default_factory=list)
     steer_requests: list[str] = Field(default_factory=list)
     steer_address: list[str] = Field(default_factory=list)
+    steer_clarify: list[str] = Field(default_factory=list)
     aggregate_share: float = Field(default=0.4, gt=0, le=1)
     aggregate_min_people: int = Field(default=3, ge=1)
     aggregate_stopwords: list[str] = Field(default_factory=list)

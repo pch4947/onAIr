@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from onair_engine.corners.run import CornerRun, MaterialSources, Thread, TrackSource
-from onair_engine.corners.steps import STEER_RULE, build_prompt
+from onair_engine.corners.steps import STEER_RULE, STEERED_RULE, build_prompt
 from onair_engine.domain import ListenerRequest, Material, StationConfig, StationProfile
 from onair_engine.engine import EngineSettings, StationEngine
 from onair_engine.format import ClockEntry, load_format
@@ -30,6 +30,10 @@ QUESTION = "요즘 듣는 재즈 앨범 있으세요?"
     ("새벽님 오늘 목소리 좋아요", "address"),  # 방의 DJ 이름
     ("저는 오늘 시험 끝났어요", None),
     ("왜요?", None),  # 화제가 될 내용이 없다
+    ("그게 무슨 말이에요?", None),  # 방금 한 말을 되묻는다 — 답하면 끝이라 화제로 삼지 않는다
+    ("방금 뭐라고 하셨어요?", None),
+    ("이게 무슨 노래예요?", None),
+    ("무슨 말인지 모르겠어요", None),
     ("ㅋㅋㅋㅋㅋㅋ?", None),
 ])
 def test_steer_rule(body, rule):
@@ -69,6 +73,14 @@ def test_prompt_announces_steer_only_when_marked():
                          PROFILE)
     assert STEER_RULE not in plain.user
     assert STEER_RULE in steer.user
+
+
+def test_steered_topic_is_not_quoted_again():
+    """화제 블록에 채팅이 그대로 들어간다 — 이어지는 멘트가 그 채팅을 다시 인용하지 않게 알린다."""
+    usual = build_prompt("talk", Material(topic="겨울 간식"), PROFILE)
+    steered = build_prompt("talk", Material(topic=QUESTION, extra={"steered": True}), PROFILE)
+    assert STEERED_RULE not in usual.user
+    assert STEERED_RULE in steered.user and QUESTION in steered.user
 
 
 # ── 방송 통합 ─────────────────────────────────────────────────────────
@@ -112,7 +124,7 @@ def _broadcast(tmp_path, body, *, intensity="mid", drop_quote=False):
     async def spy(job):
         if job.corner_type == "topic_talk":
             jobs.append((job.step, job.material.topic, [q.request_id for q in job.material.quotes],
-                         bool(job.material.extra.get("steer"))))
+                         bool(job.material.extra.get("steer")), bool(job.material.extra.get("steered"))))
         sub = await original(job)
         if drop_quote and sub is not None and job.material.quotes:
             sub.request_ref, sub.input_refs = None, []  # LLM이 인용을 빠뜨린 경우
@@ -137,6 +149,8 @@ def test_question_becomes_topic_of_the_very_next_step(tmp_path):
     same_entry = list(itertools.takewhile(lambda job: job[0] == "talk", jobs[quoted_at + 1:]))
     # 동시 생성이 2개여도 바로 다음 단계부터 새 화제다 — 인용 결과를 기다린다
     assert same_entry and [job[1] for job in same_entry] == [QUESTION] * len(same_entry)
+    assert all(job[4] for job in same_entry), "채팅이 꺼낸 화제라고 알려 다시 인용하지 않게 한다"
+    assert not any(job[4] for job in jobs[:quoted_at + 1])
     assert all(job[1] == "오늘의 주제" for job in jobs[quoted_at + 1 + len(same_entry):])
     assert steers == [("req_1", "question", "오늘의 주제", QUESTION)]
 
@@ -144,6 +158,14 @@ def test_question_becomes_topic_of_the_very_next_step(tmp_path):
 def test_plain_chat_is_quoted_without_changing_topic(tmp_path):
     jobs, steers = _broadcast(tmp_path, "저는 오늘 시험 끝났어요")
     assert any(job[2] == ["req_1"] for job in jobs)
+    assert {job[1] for job in jobs} == {"오늘의 주제"}
+    assert steers == []
+
+
+def test_clarifying_question_is_answered_once_without_changing_topic(tmp_path):
+    """2026-11-15 실제 방송 — "그게 무슨 말이에요?"가 화제가 되어 이어지는 멘트마다 다시 인용됐다."""
+    jobs, steers = _broadcast(tmp_path, "그게 무슨 말이에요?")
+    assert [job[2] for job in jobs].count(["req_1"]) == 1
     assert {job[1] for job in jobs} == {"오늘의 주제"}
     assert steers == []
 

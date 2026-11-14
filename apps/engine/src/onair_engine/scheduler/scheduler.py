@@ -784,6 +784,8 @@ class Scheduler:
         corner, step = planned.corner, planned.step
         material = Material(items=list(planned.items), label=planned.label,
                             topic=self._run.thread.topic if self._run else self.topic)
+        if self._run is not None and self._run.thread.steered:
+            material.extra["steered"] = True
         feature = None
         step_kind = step.kind  # 조용한 방송에서는 꺼내는 단계가 이야기 덩어리로 바뀐다
         block: BlockScript | None = None
@@ -1083,7 +1085,7 @@ class Scheduler:
         run = self._run
         old_topic = run.thread.topic
         # 바뀐 화제에는 갈래가 없다 — 그 화제로 두 번까지 이야기한다
-        run.thread = Thread(topic=req.body, keywords=sorted(keywords(req.body)), free_points=2)
+        run.thread = Thread(topic=req.body, keywords=sorted(keywords(req.body)), free_points=2, steered=True)
         run.steers += 1
         self._run_anchor = None
         self.telemetry.log_steer(request_id=req.request_id, segment_id=segment_id,
