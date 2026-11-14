@@ -53,6 +53,21 @@ def event_fields(kind, station_id, payload):
             'station_id': station_id, 'at': str(time.time()), 'payload': json.dumps(payload)}
 
 
+# 버린 멘트가 곡 소개였으면 그 곡의 예약(track-plan의 frozen, intro-tracks)도 푼다 (#274, 계약 3.2절).
+# 곡은 대기열에 남고, 엔진이 다음 곡 소개 차례에 같은 곡을 다시 소개하면 그때 다시 예약된다.
+DISCARD = """
+for i = 1, #ARGV do
+ redis.call('LREM', KEYS[1], 0, ARGV[i])
+ local reserved = redis.call('HGET', KEYS[3], ARGV[i])
+ if reserved then
+  redis.call('HDEL', KEYS[3], ARGV[i])
+  if redis.call('HGET', KEYS[2], 'frozen') == reserved then redis.call('HDEL', KEYS[2], 'frozen') end
+ end
+end
+return #ARGV
+"""
+
+
 async def discard_and_send(state, station_id, kind, payload):
     """아직 내보내지 않은 멘트를 버리고 엔진에 알린 뒤 kind 이벤트를 보낸다. 버린 개수를 돌려준다."""
     prefix = f'backend:{station_id}'
@@ -63,9 +78,8 @@ async def discard_and_send(state, station_id, kind, payload):
     discarded = discardable_segments(state.hls, ids, records)
     inbox = f'engine:{station_id}:in'
     async with state.redis.pipeline(transaction=True) as pipe:
-        for key in discarded:
-            pipe.lrem(prefix + ':queue', 0, key)
         if discarded:
+            pipe.eval(DISCARD, 3, prefix + ':queue', prefix + ':track-plan', prefix + ':intro-tracks', *discarded)
             # 엔진이 버려진 세그먼트의 입력(인용 채팅·사연)을 되돌리고 버퍼 계산에서 빼게 한다
             pipe.xadd(inbox, event_fields('segment.discarded', station_id, {'segment_ids': discarded}))
         pipe.xadd(inbox, event_fields(kind, station_id, payload))
