@@ -35,6 +35,8 @@ from ..domain import (
     Script,
     StationProfile,
 )
+from ..inputs.dilemmas import Dilemma
+from ..inputs.votes import VoteBoard, view
 from ..main import add_llm_args, apply_llm_args, load_config, load_env, load_profile
 from ..pipeline.llm import REJECT, LlmClient, LlmError, make_llm
 from ..pipeline.pipeline import GenerationPipeline, quote_match, quoted
@@ -101,6 +103,8 @@ class Scenario:
     news: list[FeedItem]
     stories: list[dict]
     chats: list[dict] = field(default_factory=list)  # 짧은 채팅 — {id, body, type?, expect?}
+    # DJ 대 청취자 코너의 고민 — {question, options, pick, reason, counts?}. counts가 없으면 결과를 못 받은 라운드다
+    dilemmas: list[dict] = field(default_factory=list)
     cliches: list[str] = field(default_factory=list)
     topic: str = "오늘 하루 어땠나요"
     guide: str = "채팅은 언제든 편하게 보내 주세요."
@@ -120,6 +124,7 @@ class Scenario:
             raise SystemExit(f"{path}: 채팅을 인용하지 않는 단계에 +chat을 붙였다 {unquotable}")
         return cls(sequence=sequence, tracks=tracks, news=news,
                    stories=raw.get("stories", []), chats=raw.get("chats", []), cliches=raw.get("cliches", []),
+                   dilemmas=raw.get("dilemmas", []),
                    topic=raw.get("topic", cls.topic), guide=raw.get("guide", cls.guide))
 
 
@@ -192,7 +197,34 @@ async def run_scenario(profile: StationProfile, scenario: Scenario, llm: Recordi
         telemetry.close()  # Windows는 열린 sqlite 파일이 있으면 임시 폴더를 못 지운다
 
 
-def _material(entry: str, scenario: Scenario, stories, chats, tracks, news) -> tuple[Material, dict] | None:
+class _Game:
+    """DJ 대 청취자 코너의 진행 — 방송과 같은 라운드 상태(inputs/votes.py)로 game_* 단계의 소재를 만든다."""
+
+    def __init__(self, dilemmas: list[dict]):
+        self.board = VoteBoard()
+        self.board.add([Dilemma(d["question"], tuple(d["options"]), int(d["pick"]), d.get("reason", ""))
+                        for d in dilemmas])
+        self._counts = iter([d.get("counts") for d in dilemmas])  # 고민 순서대로의 투표 결과
+
+    def item(self, kind: str) -> dict | None:
+        """이 단계에 넣을 라운드의 모습. 고민이 떨어졌거나 열린 라운드가 없으면 None."""
+        board = self.board
+        round_ = board.start() if kind == "game_ask" else board.active
+        if round_ is None:
+            return None
+        if kind == "game_talk":
+            round_.talks += 1
+        elif kind == "game_reveal":
+            counts = next(self._counts, None)
+            if counts is not None:
+                first, second = round_.dilemma.options
+                board.result(round_.vote_id, {first: counts[0], second: counts[1]})
+            board.settle()
+        return view(round_, board.score)
+
+
+def _material(entry: str, scenario: Scenario, stories, chats, tracks, news,
+              game: _Game | None = None) -> tuple[Material, dict] | None:
     """시나리오 한 줄의 소재. 꺼낼 픽스처가 떨어졌으면 None — 그 줄은 건너뛴다."""
     kind, n_chats = split_entry(entry)
     m = Material(topic=scenario.topic)
@@ -234,6 +266,13 @@ def _material(entry: str, scenario: Scenario, stories, chats, tracks, news) -> t
         m.extra.update(guide=scenario.guide, corners=["사연 읽는 시간", "오늘의 이야기"])
     elif kind == "talk_open":
         m.extra["question"] = True
+    elif kind in ("game_ask", "game_talk", "game_reveal"):
+        seen = game.item(kind) if game is not None else None
+        if seen is None:
+            return None
+        m.items = [seen]
+    elif kind == "game_final":
+        m.extra["score"] = dict(game.board.score) if game is not None else None
     return m, case
 
 
@@ -242,11 +281,12 @@ async def _run_steps(profile: StationProfile, scenario: Scenario,
                      run: int) -> list[dict]:
     stories, tracks, news = iter(scenario.stories), iter(scenario.tracks), iter(scenario.news)
     chats = iter(scenario.chats)
+    game = _Game(scenario.dilemmas)
     records: list[dict] = []
     aired: list[str] = []
     for step, entry in enumerate(scenario.sequence):
         kind = split_entry(entry)[0]
-        got = _material(entry, scenario, stories, chats, tracks, news)
+        got = _material(entry, scenario, stories, chats, tracks, news, game)
         if got is None:
             continue
         material, case = got

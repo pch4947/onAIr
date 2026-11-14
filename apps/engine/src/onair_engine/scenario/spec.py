@@ -47,6 +47,9 @@ class SimSpec(_Spec):
     broadcast_delay_sec: float = Field(default=12.0, ge=0)  # 백엔드 ONAIR_BROADCAST_DELAY_SECONDS
     buffer_low_sec: float = Field(default=15.0, ge=0)  # 백엔드 buffer_low_seconds
     rss_latency_sec: float = Field(default=2.0, ge=0)  # 가짜 뉴스 피드(news)를 읽는 데 걸리는 시간 [임시]
+    # 투표 (DJ 대 청취자 코너, #279) — 가짜 백엔드가 기준 세그먼트의 재생 시작에 창을 열고 닫힐 때 결과를 보낸다
+    vote_people: int = Field(default=12, ge=0)  # 투표마다 표를 던지는 청취자 수. 0이면 표 없음
+    vote_result_delay_sec: float = Field(default=0.0, ge=0)  # 창이 닫힌 뒤 결과가 늦게 오는 시간
     seed: int = 1  # 회차마다 seed + 회차 번호
 
 
@@ -156,7 +159,8 @@ class ExpectSpec(_Spec):
     """회차마다 판정하는 기대 결과."""
 
     type: Literal["reflected", "not_reflected", "min_reflected", "aired_contains", "not_aired",
-                  "max_silence_sec", "max_fallback", "corner_entered", "persona_switched", "format_switched"]
+                  "max_silence_sec", "max_fallback", "corner_entered", "persona_switched", "format_switched",
+                  "min_vote_rounds"]
     input: str | None = None  # reflected, not_reflected: inputs 또는 board_stories의 id
     kind: Literal["chat", "message", "song_request", "board_story"] | None = None  # min_reflected
     control: str | None = None  # corner_entered, persona_switched, format_switched: controls의 id
@@ -165,7 +169,7 @@ class ExpectSpec(_Spec):
     # format_switched: 버튼부터 새 형식의 첫 멘트가 들리기까지 (모두 방송 지연 포함)
     within_sec: float | None = None
     text: str | None = None  # aired_contains, not_aired
-    value: float | None = None  # min_reflected, max_silence_sec, max_fallback
+    value: float | None = None  # min_reflected, max_silence_sec, max_fallback, min_vote_rounds
     note: str | None = None  # 사람이 읽을 설명
 
     @model_validator(mode="after")
@@ -175,7 +179,7 @@ class ExpectSpec(_Spec):
         need = {"reflected": "input", "not_reflected": "input", "min_reflected": "kind", "aired_contains": "text", "not_aired": "text",
                 "max_silence_sec": "value", "max_fallback": "value",
                 "corner_entered": "control", "persona_switched": "control",
-                "format_switched": "control"}[self.type]
+                "format_switched": "control", "min_vote_rounds": "value"}[self.type]
         if getattr(self, need) is None:
             raise ValueError(f"{self.type}에는 {need}가 필요하다")
         return self
