@@ -1,0 +1,31 @@
+# 데모 시나리오의 페르소나 버튼 구간 (docs/DEMO_SCENARIO.md 8:00~10:00, #261).
+# 같은 방송에서 DJ를 고요 → 번개로 바꾸고 같은 채팅을 한 번씩 보낸다. 버튼을 누른 뒤 새 DJ가 들리기까지
+# 걸리는 시간과, 같은 채팅이 두 DJ에게 한 번씩 반영되는지를 본다.
+# 곡은 20초로 줄였다 — 곡이 나가는 중에 버튼을 누르면 곡이 끝나야 새 DJ가 들린다(가짜 백엔드도 실제 백엔드처럼
+# 음악은 버리지 않는다). 실제 곡 길이(약 3분 30초)로 돌리면 버튼이 곡에 걸린 회차는 기대 결과가 곡 길이만큼 밀린다.
+# 이 파일은 엔진이 전환에 쓰는 시간을 보려는 것이라 그 대기를 20초 안으로 묶었다.
+name: demo_persona
+description: 방송 중에 페르소나 버튼(고요 → 번개)을 눌렀을 때 새 DJ가 제때 들리고, 같은 채팅이 두 DJ에게 한 번씩 반영되는지 본다.
+station:
+  format: talk
+  corners: [topic_talk]
+  intensity: mid
+  topic: 겨울 간식
+  persona: config/personas/goyo.yaml
+  # 엔딩은 남은 시간이 5분 30초보다 적어지면 시작한다 — 버튼 뒤로도 순환이 이어지게 넉넉히 둔다
+  broadcast_minutes: 10
+tracks:
+  - {title: 첫눈 오는 밤, artist: 가상의 가수, sec: 20}
+  - {title: 새벽 버스, artist: 모의 밴드, sec: 20}
+  - {title: 따뜻한 차 한 잔, artist: 시뮬레이션 트리오, sec: 20}
+inputs:
+  # 데모 문서: 페르소나 버튼을 누르자마자 채팅을 보내고 약 50초를 듣는다
+  - {at: "0:05", kind: chat, who: phone, body: "오늘 너무 피곤해요", id: tired_goyo}
+  - {at: "1:35", kind: chat, who: phone, body: "오늘 너무 피곤해요", id: tired_beongae}
+controls:
+  - {at: "1:30", type: persona_switch, persona: config/personas/beongae.yaml, id: to_beongae}
+expect:
+  - {type: reflected, input: tired_goyo, within_sec: 80, note: 고요가 전환 전에 채팅을 읽는다}
+  - {type: persona_switched, control: to_beongae, within_sec: 60, note: 페르소나 버튼 뒤 1분 안에 번개가 들린다}
+  - {type: reflected, input: tired_beongae, within_sec: 80, note: 같은 채팅을 번개도 읽는다}
+  - {type: max_fallback, value: 0, note: 대체 멘트 없음}

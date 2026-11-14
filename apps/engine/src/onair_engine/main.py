@@ -29,8 +29,8 @@ def load_env(path: Path = ENV_FILE) -> bool:
     return load_dotenv(path, override=False)
 
 
-# persona 파일에서 프로필 필드가 아닌 메타데이터 — 읽고 버린다
-_PERSONA_META = {"persona_id", "description"}
+# persona 파일에서 프로필 필드가 아닌 메타데이터 — 읽고 버린다. style은 시나리오 실행기의 페르소나 전환이 쓴다
+_PERSONA_META = {"persona_id", "description", "style"}
 
 
 def load_profile(spec: dict | str | Path) -> StationProfile:

@@ -38,6 +38,7 @@ from ..domain import StationConfig
 from ..engine import EngineSettings, StationEngine
 from ..inputs.rules import ChatRules
 from ..main import add_llm_args, apply_llm_args, load_env, load_profile
+from ..pipeline.tts import DEFAULT_GEMINI_VOICE
 from ..report import render, station_report
 from ..telemetry import _read
 from . import compare, review
@@ -211,6 +212,12 @@ async def _inject(spec: ScenarioSpec, backend: SimBackend, engine: StationEngine
             backend.played.append(Played(backend.now(), "input", 0, text=f"채팅 {rid} ({who}): {body}"))
             await engine.submit_request("chat", body, who, request_id=rid)
             continue
+        if isinstance(item, ControlSpec) and item.type == "persona_switch":  # 테스트 화면의 페르소나 버튼
+            persona = persona_payload(item, spec.station.voice if engine.settings.tts == "gemini" else None)
+            backend.played.append(Played(backend.now(), "input", 0,
+                                         text=f"조작 {item.id}: 페르소나 전환 → {persona['dj_name']}"))
+            await backend.switch_persona(persona, item.id)
+            continue
         if isinstance(item, ControlSpec):  # 테스트 화면의 코너 버튼
             title = engine.telemetry.corner_titles.get(item.corner, item.corner)
             backend.played.append(Played(backend.now(), "input", 0, text=f"조작 {item.id}: 코너 변경 → {title}"))
@@ -227,6 +234,21 @@ async def _inject(spec: ScenarioSpec, backend: SimBackend, engine: StationEngine
 
 
 _KINDS = {"chat": "채팅", "message": "문자", "song_request": "신청곡"}
+# persona 파일에 말투 선택지(style)가 없을 때 — 엔진은 방송에 쓰지 않고 스키마만 요구한다
+_DEFAULT_STYLE = {"formality": "polite", "energy": "mid", "humor": "some"}
+
+
+def persona_payload(control: ControlSpec, station_voice: str | None = None) -> dict:
+    """persona 파일 → station.persona_changed의 persona (station.created와 같은 구조).
+
+    보이스는 조작에 적은 값, 없으면 방송의 보이스다. 흉내 TTS는 보이스를 쓰지 않는다.
+    """
+    path = Path(control.persona)
+    raw = yaml.safe_load((path if path.is_absolute() else ENGINE_ROOT / path).read_text(encoding="utf-8"))
+    fields = ("dj_name", "concept", "tone", "examples", "signature_phrases", "forbidden")
+    return {"persona_id": f"psn_sim_{control.id}", "style": raw.get("style") or _DEFAULT_STYLE,
+            "voice": control.voice or station_voice or DEFAULT_GEMINI_VOICE,
+            **{name: raw[name] for name in fields if name in raw}}
 
 
 def _unsynced_metrics_db(path: Path) -> None:
@@ -271,6 +293,7 @@ async def run_one(spec: ScenarioSpec, index: int, run_dir: Path, args: argparse.
     if args.tts == "sim":
         sim_tts = SimTts(spec.sim, random.Random(seed * 104729))
         engine.scheduler.pipeline.tts._inner = sim_tts  # 파이프라인과 접착 문구가 같은 CachedTts를 쓴다
+        engine.tts_factory = lambda voice: sim_tts  # 페르소나 전환으로 보이스가 바뀌어도 흉내 TTS를 쓴다
     backend.queue_next_track()  # 백엔드는 방송 전에 첫 소개 곡을 정해 둔다
 
     finished = backend.finished
@@ -309,6 +332,11 @@ async def run_one(spec: ScenarioSpec, index: int, run_dir: Path, args: argparse.
                           "heard_sec": None if skip["play_sec"] is None
                           else round(skip["play_sec"] + spec.sim.broadcast_delay_sec, 1)}
                          for skip in backend.skips],
+        # 페르소나 전환 — 버튼부터 새 DJ의 첫 세그먼트 제출·재생·청취까지. accepted가 거짓이면 엔진이 거절했다
+        "persona_switches": [{**{k: v for k, v in switch.items() if k != "segment_id"},
+                              "heard_sec": None if switch["play_sec"] is None
+                              else round(switch["play_sec"] + spec.sim.broadcast_delay_sec, 1)}
+                             for switch in backend.persona_switches],
         "error": error,
     }
     reflected = _reflections(db, station_id)
@@ -371,9 +399,16 @@ def _check(spec: ScenarioSpec, backend: SimBackend, report: dict,
         elif e.type == "not_aired":
             passed, detail = e.text not in aired, ""
         elif e.type == "corner_entered":
-            heard = next(s["heard_sec"] for s in report["sim"]["corner_skips"] if s["id"] == e.control)
+            heard = next((s["heard_sec"] for s in report["sim"]["corner_skips"] if s["id"] == e.control), None)
             passed = heard is not None and (e.within_sec is None or heard <= e.within_sec)
             detail = "고른 코너에 들어가지 않음" if heard is None else f"{heard:.0f}초 뒤 들림"
+        elif e.type == "persona_switched":
+            # 버튼을 누르기 전에 방송이 끝났으면 기록이 없다
+            switch = next((s for s in report["sim"]["persona_switches"] if s["id"] == e.control), None)
+            heard = switch["heard_sec"] if switch else None
+            passed = heard is not None and (e.within_sec is None or heard <= e.within_sec)
+            detail = ("버튼 전에 방송이 끝남" if switch is None else "엔진이 거절함" if not switch["accepted"]
+                      else "새 DJ의 멘트가 나가지 않음" if heard is None else f"{heard:.0f}초 뒤 들림")
         elif e.type == "max_silence_sec":
             value = report["sim"]["silence_max_sec"]
             passed, detail = value <= e.value, f"최대 무음 {value}초"
@@ -444,6 +479,15 @@ def _write_run(run_dir: Path, spec: ScenarioSpec, index: int, seed: int, args: a
             f"| {_clock(s['at'])} | {titles.get(s['corner'], s['corner'])} | {s['discarded']}개 | {s['ahead_sec']}초 | "
             + " | ".join("-" if s[k] is None else f"{s[k]}초" for k in ("submit_sec", "play_sec", "heard_sec"))
             + " |\n" for s in sim["corner_skips"])
+    if sim["persona_switches"]:
+        text += ("\n## 페르소나 전환\n\n청취는 재생에 방송 지연을 더한 값이다. 남은 분량은 버튼을 눌렀을 때 버리지 못하고 "
+                 "이전 DJ의 목소리로 그대로 나간 분량이다.\n\n"
+                 "| 시각 | DJ | 버린 멘트 | 남은 분량 | 첫 멘트 제출 | 재생 | 청취 |\n|---|---|---|---|---|---|---|\n")
+        text += "".join(
+            f"| {_clock(s['at'])} | {s['dj_name']}{'' if s['accepted'] else ' (거절)'} | {s['discarded']}개 | "
+            f"{s['ahead_sec']}초 | "
+            + " | ".join("-" if s[k] is None else f"{s[k]}초" for k in ("submit_sec", "play_sec", "heard_sec"))
+            + " |\n" for s in sim["persona_switches"])
     if variant.overrides:
         text += f"- 덮어쓴 설정 ({variant.name}): " + ", ".join(f"{k}={v}" for k, v in variant.overrides) + "\n"
     if sim["error"]:

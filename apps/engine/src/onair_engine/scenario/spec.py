@@ -94,14 +94,23 @@ class ControlSpec(_Spec):
     """운영자 조작 — 테스트 화면의 버튼. 가짜 백엔드가 실제 백엔드처럼 엔진에 알린다 (계약 3.2절)."""
 
     at: float  # 방송 시작(station.started) 기준 초
-    type: Literal["corner_skip"] = "corner_skip"
-    corner: str  # 형식 파일의 코너 키 (topic_talk, text_corner, music_intro 등)
+    type: Literal["corner_skip", "persona_switch"] = "corner_skip"
+    corner: str | None = None  # corner_skip: 형식 파일의 코너 키 (topic_talk, text_corner, music_intro 등)
+    persona: str | None = None  # persona_switch: persona 파일. 엔진 루트 기준 경로
+    voice: str | None = None  # persona_switch: --tts gemini일 때의 보이스. 없으면 방송의 보이스
     id: str | None = None  # expect에서 가리킬 이름
 
     @field_validator("at", mode="before")
     @classmethod
     def _at(cls, value):
         return parse_at(value)
+
+    @model_validator(mode="after")
+    def _check(self) -> ControlSpec:
+        need = "corner" if self.type == "corner_skip" else "persona"
+        if getattr(self, need) is None:
+            raise ValueError(f"{self.type}에는 {need}가 필요하다")
+        return self
 
 
 class ChatterSpec(_Spec):
@@ -135,11 +144,12 @@ class ExpectSpec(_Spec):
     """회차마다 판정하는 기대 결과."""
 
     type: Literal["reflected", "min_reflected", "aired_contains", "not_aired", "max_silence_sec",
-                  "max_fallback", "corner_entered"]
+                  "max_fallback", "corner_entered", "persona_switched"]
     input: str | None = None  # reflected: inputs 또는 board_stories의 id
     kind: Literal["chat", "message", "song_request", "board_story"] | None = None  # min_reflected
-    control: str | None = None  # corner_entered: controls의 id
-    # reflected: 도착부터 재생 시작까지, corner_entered: 버튼부터 새 코너 첫 멘트가 들리기까지 (둘 다 방송 지연 포함)
+    control: str | None = None  # corner_entered, persona_switched: controls의 id
+    # reflected: 도착부터 재생 시작까지, corner_entered: 버튼부터 새 코너 첫 멘트가 들리기까지,
+    # persona_switched: 버튼부터 새 DJ의 첫 멘트가 들리기까지 (모두 방송 지연 포함)
     within_sec: float | None = None
     text: str | None = None  # aired_contains, not_aired
     value: float | None = None  # min_reflected, max_silence_sec, max_fallback
@@ -151,7 +161,7 @@ class ExpectSpec(_Spec):
             raise ValueError("min_reflected에는 kind와 value가 필요하다")
         need = {"reflected": "input", "min_reflected": "kind", "aired_contains": "text", "not_aired": "text",
                 "max_silence_sec": "value", "max_fallback": "value",
-                "corner_entered": "control"}[self.type]
+                "corner_entered": "control", "persona_switched": "control"}[self.type]
         if getattr(self, need) is None:
             raise ValueError(f"{self.type}에는 {need}가 필요하다")
         return self

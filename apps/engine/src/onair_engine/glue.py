@@ -23,10 +23,12 @@ PRERENDER_CONCURRENCY = 3
 
 class GlueBank:
     def __init__(self, *, tts: TtsClient, audio_root: Path, station_id: str,
-                 profile: StationProfile, fmt: FormatSpec, safety: SafetyChecker):
+                 profile: StationProfile, fmt: FormatSpec, safety: SafetyChecker,
+                 subdir: str = "glue"):
+        """subdir — 방송 중에 페르소나를 바꾸면 새 폴더에 합성한다. 이전 문구 파일은 아직 재생 전일 수 있다."""
         self._tts = tts
         self._root = Path(audio_root)
-        self._dir = self._root / station_id / "glue"
+        self._dir = self._root / station_id / subdir
         self._profile = profile
         self._fmt = fmt
         self._safety = safety
@@ -43,12 +45,19 @@ class GlueBank:
                                                          dj=self._profile.dj_name)
         return out
 
-    async def prerender(self) -> None:
-        items = sorted(self.texts().items())
-        for (corner, which), text in items:
+    def check(self) -> None:
+        """문구가 안전 규칙을 지키는지 본다. 합성하지 않으므로 바로 끝난다."""
+        for (corner, which), text in sorted(self.texts().items()):
             # DJ 이름은 호스트 입력이다 — 고정 문구라도 L2를 거친다
             if violation := self._safety.check_l2(text):
                 raise ValueError(f"접착 문구가 안전 규칙에 걸림 ({corner}.{which}): {violation}")
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    async def prerender(self) -> None:
+        self.check()
+        items = sorted(self.texts().items())
 
         slots = asyncio.Semaphore(PRERENDER_CONCURRENCY)
 

@@ -14,8 +14,8 @@ from typing import Protocol
 
 from pydantic import ValidationError
 
-from .domain import StationConfig, StationProfile
-from .engine import EngineSettings, StationEngine, StationRejected
+from .domain import StationConfig
+from .engine import EngineSettings, StationEngine, StationRejected, profile_from
 from .pipeline.tts import VOICE_LISTERS
 from .transport import Transport, make_transport
 
@@ -42,11 +42,7 @@ def config_from_created(station_id: str, created: StationCreated, raw: dict) -> 
     p = created.persona
     return StationConfig(
         station_id=station_id,
-        profile=StationProfile(
-            dj_name=p.dj_name, tone=p.tone, concept=p.concept,
-            examples=list(p.examples), forbidden=list(p.forbidden),
-            signature_phrases=list(p.signature_phrases),
-        ),
+        profile=profile_from(p),
         broadcast_minutes=created.broadcast_minutes,
         format=created.format,
         corners=created.talk_corners() if created.format == "talk" else None,
@@ -284,6 +280,8 @@ class EngineManager:
             await engine.on_segments_discarded(payload)
         elif event_type == "corner.skip":
             engine.on_corner_skip(payload)
+        elif event_type == "station.persona_changed":  # 페르소나 전환 — 버린 멘트를 먼저 알린다 (#261)
+            await engine.on_persona_changed(payload, voice_known=self.voice_known)
         elif event_type == "station.closed":
             engine.stop()  # 방송 태스크가 끝나면 _run_station이 방을 정리한다
         elif event_type:

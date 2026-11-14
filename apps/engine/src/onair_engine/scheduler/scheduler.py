@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from ..corners.run import CornerRun, MaterialSources, PlannedStep, Thread
@@ -34,6 +35,7 @@ from ..domain import (
     SegmentKind,
     SegmentSubmission,
     StationConfig,
+    StationProfile,
     new_id,
     wire_state,
 )
@@ -50,6 +52,7 @@ from ..inputs.rules import ChatRules
 from ..inputs.selector import RELEVANCE, QuoteSelector
 from ..inputs.topic_plan import NEW, Angle, TopicPlan
 from ..pipeline.pipeline import GenerationPipeline
+from ..pipeline.tts import TtsClient
 from ..telemetry import Telemetry
 from ..transport import Transport
 
@@ -95,6 +98,18 @@ def time_context(now: float, started_at: float) -> str:
     minutes = int(max(0.0, now - started_at) // 60)
     elapsed = f"방송 {minutes}분째" if minutes else "방송 시작 직후"
     return f"{_WEEKDAYS[t.weekday()]}요일 {part} {clock}, {elapsed}"
+
+
+@dataclass
+class PersonaSwitch:
+    """방송 중에 바꿀 페르소나 — 검사를 통과한 것만 편성 관리자에 온다 (계약 3.2절 station.persona_changed)."""
+
+    profile: StationProfile
+    tts: TtsClient  # 새 목소리
+    glue: GlueBank  # 새 목소리의 연결 멘트 — 합성이 끝나는 대로 채워진다
+    persona_id: str | None = None
+    voice: str | None = None
+    snapshot: dict | None = None  # 받은 persona 원문 — 계측에 사본으로 남긴다
 
 
 class Scheduler:
@@ -179,6 +194,7 @@ class Scheduler:
         # 코너 변경 (#259) — 운영자가 고른 코너, 클락 대신 들어갈 코너
         self._jump: str | None = None
         self._forced: ClockEntry | None = None
+        self._persona: PersonaSwitch | None = None  # 바꿀 페르소나 (#261) — 편성 루프가 다음 차례에 바꾼다
         self._jobs: dict[int, GenerationJob] = {}  # 순번 → 생성 중인 작업
         self._settling: set[int] = set()  # 생성이 끝나 결과를 정리하는 중인 순번 — 입력은 그 작업이 정리한다
         self._abandoned: set[int] = set()  # 코너 변경으로 버린 순번 중 생성이 아직 끝나지 않은 것
@@ -260,6 +276,14 @@ class Scheduler:
     def skip_to(self, corner_type: str) -> None:
         """운영자가 고른 코너로 넘어간다 (계약 3.2절 corner.skip). 편성 루프가 다음 차례에 지금 코너를 끝낸다."""
         self._jump = corner_type
+
+    def switch_persona(self, switch: PersonaSwitch) -> None:
+        """운영자가 고른 페르소나로 바꾼다 (계약 3.2절 station.persona_changed). 편성 루프가 다음 차례에 바꾼다."""
+        self._persona = switch
+
+    @property
+    def pending_persona_id(self) -> str | None:
+        return self._persona.persona_id if self._persona else None
 
     async def discard_segments(self, segment_ids: list[str]) -> None:
         """백엔드가 재생하지 않고 버린 세그먼트 (계약 3.2절 segment.discarded).
@@ -406,6 +430,8 @@ class Scheduler:
             if max_segments is not None and self._seq >= max_segments:
                 break
             await self._expire_inputs(time.time())
+            if self._persona is not None:
+                await self._apply_persona()
             if self._jump is not None:
                 await self._cut_corner()
             ctx = self._snapshot()
@@ -560,12 +586,7 @@ class Scheduler:
         return None
 
     async def _cut_corner(self) -> None:
-        """지금 코너를 끝내고 운영자가 고른 코너를 다음 차례로 잡는다 (#259).
-
-        아직 제출하지 않은 멘트(생성 중이거나 앞 순번을 기다리는 것)는 내보내지 않고 곡과 입력을 되돌린다.
-        이미 제출한 것 중 재생 전인 멘트는 백엔드가 버리고 segment.discarded로 알린다.
-        버린 생성은 끝까지 돌게 두되 새 코너가 그 자리를 기다리지 않게 동시 생성 한도를 새로 연다.
-        """
+        """지금 코너를 끝내고 운영자가 고른 코너를 다음 차례로 잡는다 (#259)."""
         corner_type, self._jump = self._jump, None
         entry = self.clock.jump(corner_type)
         if entry is None:
@@ -574,6 +595,40 @@ class Scheduler:
                 else "이 형식에 없는 코너")
             return
         self.telemetry.log_corner_request(corner_type)
+        await self._drop_unsubmitted()
+        self._forced = entry
+
+    async def _apply_persona(self) -> None:
+        """새 페르소나로 바꾼다 (#261) — 이 뒤로 만드는 대본과 목소리가 새 DJ의 것이다.
+
+        아직 제출하지 않은 멘트는 이전 DJ의 대본이라 내보내지 않고 곡과 입력을 되돌린다. 이미 제출한 것은
+        백엔드가 버리고 segment.discarded로 알린다. 하던 말 코너는 새 DJ가 처음부터 다시 한다 — 이전 DJ가
+        쓰던 이야기 덩어리를 새 목소리로 잇지 않는다. 곡 소개는 다시 하지 않는다(곡은 다음 곡 차례에 나온다) —
+        새 DJ가 말부터 하게 한다.
+        """
+        switch, self._persona = self._persona, None
+        run = self._run
+        dropped = await self._drop_unsubmitted()
+        before = self.config.profile.dj_name
+        self.config.profile, self.config.persona_id = switch.profile, switch.persona_id
+        self.config.voice = switch.voice
+        self.pipeline.switch_persona(switch.profile, switch.tts)
+        self.glue = switch.glue
+        # 새 DJ는 이전 DJ가 방금 누구를 인용했는지와 상관없이 바로 인용한다
+        self._last_quote_at = float("-inf")
+        self._last_requester = None
+        self.telemetry.log_persona_switch(before, switch.profile.dj_name, switch.snapshot, dropped)
+        if run is not None and self._forced is None and not self._plays_song(run.spec):
+            self._forced = ClockEntry(run.spec, run.label)
+
+    async def _drop_unsubmitted(self) -> int:
+        """아직 제출하지 않은 멘트를 버리고 지금 코너를 끝낸다 (#259). 버린 수를 돌려준다.
+
+        생성 중이거나 앞 순번을 기다리는 멘트는 내보내지 않고 곡과 입력을 되돌린다.
+        이미 제출한 것 중 재생 전인 멘트는 백엔드가 버리고 segment.discarded로 알린다.
+        버린 생성은 끝까지 돌게 두되 다음 코너가 그 자리를 기다리지 않게 동시 생성 한도를 새로 연다.
+        """
+        dropped = self._seq - self._next_pub
         async with self._pub_lock:
             for seq in range(self._next_pub, self._seq):
                 if seq in self._ready:  # 생성은 끝났고 앞 순번을 기다리던 것
@@ -597,6 +652,7 @@ class Scheduler:
         if self._deferred is not None:  # 만들 때를 기다리던 곡 소개 — 곡을 되돌린다
             self.sources.tracks.put_back(self._deferred.items[0])
             self._deferred = None
+            dropped += 1
         if self._run is not None:
             self.telemetry.log_corner(self._run.spec.corner_type, self._run.label, "exit",
                                       self._produced_ms, self._run.spec.title)
@@ -604,7 +660,7 @@ class Scheduler:
             if self._run.pending == 0:
                 self._log_corner_length(self._run)
             self._run = None
-        self._forced = entry
+        return dropped
 
     def _plays_song(self, corner: CornerSpec) -> bool:
         """곡을 소개하는(틀게 하는) 코너. 엔딩은 마지막 곡이 있어도 건너뛰지 않는다."""

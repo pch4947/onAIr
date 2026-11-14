@@ -7,6 +7,7 @@ import random
 from pathlib import Path
 
 import pytest
+from onair_schema import Persona
 from pydantic import ValidationError
 
 from onair_engine.audio import measure_duration_ms
@@ -52,6 +53,9 @@ def test_parse_at():
     {"controls": [{"at": 1, "corner": "text_corner", "id": "d"},
                   {"at": 2, "corner": "music_intro", "id": "d"}]},  # 조작 id 중복
     {"controls": [{"at": 1, "type": "persona", "corner": "text_corner"}]},  # 모르는 조작
+    {"controls": [{"at": 1, "type": "persona_switch", "corner": "text_corner"}]},  # persona 없음
+    {"controls": [{"at": 1}]},  # corner 없음
+    {"expect": [{"type": "persona_switched"}]},  # control 없음
     {"expect": [{"type": "corner_entered", "control": "none"}]},  # 없는 조작
     {"expect": [{"type": "corner_entered"}]},  # control 없음
     {"expect": [{"type": "min_reflected", "value": 1}]},  # kind 없음
@@ -287,6 +291,60 @@ def test_corner_skip_discards_untouched_segments_and_times_the_new_corner():
     assert skip["submit_sec"] is not None and skip["play_sec"] is not None
 
 
+def test_persona_switch_discards_untouched_segments_and_times_the_new_dj():
+    class Switching(SkippableEngine):
+        """받아들이면 persona_id가 바뀐다 — 실제 엔진은 편성 루프의 다음 차례에 바꾼다."""
+
+        def __init__(self):
+            super().__init__()
+            self.config = argparse.Namespace(persona_id="psn_old")
+
+        async def on_persona_changed(self, payload):
+            self.calls.append(("on_persona_changed", (payload,)))
+            return payload["persona"]["dj_name"] != "거절"
+
+    backend = _backend(buffer_low_sec=1.5)
+    backend.engine = Switching()
+    persona = {"persona_id": "psn_new", "dj_name": "번개"}
+
+    async def scenario():
+        await backend.notify_station("station.started", {})
+        for sid in ("s1", "s2", "s3"):
+            await backend.publish_segment(_sub(sid, ms=1000))
+        await backend.switch_persona({"persona_id": "psn_bad", "dj_name": "거절"}, "bad")
+        before = len(backend.engine.calls)
+        await backend.publish_segment(_sub("s4", ms=1000))
+        await backend.switch_persona(persona, "to_new")
+        calls = backend.engine.calls[before:]
+        await backend.publish_segment(_sub("old", ms=100))  # 엔진이 아직 바꾸지 않았다 — 이전 DJ의 멘트다
+        backend.engine.config.persona_id = "psn_new"
+        first = _sub("new", ms=100)
+        await backend.publish_segment(first)
+        await backend.publish_segment(_sub("new2", ms=100))
+        await backend._play_segment(first)
+        return calls
+
+    calls = asyncio.run(scenario())
+    assert calls == [("on_segments_discarded", ({"segment_ids": ["s4"]},)),
+                     ("on_persona_changed", ({"persona": persona},))], "버린 멘트를 먼저 알린다"
+    bad, switch = backend.persona_switches
+    assert (bad["id"], bad["accepted"], bad["discarded"], bad["segment_id"]) == ("bad", False, 1, None)
+    assert (switch["id"], switch["dj_name"], switch["accepted"], switch["segment_id"]) == ("to_new", "번개", True, "new")
+    assert switch["submit_sec"] is not None and switch["play_sec"] is not None
+
+
+def test_persona_payload_fills_what_a_persona_file_lacks():
+    control = ScenarioSpec.model_validate({"name": "x", "controls": [
+        {"at": 1, "type": "persona_switch", "persona": "config/personas/saebyeok.yaml", "id": "a"},
+        {"at": 2, "type": "persona_switch", "persona": "config/personas/beongae.yaml", "voice": "puck", "id": "b"},
+    ]}).controls
+    plain = Persona.model_validate(runner.persona_payload(control[0], "kore"))
+    assert (plain.persona_id, plain.dj_name, plain.voice, plain.style.formality) == ("psn_sim_a", "새벽", "kore", "polite")
+    styled = Persona.model_validate(runner.persona_payload(control[1], "kore"))
+    assert (styled.dj_name, styled.voice, styled.style.formality) == ("번개", "puck", "casual")
+    assert Persona.model_validate(runner.persona_payload(control[1])).voice, "흉내 TTS에서도 스키마를 채운다"
+
+
 def test_corner_skip_keeps_everything_when_little_is_queued():
     backend = _backend(buffer_low_sec=15)
     backend.engine = SkippableEngine()
@@ -428,9 +486,10 @@ def test_run_one_with_dummy_llm(tmp_path, monkeypatch):
         "sim": {"tts_latency_base_sec": 0, "tts_latency_per_audio_sec": 0, "broadcast_delay_sec": 0},
         "tracks": [{"title": "곡", "artist": "가수", "sec": 5}],
         "inputs": [{"at": 0, "kind": "message", "who": "a", "nickname": "밤샘러", "body": "붕어빵 먹었어요", "id": "m"}],
-        "controls": [{"at": 1, "corner": "text_corner", "id": "skip"}],
+        "controls": [{"at": 1, "corner": "text_corner", "id": "skip"},
+                     {"at": 0.5, "type": "persona_switch", "persona": "config/personas/beongae.yaml", "id": "dj"}],
         "expect": [{"type": "max_fallback", "value": 0}, {"type": "not_aired", "text": "절대없는문구"},
-                   {"type": "corner_entered", "control": "skip"}],
+                   {"type": "corner_entered", "control": "skip"}, {"type": "persona_switched", "control": "dj"}],
     })
     args = argparse.Namespace(llm="dummy", llm_model=None, llm_base_url=None, llm_reasoning_effort=None,
                               minutes=None, persona=None, tts="sim", repeat=1, parallel=1, note="점검")
@@ -443,6 +502,12 @@ def test_run_one_with_dummy_llm(tmp_path, monkeypatch):
     skip, = report["sim"]["corner_skips"]
     assert skip["id"] == "skip" and report["expect"][2]["passed"] == (skip["heard_sec"] is not None)
     assert "## 코너 변경" in (tmp_path / "run-1" / "report.md").read_text(encoding="utf-8")
+    switch, = report["sim"]["persona_switches"]
+    assert (switch["id"], switch["dj_name"], switch["accepted"]) == ("dj", "번개", True)
+    assert report["expect"][3]["passed"] == (switch["heard_sec"] is not None)
+    assert "## 페르소나 전환" in (tmp_path / "run-1" / "report.md").read_text(encoding="utf-8")
+    transcript = (tmp_path / "run-1" / "transcript.md").read_text(encoding="utf-8")
+    assert "조작 dj: 페르소나 전환 → 번개" in transcript
     for name in ("transcript.md", "report.md", "report.json", "run.json", "played.json"):
         assert (tmp_path / "run-1" / name).exists()
     played = json.loads((tmp_path / "run-1" / "played.json").read_text(encoding="utf-8"))["played"]
