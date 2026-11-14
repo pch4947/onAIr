@@ -28,6 +28,7 @@ import sqlite3
 import sys
 import time
 from dataclasses import dataclass
+from html import escape
 from pathlib import Path
 
 import yaml
@@ -40,6 +41,7 @@ from ..inputs.rules import ChatRules
 from ..main import add_llm_args, apply_llm_args, load_env, load_profile
 from ..pipeline.tts import DEFAULT_GEMINI_VOICE
 from ..report import render, station_report
+from ..sources.rss import load_news_feeds
 from ..telemetry import _read
 from . import compare, review
 from .metrics import METRICS, aggregate
@@ -204,6 +206,13 @@ async def _inject(spec: ScenarioSpec, backend: SimBackend, engine: StationEngine
                                          text=f"조작 {item.id}: 페르소나 전환 → {persona['dj_name']}"))
             await backend.switch_persona(persona, item.id)
             continue
+        if isinstance(item, ControlSpec) and item.type == "format_switch":  # 테스트 화면의 스테이션 버튼
+            options = {key: value for key, value in (("format", item.format), ("corners", item.corners),
+                                                     ("news_sections", item.news_sections)) if value is not None}
+            backend.played.append(Played(backend.now(), "input", 0,
+                                         text=f"조작 {item.id}: 형식 전환 → {_FORMATS[item.format]}"))
+            await backend.switch_format(options, item.id)
+            continue
         if isinstance(item, ControlSpec):  # 테스트 화면의 코너 버튼
             title = engine.telemetry.corner_titles.get(item.corner, item.corner)
             backend.played.append(Played(backend.now(), "input", 0, text=f"조작 {item.id}: 코너 변경 → {title}"))
@@ -220,6 +229,28 @@ async def _inject(spec: ScenarioSpec, backend: SimBackend, engine: StationEngine
 
 
 _KINDS = {"chat": "채팅", "message": "문자", "song_request": "신청곡"}
+_FORMATS = {"talk": "토크", "music": "음악", "news": "뉴스"}
+
+
+def fake_feeds(spec: ScenarioSpec, feeds_path: Path):
+    """시나리오에 적은 기사(news)를 실제 피드 주소로 돌려주는 가짜 읽기 — 네트워크를 쓰지 않는다.
+
+    분야의 피드 주소를 물으면 그 분야의 기사를 RSS로 만들어 준다. 읽는 데 sim.rss_latency_sec가 걸린다.
+    """
+    sections: dict[str, set[str]] = {}
+    for code, entries in load_news_feeds(feeds_path).feeds.items():
+        for entry in entries:
+            sections.setdefault(entry.url, set()).add(code)
+
+    def fetch(url: str) -> bytes:
+        time.sleep(spec.sim.rss_latency_sec)  # 수집기가 스레드에서 부른다
+        items = "".join(
+            f"<item><title>{escape(n.title)}</title><description>{escape(n.summary or n.title)}</description>"
+            f"<link>https://news.example.com/{i}</link></item>"
+            for i, n in enumerate(spec.news) if n.section in sections.get(url, ()))
+        return f"<rss><channel>{items}</channel></rss>".encode()
+
+    return fetch
 # persona 파일에 말투 선택지(style)가 없을 때 — 엔진은 방송에 쓰지 않고 스키마만 요구한다
 _DEFAULT_STYLE = {"formality": "polite", "energy": "mid", "humor": "some"}
 
@@ -258,6 +289,8 @@ async def run_one(spec: ScenarioSpec, index: int, run_dir: Path, args: argparse.
     run_dir.mkdir(parents=True, exist_ok=True)
     settings = _settings(args, run_dir)
     spec = _apply_overrides(settings, spec, variant, run_dir)
+    if spec.news:
+        settings.rss_fetch = fake_feeds(spec, settings.news_feeds_path)
     seed = spec.sim.seed + index  # 변형이 달라도 같은 회차는 같은 seed다 — 짝지어 비교한다 (compare.py)
     rng = random.Random(seed)
     station_id = f"sim_{spec.name}_{index + 1}"
@@ -323,6 +356,11 @@ async def run_one(spec: ScenarioSpec, index: int, run_dir: Path, args: argparse.
                               "heard_sec": None if switch["play_sec"] is None
                               else round(switch["play_sec"] + spec.sim.broadcast_delay_sec, 1)}
                              for switch in backend.persona_switches],
+        # 형식 전환 — 버튼부터 새 형식의 첫 세그먼트(corner) 제출·재생·청취까지
+        "format_switches": [{**{k: v for k, v in change.items() if k not in ("segment_id", "applied_before")},
+                             "heard_sec": None if change["play_sec"] is None
+                             else round(change["play_sec"] + spec.sim.broadcast_delay_sec, 1)}
+                            for change in backend.format_switches],
         "error": error,
     }
     reflected = _reflections(db, station_id)
@@ -377,6 +415,10 @@ def _check(spec: ScenarioSpec, backend: SimBackend, report: dict,
             hit = reflected.get(story if story in kinds else f"in_{e.input}")
             passed = hit is not None and (e.within_sec is None or hit[1] <= e.within_sec)
             detail = "반영 안 됨" if hit is None else f"{hit[1]:.0f}초 뒤 재생"
+        elif e.type == "not_reflected":  # 청취자 입력을 반영하지 않는 형식(뉴스)에서 온 입력
+            story = f"story_sim_{e.input}"
+            hit = reflected.get(story if story in kinds else f"in_{e.input}")
+            passed, detail = hit is None, "반영 안 됨" if hit is None else f"{hit[1]:.0f}초 뒤 재생"
         elif e.type == "min_reflected":
             count = sum(1 for rid in reflected if kinds.get(rid, "chat") == e.kind)  # 나머지는 배경 채팅
             passed, detail = count >= e.value, f"{count}건 반영"
@@ -395,6 +437,12 @@ def _check(spec: ScenarioSpec, backend: SimBackend, report: dict,
             passed = heard is not None and (e.within_sec is None or heard <= e.within_sec)
             detail = ("버튼 전에 방송이 끝남" if switch is None else "엔진이 거절함" if not switch["accepted"]
                       else "새 DJ의 멘트가 나가지 않음" if heard is None else f"{heard:.0f}초 뒤 들림")
+        elif e.type == "format_switched":
+            change = next((s for s in report["sim"]["format_switches"] if s["id"] == e.control), None)
+            heard = change["heard_sec"] if change else None
+            passed = heard is not None and (e.within_sec is None or heard <= e.within_sec)
+            detail = ("버튼 전에 방송이 끝남" if change is None else "엔진이 거절함" if not change["accepted"]
+                      else "새 형식의 멘트가 나가지 않음" if heard is None else f"{heard:.0f}초 뒤 들림")
         elif e.type == "max_silence_sec":
             value = report["sim"]["silence_max_sec"]
             passed, detail = value <= e.value, f"최대 무음 {value}초"
@@ -474,6 +522,16 @@ def _write_run(run_dir: Path, spec: ScenarioSpec, index: int, seed: int, args: a
             f"{s['ahead_sec']}초 | "
             + " | ".join("-" if s[k] is None else f"{s[k]}초" for k in ("submit_sec", "play_sec", "heard_sec"))
             + " |\n" for s in sim["persona_switches"])
+    if sim["format_switches"]:
+        text += ("\n## 형식 전환\n\n청취는 재생에 방송 지연을 더한 값이다. 남은 분량은 버튼을 눌렀을 때 버리지 못하고 "
+                 "이전 형식으로 그대로 나간 분량이다.\n\n"
+                 "| 시각 | 형식 | 첫 코너 | 버린 멘트 | 남은 분량 | 첫 멘트 제출 | 재생 | 청취 |\n"
+                 "|---|---|---|---|---|---|---|---|\n")
+        text += "".join(
+            f"| {_clock(s['at'])} | {_FORMATS[s['format']]}{'' if s['accepted'] else ' (거절)'} | "
+            f"{titles.get(s['corner'], s['corner'] or '-')} | {s['discarded']}개 | {s['ahead_sec']}초 | "
+            + " | ".join("-" if s[k] is None else f"{s[k]}초" for k in ("submit_sec", "play_sec", "heard_sec"))
+            + " |\n" for s in sim["format_switches"])
     if variant.overrides:
         text += f"- 덮어쓴 설정 ({variant.name}): " + ", ".join(f"{k}={v}" for k, v in variant.overrides) + "\n"
     if sim["error"]:

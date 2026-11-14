@@ -46,6 +46,7 @@ class SimSpec(_Spec):
     llm_quote_miss_rate: float = Field(default=0.0, ge=0, le=1)
     broadcast_delay_sec: float = Field(default=12.0, ge=0)  # 백엔드 ONAIR_BROADCAST_DELAY_SECONDS
     buffer_low_sec: float = Field(default=15.0, ge=0)  # 백엔드 buffer_low_seconds
+    rss_latency_sec: float = Field(default=2.0, ge=0)  # 가짜 뉴스 피드(news)를 읽는 데 걸리는 시간 [임시]
     seed: int = 1  # 회차마다 seed + 회차 번호
 
 
@@ -94,10 +95,13 @@ class ControlSpec(_Spec):
     """운영자 조작 — 테스트 화면의 버튼. 가짜 백엔드가 실제 백엔드처럼 엔진에 알린다 (계약 3.2절)."""
 
     at: float  # 방송 시작(station.started) 기준 초
-    type: Literal["corner_skip", "persona_switch"] = "corner_skip"
+    type: Literal["corner_skip", "persona_switch", "format_switch"] = "corner_skip"
     corner: str | None = None  # corner_skip: 형식 파일의 코너 키 (topic_talk, text_corner, music_intro 등)
     persona: str | None = None  # persona_switch: persona 파일. 엔진 루트 기준 경로
     voice: str | None = None  # persona_switch: --tts gemini일 때의 보이스. 없으면 방송의 보이스
+    format: Literal["talk", "music", "news"] | None = None  # format_switch
+    corners: list[str] | None = None  # format_switch: talk의 본 코너. 없으면 형식 기본값
+    news_sections: list[str] | None = None  # format_switch: news의 분야. 없으면 형식 기본값
     id: str | None = None  # expect에서 가리킬 이름
 
     @field_validator("at", mode="before")
@@ -107,7 +111,7 @@ class ControlSpec(_Spec):
 
     @model_validator(mode="after")
     def _check(self) -> ControlSpec:
-        need = "corner" if self.type == "corner_skip" else "persona"
+        need = {"corner_skip": "corner", "persona_switch": "persona", "format_switch": "format"}[self.type]
         if getattr(self, need) is None:
             raise ValueError(f"{self.type}에는 {need}가 필요하다")
         return self
@@ -128,6 +132,14 @@ class ChatterSpec(_Spec):
         return None if value is None else parse_at(value)
 
 
+class NewsSpec(_Spec):
+    """가짜 뉴스 피드의 기사 — 적어 두면 실제 피드(config/news_feeds.yaml)를 읽지 않는다."""
+
+    title: str
+    summary: str = ""
+    section: str = "general"  # 분야 코드 (config/formats/news.yaml의 section_names)
+
+
 class StorySpec(_Spec):
     body: str
     nickname: str | None = None
@@ -143,13 +155,14 @@ class StorySpec(_Spec):
 class ExpectSpec(_Spec):
     """회차마다 판정하는 기대 결과."""
 
-    type: Literal["reflected", "min_reflected", "aired_contains", "not_aired", "max_silence_sec",
-                  "max_fallback", "corner_entered", "persona_switched"]
-    input: str | None = None  # reflected: inputs 또는 board_stories의 id
+    type: Literal["reflected", "not_reflected", "min_reflected", "aired_contains", "not_aired",
+                  "max_silence_sec", "max_fallback", "corner_entered", "persona_switched", "format_switched"]
+    input: str | None = None  # reflected, not_reflected: inputs 또는 board_stories의 id
     kind: Literal["chat", "message", "song_request", "board_story"] | None = None  # min_reflected
-    control: str | None = None  # corner_entered, persona_switched: controls의 id
+    control: str | None = None  # corner_entered, persona_switched, format_switched: controls의 id
     # reflected: 도착부터 재생 시작까지, corner_entered: 버튼부터 새 코너 첫 멘트가 들리기까지,
-    # persona_switched: 버튼부터 새 DJ의 첫 멘트가 들리기까지 (모두 방송 지연 포함)
+    # persona_switched: 버튼부터 새 DJ의 첫 멘트가 들리기까지,
+    # format_switched: 버튼부터 새 형식의 첫 멘트가 들리기까지 (모두 방송 지연 포함)
     within_sec: float | None = None
     text: str | None = None  # aired_contains, not_aired
     value: float | None = None  # min_reflected, max_silence_sec, max_fallback
@@ -159,9 +172,10 @@ class ExpectSpec(_Spec):
     def _check(self) -> ExpectSpec:
         if self.type == "min_reflected" and (self.kind is None or self.value is None):
             raise ValueError("min_reflected에는 kind와 value가 필요하다")
-        need = {"reflected": "input", "min_reflected": "kind", "aired_contains": "text", "not_aired": "text",
+        need = {"reflected": "input", "not_reflected": "input", "min_reflected": "kind", "aired_contains": "text", "not_aired": "text",
                 "max_silence_sec": "value", "max_fallback": "value",
-                "corner_entered": "control", "persona_switched": "control"}[self.type]
+                "corner_entered": "control", "persona_switched": "control",
+                "format_switched": "control"}[self.type]
         if getattr(self, need) is None:
             raise ValueError(f"{self.type}에는 {need}가 필요하다")
         return self
@@ -174,6 +188,7 @@ class ScenarioSpec(_Spec):
     sim: SimSpec = Field(default_factory=SimSpec)
     tracks: list[TrackSpec] = Field(default_factory=lambda: list(DEFAULT_TRACKS), min_length=1)
     board_stories: list[StorySpec] = Field(default_factory=list)
+    news: list[NewsSpec] = Field(default_factory=list)
     inputs: list[InputSpec] = Field(default_factory=list)
     controls: list[ControlSpec] = Field(default_factory=list)
     chatter: ChatterSpec | None = None

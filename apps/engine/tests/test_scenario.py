@@ -18,6 +18,7 @@ from onair_engine.prompt_data import CHAT, data_block
 from onair_engine.scenario import runner
 from onair_engine.scenario.sim import Played, SimBackend, SimTts, tune_dummy_llm
 from onair_engine.scenario.spec import ScenarioSpec, SimSpec, TrackSpec, load_scenario, parse_at
+from onair_engine.sources.rss import Feed, load_news_feeds, parse_feed
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -56,6 +57,10 @@ def test_parse_at():
     {"controls": [{"at": 1, "type": "persona_switch", "corner": "text_corner"}]},  # persona 없음
     {"controls": [{"at": 1}]},  # corner 없음
     {"expect": [{"type": "persona_switched"}]},  # control 없음
+    {"controls": [{"at": 1, "type": "format_switch"}]},  # format 없음
+    {"controls": [{"at": 1, "type": "format_switch", "format": "podcast"}]},  # 모르는 형식
+    {"expect": [{"type": "not_reflected"}]},  # input 없음
+    {"news": [{"summary": "제목 없는 기사"}]},
     {"expect": [{"type": "corner_entered", "control": "none"}]},  # 없는 조작
     {"expect": [{"type": "corner_entered"}]},  # control 없음
     {"expect": [{"type": "min_reflected", "value": 1}]},  # kind 없음
@@ -333,6 +338,62 @@ def test_persona_switch_discards_untouched_segments_and_times_the_new_dj():
     assert switch["submit_sec"] is not None and switch["play_sec"] is not None
 
 
+def test_format_switch_discards_untouched_segments_and_times_the_new_format():
+    class Switching(SkippableEngine):
+        """받아들이면 편성 관리자가 형식을 바꾼 횟수가 는다 — 실제 엔진은 편성 루프의 다음 차례에 바꾼다."""
+
+        def __init__(self):
+            super().__init__()
+            self.scheduler.format_switches = 0
+
+        def on_format_changed(self, payload):
+            self.calls.append(("on_format_changed", (payload,)))
+            return payload["format"] != "talk"
+
+    backend = _backend(buffer_low_sec=1.5)
+    backend.engine = Switching()
+
+    async def scenario():
+        await backend.notify_station("station.started", {})
+        for sid in ("s1", "s2", "s3"):
+            await backend.publish_segment(_sub(sid, ms=1000))
+        await backend.switch_format({"format": "talk"}, "same")
+        before = len(backend.engine.calls)
+        await backend.publish_segment(_sub("s4", ms=1000))
+        await backend.switch_format({"format": "news", "news_sections": ["it"]}, "to_news")
+        calls = backend.engine.calls[before:]
+        await backend.publish_segment(_sub("old", ms=100))  # 엔진이 아직 바꾸지 않았다 — 이전 형식의 멘트다
+        backend.engine.scheduler.format_switches = 1
+        first = dataclasses.replace(_sub("new", ms=100), corner_type="headline")
+        await backend.publish_segment(first)
+        await backend.publish_segment(_sub("new2", ms=100))
+        await backend._play_segment(first)
+        return calls
+
+    calls = asyncio.run(scenario())
+    assert calls == [("on_segments_discarded", ({"segment_ids": ["s4"]},)),
+                     ("on_format_changed", ({"format": "news", "news_sections": ["it"]},))], "버린 멘트를 먼저 알린다"
+    same, change = backend.format_switches
+    assert (same["id"], same["accepted"], same["segment_id"]) == ("same", False, None)
+    assert (change["id"], change["format"], change["accepted"], change["segment_id"], change["corner"]) == (
+        "to_news", "news", True, "new", "headline")
+    assert change["submit_sec"] is not None and change["play_sec"] is not None
+
+
+def test_fake_feeds_serve_the_scenario_news_by_section():
+    spec = ScenarioSpec.model_validate({"name": "x", "sim": {"rss_latency_sec": 0}, "news": [
+        {"title": "반도체 설계 & 검증 기술 공개", "summary": "대기 전력 절반", "section": "it"},
+        {"title": "전통시장 방문객 늘어", "section": "economy"},
+    ]})
+    feeds = load_news_feeds(ROOT / "config" / "news_feeds.yaml")
+    fetch = runner.fake_feeds(spec, ROOT / "config" / "news_feeds.yaml")
+    it = parse_feed(fetch(feeds.feeds["it"][0].url), Feed("매체", "u", "IT"))
+    assert [(item.title, item.summary, item.section) for item in it] == [("반도체 설계 & 검증 기술 공개", "대기 전력 절반", "IT")]
+    economy = parse_feed(fetch(feeds.feeds["economy"][0].url), Feed("매체", "u", "경제"))
+    assert [item.title for item in economy] == ["전통시장 방문객 늘어"]
+    assert parse_feed(fetch(feeds.feeds["sports"][0].url), Feed("매체", "u")) == []
+
+
 def test_persona_payload_fills_what_a_persona_file_lacks():
     control = ScenarioSpec.model_validate({"name": "x", "controls": [
         {"at": 1, "type": "persona_switch", "persona": "config/personas/saebyeok.yaml", "id": "a"},
@@ -487,9 +548,13 @@ def test_run_one_with_dummy_llm(tmp_path, monkeypatch):
         "tracks": [{"title": "곡", "artist": "가수", "sec": 5}],
         "inputs": [{"at": 0, "kind": "message", "who": "a", "nickname": "밤샘러", "body": "붕어빵 먹었어요", "id": "m"}],
         "controls": [{"at": 1, "corner": "text_corner", "id": "skip"},
-                     {"at": 0.5, "type": "persona_switch", "persona": "config/personas/beongae.yaml", "id": "dj"}],
+                     {"at": 0.5, "type": "persona_switch", "persona": "config/personas/beongae.yaml", "id": "dj"},
+                     {"at": 0.2, "type": "format_switch", "format": "music", "id": "fmt"},
+                     {"at": 0.4, "type": "format_switch", "format": "talk", "corners": ["text_corner", "topic_talk"],
+                      "id": "back"}],
         "expect": [{"type": "max_fallback", "value": 0}, {"type": "not_aired", "text": "절대없는문구"},
-                   {"type": "corner_entered", "control": "skip"}, {"type": "persona_switched", "control": "dj"}],
+                   {"type": "corner_entered", "control": "skip"}, {"type": "persona_switched", "control": "dj"},
+                   {"type": "format_switched", "control": "back"}, {"type": "not_reflected", "input": "m"}],
     })
     args = argparse.Namespace(llm="dummy", llm_model=None, llm_base_url=None, llm_reasoning_effort=None,
                               minutes=None, persona=None, tts="sim", repeat=1, parallel=1, note="점검")
@@ -506,6 +571,11 @@ def test_run_one_with_dummy_llm(tmp_path, monkeypatch):
     assert (switch["id"], switch["dj_name"], switch["accepted"]) == ("dj", "번개", True)
     assert report["expect"][3]["passed"] == (switch["heard_sec"] is not None)
     assert "## 페르소나 전환" in (tmp_path / "run-1" / "report.md").read_text(encoding="utf-8")
+    changes = report["sim"]["format_switches"]
+    assert [(c["id"], c["format"], c["accepted"]) for c in changes] == [("fmt", "music", True), ("back", "talk", True)]
+    assert report["expect"][4]["passed"] == (changes[1]["heard_sec"] is not None)
+    assert report["expect"][5]["type"] == "not_reflected"
+    assert "## 형식 전환" in (tmp_path / "run-1" / "report.md").read_text(encoding="utf-8")
     transcript = (tmp_path / "run-1" / "transcript.md").read_text(encoding="utf-8")
     assert "조작 dj: 페르소나 전환 → 번개" in transcript
     for name in ("transcript.md", "report.md", "report.json", "run.json", "played.json"):

@@ -1,0 +1,47 @@
+# 데모 시나리오의 스테이션 버튼 구간 (docs/DEMO_SCENARIO.md 6:00~8:00, #260).
+# 같은 방송에서 형식을 토크 → 뉴스 → 음악 → 토크로 1분 간격으로 바꾼다. 버튼을 누른 뒤 새 형식이 들리기까지
+# 걸리는 시간과, 뉴스에서는 채팅이 반영되지 않는지, 뉴스 중에 올라온 사연이 토크로 돌아오면 읽히는지를 본다.
+# 곡은 20초로 줄였다 — 곡이 나가는 중에 버튼을 누르면 곡이 끝나야 새 형식이 들린다(demo_persona.yaml과 같은 이유).
+# 기사는 여기 적은 것을 쓴다 — 실제 피드를 읽지 않으므로 네트워크 없이 돈다.
+name: demo_format
+description: 방송 중에 스테이션 버튼(토크 → 뉴스 → 음악 → 토크)을 눌렀을 때 새 형식이 제때 들리는지 본다.
+station:
+  format: talk
+  # 본 코너의 첫 차례가 사연 코너다. 방송 시작 때는 사연이 없어 주제 토크로 대체되고,
+  # 토크로 돌아왔을 때는 뉴스 중에 받은 사연이 있어 사연 코너로 들어간다
+  corners: [story_corner, topic_talk]
+  intensity: mid
+  topic: 겨울 간식
+  # 엔딩은 남은 시간이 5분 30초보다 적어지면 시작한다 — 마지막 버튼 뒤로도 순환이 이어지게 넉넉히 둔다
+  broadcast_minutes: 12
+tracks:
+  - {title: 첫눈 오는 밤, artist: 가상의 가수, sec: 20}
+  - {title: 새벽 버스, artist: 모의 밴드, sec: 20}
+  - {title: 따뜻한 차 한 잔, artist: 시뮬레이션 트리오, sec: 20}
+news:
+  - {section: it, title: "국내 연구진, 저전력 반도체 설계 기술 공개", summary: "대기 전력을 절반으로 줄이는 설계 기술이 학회에서 발표됐다."}
+  - {section: it, title: "동네 도서관에 무인 대출 로봇 시범 도입", summary: "세 곳의 구립 도서관이 다음 달부터 무인 대출 로봇을 시범 운영한다."}
+  - {section: it, title: "겨울철 전기차 주행거리 표시 기준 바뀐다", summary: "저온 주행거리를 따로 적는 표시 기준이 내년부터 적용된다."}
+  - {section: it, title: "초등학교 코딩 수업 교재 새로 나온다", summary: "교육청이 새 학기에 쓸 코딩 수업 교재를 공개했다."}
+  - {section: economy, title: "겨울 간식 재료값 지난해보다 올라", summary: "팥과 밀가루 가격이 올라 붕어빵 값도 오른 곳이 많다."}
+  - {section: economy, title: "전통시장 주말 방문객 늘어", summary: "주말 전통시장 방문객이 지난달보다 늘었다는 조사 결과가 나왔다."}
+  - {section: economy, title: "소상공인 난방비 지원 접수 시작", summary: "지자체가 소상공인 난방비 지원 신청을 이번 주부터 받는다."}
+board_stories:
+  # 뉴스가 나가는 동안 올라온 글 — 엔진은 형식과 상관없이 받아 두고, 토크로 돌아오면 사연 코너에서 읽는다
+  - {at: "2:00", id: story, nickname: 밤샘러, body: "겨울 간식은 역시 붕어빵이에요. 퇴근길에 세 개 사서 집까지 걸으면서 다 먹었어요."}
+inputs:
+  - {at: "1:50", kind: chat, who: phone, body: "뉴스도 잘 듣고 있어요", id: news_chat}
+  - {at: "4:10", kind: chat, who: phone, body: "오늘 너무 피곤해요", id: talk_chat}
+controls:
+  - {at: "1:30", type: format_switch, format: news, news_sections: [it, economy], id: to_news}
+  - {at: "2:30", type: format_switch, format: music, id: to_music}
+  - {at: "3:30", type: format_switch, format: talk, corners: [story_corner, topic_talk], id: to_talk}
+expect:
+  # 데모는 버튼마다 1분을 쓴다 — 그 안에 새 형식이 들려야 한다
+  - {type: format_switched, control: to_news, within_sec: 60, note: 뉴스 버튼 뒤 1분 안에 뉴스가 들린다}
+  - {type: format_switched, control: to_music, within_sec: 60, note: 음악 버튼 뒤 1분 안에 음악 형식이 들린다}
+  - {type: format_switched, control: to_talk, within_sec: 60, note: 토크 버튼 뒤 1분 안에 토크가 들린다}
+  - {type: not_reflected, input: news_chat, note: 뉴스에서는 채팅을 방송에 반영하지 않는다}
+  - {type: reflected, input: story, note: 뉴스 중에 올라온 사연을 토크로 돌아와 읽는다}
+  - {type: reflected, input: talk_chat, note: 토크로 돌아온 뒤의 채팅은 반영한다}
+  - {type: max_fallback, value: 0, note: 대체 멘트 없음}

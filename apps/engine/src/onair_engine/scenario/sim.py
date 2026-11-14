@@ -5,7 +5,7 @@
 - 재생을 시작하면 PUBLISHED(송출 이력)와 segment.started(방송 지연을 더한 시각)를 보낸다
 - 남은 분량(backpressure)을 상태가 바뀔 때나 10초마다 보낸다
 - 다음 곡(track.queued)을 미리 알려 주고, 신청곡이 오면 다음 곡으로 올린다
-- 테스트 화면의 버튼(코너 변경, 페르소나 전환)을 누르면 아직 내보내지 않은 멘트를 버리고 엔진에 알린다
+- 테스트 화면의 버튼(코너 변경, 페르소나 전환, 형식 전환)을 누르면 아직 내보내지 않은 멘트를 버리고 엔진에 알린다
 Redis·HLS·플레이어 지연은 흉내 내지 않는다.
 """
 from __future__ import annotations
@@ -146,6 +146,7 @@ class SimBackend:
         self._payloads: dict[str, dict] = {}  # 곡 ref → 엔진에 알린 track.queued
         self.skips: list[dict] = []  # 코너 변경 기록 — 버튼부터 새 코너 첫 멘트의 제출·재생까지
         self.persona_switches: list[dict] = []  # 페르소나 전환 기록 — 버튼부터 새 DJ 첫 멘트의 제출·재생까지
+        self.format_switches: list[dict] = []  # 형식 전환 기록 — 버튼부터 새 형식 첫 멘트의 제출·재생까지
 
     @property
     def engine_done(self) -> bool:
@@ -166,6 +167,13 @@ class SimBackend:
                 and self.engine.config.persona_id == switch["persona_id"]):
             switch["segment_id"] = sub.id
             switch["submit_sec"] = round(self.now() - switch["at"], 1)
+        change = self.format_switches[-1] if self.format_switches else None
+        # 엔진이 형식을 바꾼 뒤에 낸 첫 세그먼트
+        if (change and change["accepted"] and change["segment_id"] is None
+                and getattr(self.engine.scheduler, "format_switches", 0) > change["applied_before"]):
+            change["segment_id"] = sub.id
+            change["corner"] = sub.corner_type
+            change["submit_sec"] = round(self.now() - change["at"], 1)
         if sub.music_ref and sub.music_ref == self._queued_ref:
             self._queued_ref = self._queued_request = None
             self.queue_next_track()  # 소개할 곡을 엔진이 가져갔다 — 백엔드가 다음 곡을 미리 알린다
@@ -250,6 +258,19 @@ class SimBackend:
         await self._discard_unsent(record)
         record["accepted"] = await self.engine.on_persona_changed({"persona": persona})
 
+    async def switch_format(self, options: dict, control_id: str | None = None) -> None:
+        """테스트 화면의 스테이션 버튼 — 아직 내보내지 않은 멘트를 버리고 station.format_changed를 보낸다.
+
+        options는 {format, corners?, news_sections?}다. 실제 백엔드는 토크로 바뀌면 아직 보내지 않은 게시판
+        사연도 보내는데, 여기서는 사연을 방송 시작 때(또는 적어 둔 시각에) 형식과 상관없이 보낸다.
+        """
+        record = {"id": control_id, "format": options["format"], "at": round(self.now(), 1), "accepted": None,
+                  "applied_before": getattr(self.engine.scheduler, "format_switches", 0),
+                  "segment_id": None, "corner": None, "submit_sec": None, "play_sec": None}
+        self.format_switches.append(record)
+        await self._discard_unsent(record)
+        record["accepted"] = self.engine.on_format_changed(options)
+
     async def _discard_unsent(self, record: dict) -> None:
         """송출기가 아직 손대지 않은 멘트를 대기열에서 버리고 segment.discarded를 보낸다 (test_controls.py의 discard_and_send).
 
@@ -319,7 +340,7 @@ class SimBackend:
         self.played.append(Played(self._at(), "speech", sec, sub.id, sub.corner_type, script,
                                   audio_ref=sub.audio_ref))
         self._current_end = time.time() + sec
-        for record in (*self.skips, *self.persona_switches):
+        for record in (*self.skips, *self.persona_switches, *self.format_switches):
             if record["segment_id"] == sub.id:
                 record["play_sec"] = round(self.now() - record["at"], 1)
         if not self.engine_done:
