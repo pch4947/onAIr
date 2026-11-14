@@ -259,8 +259,13 @@ python -m onair_engine.scenario config/scenarios/sparse.yaml config/scenarios/fl
   - Redis, HLS 플레이어 지연, 실제 발음은 흉내 내지 않습니다
 - **시나리오 파일** (`config/scenarios/*.yaml`)
   - 방송 설정, 흉내 값(`sim`), 시각별 입력(`inputs`), 배경 채팅(`chatter`), 게시판 사연을 적습니다
+  - 게시판 사연은 `id`를 붙여 `expect`에서 가리킬 수 있고, `at`을 적으면 방송 중에 올라온 글로 보냅니다
   - 운영자 조작(`controls`)은 테스트 화면의 버튼입니다. 지금은 코너 버튼(`{at, corner}`)만 있습니다. 가짜 백엔드가 실제 백엔드처럼 재생 중인 것과 미리 인코딩한 분량(`sim.buffer_low_sec`)을 뺀 멘트를 버리고 엔진에 알립니다. `demo_buttons.yaml`이 데모의 코너 버튼 구간입니다
-  - 기대 결과(`expect`)를 적으면 회차마다 통과 여부를 판정합니다: `reflected`, `aired_contains`, `not_aired`, `max_silence_sec`, `max_fallback`, `corner_entered`(버튼을 누른 뒤 고른 코너의 첫 멘트가 들리기까지, 방송 지연 포함)
+  - 기대 결과(`expect`)를 적으면 회차마다 통과 여부를 판정합니다: `reflected`, `min_reflected`(입력 종류 `kind`별 반영 건수 하한), `aired_contains`, `not_aired`, `max_silence_sec`, `max_fallback`, `corner_entered`(버튼을 누른 뒤 고른 코너의 첫 멘트가 들리기까지, 방송 지연 포함)
+  - `flood`는 채팅 폭주에 사연 보내기, 신청곡, 게시판 사연(주제 관련·무관, 방송 전·방송 중)을 함께 넣어 종류별 선별을 봅니다. 건수 기준은 2026-11-12 실행 20회에서 잡았습니다(`docs/ENGINE_TUNING_LOG.md` T-009)
+    - 무관한 사연이 걸러지는지와 신청자 닉네임을 부르는지는 실제 LLM에서만 판정됩니다. 더미 LLM은 사연을 모두 관련 있다고 보고 고정 대본을 씁니다
+    - 엔딩 곡으로 나간 신청곡은 반영 건수에 잡히지 않을 수 있습니다. 엔진이 끝난 뒤의 송출은 기록만 하기 때문입니다
+  - 신청곡은 실제 백엔드처럼 새 신청이 다음 곡이 되고, 밀린 신청은 최근 것부터 나갑니다. 엔진이 소개를 이미 만들고 있던 곡은 밀려나도 그대로 나가고, 다시 틀지 않습니다
   - `config/scenarios/holdout/`은 검증용입니다. 설정값이나 프롬프트를 고칠 때는 돌리지 않고, 채택하려는 변경이 다른 주제·입력에서도 통하는지 볼 때만 돌립니다
 - **설정값 비교** (`--set`, `--sweep`, `--variant`): 코드를 고치지 않고 값을 바꿔 돌립니다
   - 이름은 `config/chat_rules.yaml`의 항목(`flood_threshold`), 엔진 설정(`engine.target_buffer_sec`, `engine.max_concurrent_generations`), 흉내 값(`sim.llm_quote_miss_rate`)입니다. 틀린 이름과 범위 밖 값은 실행 전에 거절합니다
