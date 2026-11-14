@@ -93,6 +93,7 @@ class EngineManager:
             base_url=self.settings.transport_base_url,
             token=self.settings.transport_token,
             redis_url=self.settings.transport_redis_url,
+            contract_version=self.settings.contract_version,
             station_id=station_id,
         )
 
@@ -274,12 +275,10 @@ class EngineManager:
         elif event_type == "track.started":
             engine.on_track_started(payload)
         elif event_type == "state.transition":
-            # segment.started를 못 받았을 때를 위해 PLAYED 역산을 남긴다. 먼저 온 쪽이 확정한다
-            if payload.get("state") == "PLAYED":
-                engine.on_segment_played(payload.get("segment_id"), payload.get("at"))
-            elif payload.get("state") == "PUBLISHED":
+            # 재생 시작은 segment.started로만 확정한다. PLAYED에서 길이를 빼 추정하던 것은 지웠다 (#157)
+            if payload.get("state") == "PUBLISHED":
                 engine.on_segment_published(payload.get("segment_id"), payload.get("at"))
-        elif event_type == "segment.started":  # 계약 v2 (10.6절)
+        elif event_type == "segment.started":  # 계약 10.6절
             engine.on_segment_started(payload.get("segment_id"), payload.get("started_at"))
         elif event_type == "segment.discarded":  # 코너 변경 — 백엔드가 버린 멘트를 먼저 알린다 (#259)
             await engine.on_segments_discarded(payload)

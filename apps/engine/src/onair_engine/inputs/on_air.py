@@ -2,7 +2,7 @@
 
 엔진은 멘트를 버퍼만큼 앞서 만들지만 청취자는 듣고 있는 것에 반응한다. 그래서 채팅의 앵커는
 생성 위치가 아니라 송출 위치로 정한다. 위치는 제출 순서와 길이로 추정하고, 백엔드 이벤트
-(state.transition PLAYED, track.started, 계약 v2의 segment.started)가 오면 보정한다.
+(track.started, segment.started)가 오면 보정한다.
 """
 from __future__ import annotations
 
@@ -61,10 +61,6 @@ class OnAirTimeline:
     def anchor_of(self, segment_id: str) -> Anchor | None:
         entry = self._by_segment.get(segment_id)
         return entry.anchor if entry else None
-
-    def speech_ms(self, segment_id: str) -> int | None:
-        entry = self._by_segment.get(segment_id)
-        return entry.speech_ms if entry else None
 
     def sync_started(self, segment_id: str, started_at: float) -> bool:
         """세그먼트 재생 시작 확인. 처음 받은 값만 쓴다 — 재전달이면 False (계약 10.6절)."""

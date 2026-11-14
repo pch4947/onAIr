@@ -159,7 +159,7 @@ class SimBackend:
             self._queued_ref = None
             self.queue_next_track()  # 소개할 곡을 엔진이 가져갔다 — 백엔드가 다음 곡을 미리 알린다
 
-    async def notify_request_state(self, request_id: str, state) -> None:
+    async def notify_request_state(self, request_id: str, state, detail: dict | None = None) -> None:
         self.states.append((self.now(), request_id, str(state)))
 
     async def notify_station(self, event_type: str, payload: dict) -> None:
