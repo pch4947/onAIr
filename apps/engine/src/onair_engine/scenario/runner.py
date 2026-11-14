@@ -46,7 +46,15 @@ from ..telemetry import _read
 from . import compare, review
 from .metrics import METRICS, aggregate
 from .sim import LoopLag, Played, SimBackend, SimTts, tune_dummy_llm
-from .spec import ControlSpec, ScenarioSpec, SimSpec, StorySpec, TrackSpec, load_scenario
+from .spec import (
+    ControlSpec,
+    ScenarioSpec,
+    SimSpec,
+    StationSpec,
+    StorySpec,
+    TrackSpec,
+    load_scenario,
+)
 
 ENGINE_ROOT = Path(__file__).resolve().parents[3]  # apps/engine
 CALLS_PER_MINUTE = 2.5  # 실제 LLM 확인 프롬프트의 추정치 — 2026-11-07 실측(호출 13회)과 말:곡 5:5 기준
@@ -58,8 +66,10 @@ def _clock(sec: float) -> str:
 
 # ── 설정값 덮어쓰기 (--set, --sweep, --variant) ─────────────────────────
 # 이름 앞머리로 대상을 가린다: chat.(config/chat_rules.yaml, 앞머리가 없으면 이것), engine.(EngineSettings),
-# sim.(시나리오의 흉내 값). 엔진 설정은 방송 동작을 바꾸는 수치만 연다
-ENGINE_KEYS = {"target_buffer_sec": float, "max_concurrent_generations": int}
+# sim.(시나리오의 흉내 값), station.(시나리오의 방송 설정). 엔진 설정은 방송 동작을 바꾸는 수치만 연다.
+# contract_version 2는 한 멘트에 입력 여러 건을 싣는다 (#267) — 흉내 백엔드는 두 버전을 모두 받는다
+ENGINE_KEYS = {"target_buffer_sec": float, "max_concurrent_generations": int, "contract_version": int}
+STATION_KEYS = ("intensity",)
 # 회차의 루프 지연 P95가 이보다 크면 동시 실행이 타이밍 지표를 틀었다고 본다 [초기값] —
 # 2026-11-10 실측(flood, 더미 LLM): 30분 방송 동시 60회의 180~200ms에서는 세그먼트 생성 P95가 그대로였고
 # (12.21초 → 12.22초), 디스크 동기화를 켠 6분 방송 동시 30회의 1700ms에서는 20% 길어졌다 (ENGINE_TUNING_LOG T-001)
@@ -87,7 +97,8 @@ def parse_override(text: str) -> tuple[str, object]:
         raise ValueError(f"'이름=값' 형식이 아니다: {text!r}")
     scope, _, name = key.rpartition(".")
     scope = scope or "chat"
-    known = {"chat": ChatRules.model_fields, "engine": ENGINE_KEYS, "sim": SimSpec.model_fields}
+    known = {"chat": ChatRules.model_fields, "engine": ENGINE_KEYS, "sim": SimSpec.model_fields,
+             "station": STATION_KEYS}
     if scope not in known or name not in known[scope]:
         choices = ", ".join(sorted(known.get(scope, known)))
         raise ValueError(f"모르는 설정: {key} (쓸 수 있는 것: {choices})")
@@ -125,7 +136,7 @@ def _blank_settings() -> EngineSettings:
 def _apply_overrides(settings: EngineSettings, spec: ScenarioSpec, variant: Variant,
                      run_dir: Path | None) -> ScenarioSpec:
     """변형의 값을 엔진 설정과 시나리오에 넣는다. chat 값은 회차 폴더에 고친 chat_rules.yaml을 써서 넘긴다."""
-    grouped: dict[str, dict[str, object]] = {"chat": {}, "engine": {}, "sim": {}}
+    grouped: dict[str, dict[str, object]] = {"chat": {}, "engine": {}, "sim": {}, "station": {}}
     for key, value in variant.overrides:
         scope, name = key.split(".", 1)
         grouped[scope][name] = value
@@ -141,6 +152,9 @@ def _apply_overrides(settings: EngineSettings, spec: ScenarioSpec, variant: Vari
         setattr(settings, name, ENGINE_KEYS[name](value))
     if grouped["sim"]:
         spec = spec.model_copy(update={"sim": SimSpec.model_validate({**spec.sim.model_dump(), **grouped["sim"]})})
+    if grouped["station"]:
+        station = StationSpec.model_validate({**spec.station.model_dump(), **grouped["station"]})
+        spec = spec.model_copy(update={"station": station})
     return spec
 
 

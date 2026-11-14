@@ -22,6 +22,7 @@ from onair_engine.domain import (
 )
 from onair_engine.engine import EngineSettings, StationEngine
 from onair_engine.pipeline.llm import (
+    OPENAI_MAX_TOKENS,
     REJECT,
     ClaudeLlmClient,
     GeminiLlmClient,
@@ -339,7 +340,7 @@ def test_openai_compatible_server_gets_max_tokens_and_no_auth(monkeypatch):
     assert req["headers"]["Authorization"] is None  # Ollama 같은 호환 서버는 키 없이
     assert req["json"]["messages"] == [{"role": "system", "content": PROMPT.system},
                                        {"role": "user", "content": PROMPT.user}]
-    assert req["json"]["max_tokens"] == 400 and req["json"]["temperature"] == 0.7
+    assert req["json"]["max_tokens"] == OPENAI_MAX_TOKENS and req["json"]["temperature"] == 0.7
     assert "reasoning_effort" not in req["json"]
 
 
@@ -355,7 +356,7 @@ def test_openai_official_uses_max_completion_tokens(monkeypatch):
     monkeypatch.setattr("onair_engine.pipeline.llm._post_json", fake_post)
     assert _call(client) == "안녕하세요."
     assert captured["headers"] == {"Authorization": "Bearer k"}
-    assert captured["body"]["max_completion_tokens"] == 400
+    assert captured["body"]["max_completion_tokens"] == OPENAI_MAX_TOKENS
     assert "max_tokens" not in captured["body"] and "temperature" not in captured["body"]
     assert captured["body"]["reasoning_effort"] == "low"
 

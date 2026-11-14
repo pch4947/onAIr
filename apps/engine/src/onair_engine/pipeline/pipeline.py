@@ -136,8 +136,8 @@ class GenerationPipeline:
     async def run(self, job: GenerationJob) -> SegmentSubmission | None:
         """성공 시 제출 페이로드, REJECT 시 None.
 
-        request_ref는 인용한 청취자 입력이다 — 넣은 채팅이 대본에 실제로 들어갔을 때만 채운다.
-        비어 있으면 스케줄러가 그 입력을 되돌린다. LLM/TTS가 재시도까지 실패하면 filler 대체
+        input_refs는 이 멘트가 반영한 청취자 입력이다 — 넣은 입력이 대본에 실제로 들어갔을 때만 싣는다.
+        빠진 입력은 스케줄러가 되돌린다. request_ref는 그 첫 건이다(계약 v1). LLM/TTS가 재시도까지 실패하면 filler 대체
         세그먼트를 돌려준다(곡 소개였다면 music_ref는 유지한다 — 곡 재생이 멘트 실패에 막히지 않게).
         """
         if job.block is not None and job.part > 0:
@@ -151,9 +151,9 @@ class GenerationPipeline:
             return await self._fallback(job)
         if written is None:
             return None
-        script, quote_ref = written
+        script, refs = written
         try:
-            return await self._voice(job, script, time.time(), quote_ref)
+            return await self._voice(job, script, time.time(), refs)
         except _TtsFailed:
             return await self._fallback(job)
 
@@ -169,7 +169,7 @@ class GenerationPipeline:
             self._script_lock.release()
 
     async def _write(self, job: GenerationJob):
-        """대본을 쓰고 검사해 맥락에 넣는다. (대본, 인용한 입력) · None(거부) · _FAILED(LLM 장애)."""
+        """대본을 쓰고 검사해 맥락에 넣는다. (대본, 반영한 입력들) · None(거부) · _FAILED(LLM 장애)."""
         # [1] 프롬프트 구성 (L1 지시 내장 + 방송 맥락)
         t0 = time.time()
         persona_no = self._persona_no
@@ -194,17 +194,16 @@ class GenerationPipeline:
             self._log(job, "l1", t1, t1, "reject")
             return None
 
-        # [3] 인용 검사 — 빠진 입력은 request_ref를 비워 스케줄러가 되돌리게 한다
-        quote_ref = None
-        if job.material.quotes:
-            first = job.material.quotes[0]
-            ok = self._check_quote(job, "chat", first.body, script.text, t1)
-            quote_ref = first.request_id if ok else None
-        elif job.material.feature_ref:
-            # 낭독은 대본에 글이 들어갔는지 본다. 사연·신청곡은 DJ가 풀어 말하므로 비교하지 않는다
-            ok = (job.material.must_read is None
-                  or self._check_quote(job, "read", job.material.must_read, script.text, t1))
-            quote_ref = job.material.feature_ref if ok else None
+        # [3] 인용 검사 — 입력마다 본다. 빠진 입력은 싣지 않아 스케줄러가 되돌리게 한다
+        refs: list[str] = []
+        feature = job.material.feature_ref
+        # 낭독은 대본에 글이 들어갔는지 본다. 사연·신청곡은 DJ가 풀어 말하므로 비교하지 않는다
+        if feature and (job.material.must_read is None
+                        or self._check_quote(job, "read", job.material.must_read, script.text, t1, feature)):
+            refs.append(feature)
+        for quote in job.material.quotes:
+            if self._check_quote(job, "chat", quote.body, script.text, t1, quote.request_id):
+                refs.append(quote.request_id)
 
         # [4] L2 출력단 검사 — 덩어리는 문단마다 보고, 걸린 문단부터 뒤는 버린다
         clean = list(itertools.takewhile(lambda text: self.safety.check_l2(text) is None, texts))
@@ -217,7 +216,7 @@ class GenerationPipeline:
             self._recent.extend(clean)
         if job.block is not None:
             job.block.resolve(clean)
-        return script, quote_ref
+        return script, refs
 
     async def _write_block(self, prompt: Prompt, parts: int) -> list[str]:
         """이야기 덩어리를 한 번에 쓰고 문단으로 나눈다. 문단을 못 얻으면 LlmError — 다시 부른다."""
@@ -240,7 +239,7 @@ class GenerationPipeline:
             return await self._fallback(job)
 
     async def _voice(self, job: GenerationJob, script: Script, started: float,
-                     quote_ref: str | None = None) -> SegmentSubmission:
+                     refs: list[str] | None = None) -> SegmentSubmission:
         # [5] TTS
         seg_id = new_id("seg")
         logger.info("SCRIPT %s [%s] %s", seg_id, job.corner_type, script.text)
@@ -266,8 +265,9 @@ class GenerationPipeline:
             kind=SegmentKind.FILLER if job.step == "filler" else SegmentKind.SPEECH,
             priority=job.priority,
             reorderable=job.reorderable,
-            request_ref=quote_ref,
+            request_ref=refs[0] if refs else None,
             music_ref=job.material.track_ref,
+            input_refs=list(refs or []),
         )
 
     async def _fallback(self, job: GenerationJob) -> SegmentSubmission | None:
@@ -315,14 +315,15 @@ class GenerationPipeline:
             user=prompt.user,
         )
 
-    def _check_quote(self, job: GenerationJob, kind: str, chat: str, script: str, started: float) -> bool:
+    def _check_quote(self, job: GenerationJob, kind: str, chat: str, script: str, started: float,
+                     request_ref: str) -> bool:
         """인용 검사 하나 — 판정과 함께 채팅·대본·일치 비율을 남긴다. 누락이 LLM이 건너뛴 것인지
         풀어 말한 것을 검사가 못 알아본 것인지는 대본을 읽어야 갈린다 (ENGINE_TUNING_LOG O-001)."""
         match = quote_match(chat, script)
         ok = quoted(chat, script) if kind == "chat" else match >= QUOTE_MATCH  # 낭독은 풀어 말하면 안 된다
         self.telemetry.log_quote(
             job_id=job.job_id, corner_type=job.corner_type, step=job.step,
-            request_ref=job.material.quotes[0].request_id if job.material.quotes else job.material.feature_ref,
+            request_ref=request_ref,
             kind=kind, result="ok" if ok else "missing", match=match, chat=chat, script=script, at=started)
         self._log(job, "quote", started, time.time(), "ok" if ok else "missing")
         return ok
