@@ -8,8 +8,8 @@ from .tracks import MUSIC_SEGMENT_PREFIX, deliver_start
 
 
 DELIVER = """
-local expected = {'hash','stream','hash','list','hash','list','hash','hash','hash','string'}
-for i=1,10 do
+local expected = {'hash','stream','hash','list','hash','list','hash','hash','hash','string','hash','hash','string'}
+for i=1,13 do
  local kind = redis.call('TYPE', KEYS[i]).ok
  if kind ~= 'none' and kind ~= expected[i] then return redis.error_reply('Unexpected broadcast key type') end
 end
@@ -32,6 +32,7 @@ if event.type == 'state.transition' then
   end
 elseif event.type == 'encoding.failed' then
   local failed = event.payload.segment_id
+  redis.call('HDEL', KEYS[11], failed)
   local reserved = redis.call('HGET', KEYS[8], failed) or failed
   if redis.call('HGET', KEYS[7], 'frozen') == reserved then redis.call('HDEL', KEYS[7], 'frozen') end
   if redis.call('HGET', KEYS[7], 'next') == failed then redis.call('HDEL', KEYS[7], 'next') end
@@ -50,6 +51,19 @@ if event.type == 'segment.started' then
   if corner then
     redis.call('SET', KEYS[10], corner)
     redis.call('HDEL', KEYS[9], event.payload.segment_id)
+  end
+  -- 투표는 기준 세그먼트가 청취자에게 들리기 시작할 때 열린다 (10.8절)
+  local pending = redis.call('HGET', KEYS[11], event.payload.segment_id)
+  if pending then
+    local vote = cjson.decode(pending)
+    if redis.call('HEXISTS', KEYS[12], vote.vote_id) == 0 then
+      vote.status = 'open'
+      vote.opens_at = event.payload.started_at
+      vote.closes_at = event.payload.started_at + vote.window_sec
+      redis.call('HSET', KEYS[12], vote.vote_id, cjson.encode(vote))
+      redis.call('SET', KEYS[13], vote.vote_id)
+    end
+    redis.call('HDEL', KEYS[11], event.payload.segment_id)
   end
 end
 if event.type ~= 'encoding.failed' then
@@ -162,11 +176,12 @@ class Journal:
                 await deliver_start(redis, self.station, event_id, body, self.repeat_playlist)
             else:
                 segment_id = event['payload'].get('segment_id', '')
-                await redis.eval(DELIVER, 10, prefix + ':broadcast-events', f'engine:{self.station}:in',
+                await redis.eval(DELIVER, 13, prefix + ':broadcast-events', f'engine:{self.station}:in',
                     prefix + ':segment-states', prefix + ':segment-history:' + segment_id,
                     prefix + ':request-states', prefix + ':request-history:' + request_id,
                       prefix + ':track-plan', prefix + ':intro-tracks',
                     prefix + ':corner-pending', prefix + ':current-corner',
+                    prefix + ':vote-pending', prefix + ':votes', prefix + ':current-vote',
                     event_id, body, request_id)
             # story_id is the single-story form written before v2; outbox rows can outlive a deploy
             for story in event.get('story_ids') or ([event['story_id']] if event.get('story_id') else []):

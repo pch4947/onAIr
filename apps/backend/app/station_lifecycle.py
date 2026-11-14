@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 from .first_song import ensure_first_song_task
 from .streaming.hls import HlsPublisher
+from .votes import VOTE_KEYS
 
 log = logging.getLogger(__name__)
 UPDATE = """
@@ -174,7 +175,7 @@ class StationLifecycle:
         # Keep segment/request histories, personas, original audio and VOD. Archive live lists.
         keys = [prefix + ':' + name for name in (
             'queue', 'playlist', 'playlist-order', 'track-plan', 'tracks', 'intro-tracks',
-            'music-submissions', 'corner-pending', 'current-corner', 'stories-sent')]
+            'music-submissions', 'corner-pending', 'current-corner', 'stories-sent') + VOTE_KEYS]
         # The stopped engine's pending station.closed must never stop the next instance.
         # Engine absence and drained output are checked before rotating consumer groups.
         keys += [f'engine:{self.sid}:in', f'engine:{self.sid}:out']

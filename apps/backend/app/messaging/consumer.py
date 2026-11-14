@@ -9,7 +9,7 @@ import uuid
 
 from redis.exceptions import RedisError, ResponseError
 
-from .contracts import CornerChanged, Segment, StationStarted, StationRejected, decode, validate_audio
+from .contracts import CornerChanged, Segment, StationStarted, StationRejected, VoteOpen, decode, validate_audio
 from ..board_stories import StoryFeed
 from ..first_song import enqueue_first_song
 from ..stations import StationStore
@@ -173,6 +173,10 @@ class EngineConsumer:
                 if raw and self.state is not None:
                     await enqueue_first_song(self.state, json.loads(raw))
                 await StoryFeed(self.redis, self.settings.station_id).offer_recent()
+        elif isinstance(event, VoteOpen):
+            # Like corner.changed: opened when its segment starts playing (journal.DELIVER).
+            await self.redis.hset(self.prefix + ':vote-pending', event.segment_id,
+                                  json.dumps(event.model_dump(), ensure_ascii=False))
         elif isinstance(event, CornerChanged):
             # The engine schedules ahead of the broadcast; this waits for the segment to start playing.
             await self.redis.hset(self.prefix + ':corner-pending', event.segment_id, json.dumps(

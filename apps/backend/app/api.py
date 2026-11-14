@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from .auth import get_current_user
 from .station_runtime import StationRuntime, default_runtime, station_runtime
+from .votes import current_vote, public_vote
 from .scheduler import decide_next_segment
 from .requests import IdempotencyConflict
 
@@ -187,6 +188,16 @@ async def station_summary(request: Request, station) -> tuple[str, str | None, s
     return record['status'], config.get('format', 'talk'), (config.get('persona') or {}).get('dj_name')
 
 
+async def vote_summary(request: Request, station) -> dict | None:
+    try:
+        async with asyncio.timeout(3):
+            now = time.time()
+            vote = await current_vote(request.app.state.redis, station.station_id, now)
+    except (RedisError, TimeoutError):
+        return None
+    return public_vote(vote, now) if vote else None
+
+
 async def current_corner(request: Request, station) -> dict | None:
     try:
         async with asyncio.timeout(3):
@@ -216,13 +227,15 @@ async def stream_state(request: Request, response: Response,
     result = request.app.state.broadcast.snapshot()
     result["stationId"] = station.station_id
     # 둘 다 Redis 호출이라 순차 await하면 각자의 연결 타임아웃이 합산돼 버림; 동시에 실행.
-    viewers, metrics, (status, station_format, dj_name), corner = await asyncio.gather(
+    viewers, metrics, (status, station_format, dj_name), corner, vote = await asyncio.gather(
         viewer_count(station), request_metrics(station), station_summary(request, station),
-        current_corner(request, station))
+        current_corner(request, station), vote_summary(request, station))
     result['stationStatus'] = status
     result['stationFormat'] = station_format
     result['djName'] = dj_name
     result['currentCorner'] = corner if status in ('started', 'draining') else None
+    # 지금 투표(표 수는 닫힌 뒤에만). 내가 고른 선택지는 로그인 경로 /votes/current에서
+    result['currentVote'] = vote if status in ('started', 'draining') else None
     result["viewerCount"] = viewers
     result.update(metrics)
     hls = station.hls

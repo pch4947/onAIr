@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 
 from .journal import Journal
 from .fallback import write_fallback
+from ..votes import close_due
 from .ownership import StationLock
 
 from redis.exceptions import RedisError
@@ -353,6 +354,7 @@ class HlsPublisher:
             try:
                 async with asyncio.timeout(3):
                     await self.journal.flush(self.redis)
+                    await close_due(self.redis, self.settings.station_id)
                     async with self.redis.pipeline(transaction=True) as pipe:
                         pipe.lrange(self.prefix + ':queue', 0, -1)
                         pipe.hgetall(self.prefix + ':segments')
