@@ -45,7 +45,10 @@ def _ids(pool):
 
 
 def test_parse_relevant_keeps_valid_numbers_only():
-    assert parse_relevant('설명 {"relevant": [1, 3, 9, 0, true, "2"]} 끝', 3) == {1, 3}
+    assert parse_relevant('설명 {"relevant": [1, 3, 9, 0, true, "둘", 2.0, null]} 끝', 3) == {1, 3}
+    # LLM은 번호를 가끔 문자열로 준다 — 정수로 온 것과 같이 받는다 (#277)
+    assert parse_relevant('{"relevant": ["1"]}', 1) == {1}
+    assert parse_relevant('{"relevant": ["2", " 3 ", "9", "0", "-1", "1.0", ""]}', 3) == {2, 3}
     assert parse_relevant('{"relevant": []}', 3) == set()
     for bad in ("관련 없음", '{"result": [1]}', "[1, 2]"):
         with pytest.raises(ValueError):

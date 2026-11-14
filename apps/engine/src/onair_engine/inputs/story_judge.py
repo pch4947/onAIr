@@ -44,8 +44,19 @@ def build_prompt(topic: str, stories: list[ListenerRequest]) -> Prompt:
     return Prompt(system=_SYSTEM, user="\n".join(lines))
 
 
+def _number(value: object) -> int | None:
+    """사연 번호 하나. LLM은 번호를 가끔 문자열("1")로 준다 — 버리면 관련 있는 사연이 무관이 된다 (#277)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdecimal():
+        return int(value.strip())
+    return None
+
+
 def parse_relevant(text: str, count: int) -> set[int]:
-    """관련 있는 사연 번호(1부터). 범위 밖 번호는 버린다. 해석할 수 없으면 ValueError."""
+    """관련 있는 사연 번호(1부터). 범위 밖 번호와 번호가 아닌 값은 버린다. 해석할 수 없으면 ValueError."""
     match = _JSON_RE.search(text)
     if not match:
         raise ValueError("JSON이 없습니다")
@@ -53,7 +64,7 @@ def parse_relevant(text: str, count: int) -> set[int]:
     numbers = data.get("relevant") if isinstance(data, dict) else None
     if not isinstance(numbers, list):
         raise ValueError("relevant 배열이 없습니다")  # noqa: TRY004 — 호출자는 ValueError 하나로 받는다
-    return {n for n in numbers if isinstance(n, int) and not isinstance(n, bool) and 1 <= n <= count}
+    return {n for value in numbers if (n := _number(value)) is not None and 1 <= n <= count}
 
 
 def dummy_judgement_json(prompt: Prompt) -> str:
