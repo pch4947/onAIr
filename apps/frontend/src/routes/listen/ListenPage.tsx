@@ -23,7 +23,7 @@ import {
   BackIcon, EmojiIcon, MessageIcon, MusicNoteIcon, PauseIcon, PlayIcon, ReplaySaveIcon, SendIcon, SongRequestAddIcon,
   ViewIcon, VolumeIcon,
 } from '@/routes/listen/icons'
-import { STATUS_VARIANT, STATUS_VARIANT_CLASS } from '@/routes/listen/requestStatus'
+import { STATUS_VARIANT_CLASS, statusLabel, statusNote, statusVariant } from '@/routes/listen/requestStatus'
 import { STATION_INFO } from '@/routes/listen/mock'
 import type { ConnectionStatus } from '@/realtime/client'
 import type { StreamStatus } from '@/shared/types'
@@ -143,6 +143,7 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
   const chatMessages = allRequests.map((item) => ({
     id: item.id,
     author: item.mine ? '나' : (item.listenerName || '익명'),
+    mine: Boolean(item.mine),
     text: item.prompt,
     kind: item.kind,
     status: item.status,
@@ -397,9 +398,9 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
                         <span className="shrink-0">님의 신청곡</span>
                       </span>
                       <span
-                        className={`shrink-0 rounded-xl px-2 py-0.5 text-[10px] font-semibold text-white ${STATUS_VARIANT_CLASS[message.kind === 'song_request' && message.status === 'published' ? 'queued' : STATUS_VARIANT[message.status] ?? 'queued']}`}
+                        className={`shrink-0 rounded-xl px-2 py-0.5 text-[10px] font-semibold text-white ${STATUS_VARIANT_CLASS[statusVariant(message.kind, message.status)]}`}
                       >
-                        {message.status.toUpperCase()}
+                        {statusLabel(message.kind, message.status)}
                       </span>
                     </div>
                     {message.trackTitle ? (
@@ -422,6 +423,9 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
                     ) : (
                       <p className="text-text">{message.text}</p>
                     )}
+                    {message.mine && statusNote(message.kind, message.status) && (
+                      <p className="text-[10px] text-text-muted">{statusNote(message.kind, message.status)}</p>
+                    )}
                   </li>
                 ) : message.kind === 'message' ? (
                   <li
@@ -435,12 +439,15 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
                         <span className="shrink-0">님의 사연</span>
                       </span>
                       <span
-                        className={`shrink-0 rounded-xl px-2 py-0.5 text-[10px] font-semibold text-white ${STATUS_VARIANT_CLASS[STATUS_VARIANT[message.status] ?? 'queued']}`}
+                        className={`shrink-0 rounded-xl px-2 py-0.5 text-[10px] font-semibold text-white ${STATUS_VARIANT_CLASS[statusVariant(message.kind, message.status)]}`}
                       >
-                        {message.status.toUpperCase()}
+                        {statusLabel(message.kind, message.status)}
                       </span>
                     </div>
                     <p className="wrap-break-word text-text">{message.text}</p>
+                    {message.mine && statusNote(message.kind, message.status) && (
+                      <p className="text-[10px] text-text-muted">{statusNote(message.kind, message.status)}</p>
+                    )}
                   </li>
                 ) : (
                   <li key={message.id} className="flex items-baseline gap-1.5">
