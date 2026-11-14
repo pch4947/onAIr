@@ -33,6 +33,9 @@ const STATUS_LABEL: Record<string, string> = {
   requested: '접수', screened: '안전 검사 통과', queued: '받은편지함·후보 풀에서 대기', generating: '멘트에 들어감 (생성 중)',
   generated: '멘트 생성됨', mixing: '송출 준비', published: '방송에 나감', played: '방송됨',
   rejected: '안전 검사 탈락', failed: '처리 실패', expired: '선택되지 못하고 만료',
+  // 계약 v2 (10.4절)
+  pooled: '채팅 후보 풀에 들어감', inboxed: '받은편지함에서 대기', collected: '투표로 수집됨', held: '곡 끝날 때까지 보류',
+  not_on_air: '방송 미반영 (이 형식)', selected: '멘트에 들어감 (생성 중)', reflected: '방송에 나감', cancelled: '취소됨',
 }
 
 function quote(text: string | null | undefined, max = 24) {
@@ -97,7 +100,7 @@ export function describeInputChange(request: RequestRecord): LogEntry {
     // 생성이 실패하면 상태가 대기로 되돌아갈 수 있어 같은 상태가 두 번 찍힐 수 있다
     id: `r-${request.id}-${request.status}-${at}`,
     at,
-    tone: request.status === 'rejected' || request.status === 'expired' ? 'muted' : 'input',
+    tone: ['rejected', 'expired', 'not_on_air', 'cancelled'].includes(request.status) ? 'muted' : 'input',
     title: `${kind} ${quote(body)} → ${STATUS_LABEL[request.status] ?? request.status}`,
   }
 }
