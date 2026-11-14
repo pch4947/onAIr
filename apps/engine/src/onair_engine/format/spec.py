@@ -26,8 +26,9 @@ class Mode(StrEnum):
 InputKind = Literal["chat", "message", "board_story", "song_request", "vote"]
 # 단계가 소비하는 항목의 출처 — corners/run.py MaterialSources가 공급한다
 # talk_point는 이야기 단계의 말할 거리 하나 — 채팅, 다시 꺼낼 청취자 이야기, 갈래의 말할 거리 순 (scheduler가 공급)
+# vote는 투표를 열 고민, vote_wait는 결과를 기다리는 동안의 이야기, vote_result는 결과 공개 (inputs/votes.py)
 ItemSource = Literal["track", "next_track", "news", "covered_news", "board_story", "message", "vote",
-                     "talk_point"]
+                     "vote_wait", "vote_result", "talk_point"]
 
 # 채팅을 인용할 수 있는 모드
 QUOTABLE = (Mode.QUOTE, Mode.STEER)

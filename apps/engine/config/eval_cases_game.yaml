@@ -1,0 +1,53 @@
+# DJ 대 청취자 코너 평가 사례 (onair-eval --cases config/eval_cases_game.yaml, #279).
+# 라운드 다섯 개를 방송 순서대로 만든다: 고민 제시(game_ask) → 투표를 기다리는 이야기(game_talk) → 결과 공개(game_reveal).
+# 대본을 읽고 볼 것:
+#   - 결과 공개 전에 DJ의 선택이나 까닭이 새지 않는가 (고민 제시, 기다리는 이야기)
+#   - 결과 공개가 표 수를 적힌 숫자 그대로 말하는가, 누가 이겼는지와 점수가 맞는가
+#   - 표가 없거나(no_votes) 결과를 못 받은(late) 라운드에서 숫자를 지어내지 않는가
+# 고민과 채팅은 시나리오(config/scenarios)의 것과 겹치지 않게 썼다. 시나리오는 고친 뒤의 검증에 쓴다.
+topic: 주말 아침 보내는 법
+guide: 채팅은 언제든 편하게 보내 주세요.
+
+sequence:
+  - opening_greeting
+  # 1 — DJ와 청취자 다수의 선택이 같다 (match)
+  - game_ask
+  - game_talk
+  - game_talk+chat
+  - game_talk
+  - game_reveal
+  # 2 — 선택이 갈린다 (mismatch)
+  - game_ask
+  - game_talk+chat
+  - game_talk
+  - game_reveal
+  # 3 — 표가 똑같이 갈린다 (tie)
+  - game_ask
+  - game_talk
+  - game_reveal
+  # 4 — 표가 없다 (no_votes)
+  - game_ask
+  - game_talk
+  - game_reveal
+  # 5 — 결과를 받지 못했다 (late)
+  - game_ask
+  - game_talk
+  - game_reveal
+  - game_final
+
+# counts는 [첫째 선택지 표, 둘째 선택지 표]. 없으면 결과를 받지 못한 라운드다
+dilemmas:
+  - {question: "주말 아침에는 일찍 일어나는 게 좋을까요, 늦잠을 자는 게 좋을까요?", options: [일찍 일어나기, 늦잠 자기],
+     pick: 1, reason: "주말만큼은 알람 없이 눈을 뜨고 싶어서요.", counts: [4, 11]}
+  - {question: "주말 아침밥은 집에서 차려 먹을까요, 나가서 사 먹을까요?", options: [집에서, 나가서],
+     pick: 0, reason: "잠옷 차림으로 먹는 아침이 제일 편해서요.", counts: [3, 9]}
+  - {question: "주말 아침 산책은 혼자가 좋을까요, 누군가와 함께가 좋을까요?", options: [혼자, 함께],
+     pick: 0, reason: "아무 말 없이 걷는 시간이 좋아서요.", counts: [6, 6]}
+  - {question: "주말 아침 음료는 커피일까요, 차일까요?", options: [커피, 차],
+     pick: 1, reason: "천천히 우러나는 걸 기다리는 게 좋아서요.", counts: [0, 0]}
+  - {question: "주말 아침에는 밀린 집안일부터 할까요, 일단 쉴까요?", options: [집안일부터, 일단 쉬기],
+     pick: 1, reason: "쉬고 나야 손이 움직여서요."}
+
+chats:
+  - {id: sleep_in, body: "저는 무조건 늦잠이에요", type: on_topic}
+  - {id: eat_out, body: "주말엔 브런치 먹으러 나가야죠", type: on_topic}

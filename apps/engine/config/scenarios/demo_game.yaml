@@ -1,0 +1,27 @@
+# DJ 대 청취자 코너 (CORNER_DESIGN 7.6절, #279).
+# DJ가 양자택일 고민을 내면 청취자가 투표하고, DJ의 선택과 청취자 다수의 선택이 같은지 겨룬다.
+# 고민 세 개를 끝까지(결과 공개까지) 하는지, 투표 창이 열려 있는 동안 방송이 비지 않는지를 본다.
+# 가짜 백엔드가 고민을 소개하는 멘트의 재생 시작에 창을 열고, 창이 닫히면 가짜 표를 세어 결과를 보낸다.
+# 곡은 20초로 줄였다 — 코너가 방송 시간 안에 한 번은 끝까지 가게 하려는 것이다.
+name: demo_game
+description: DJ 대 청취자 코너에서 투표 세 번을 결과 공개까지 하고, 창이 열린 동안 방송이 비지 않는지 본다.
+station:
+  format: talk
+  corners: [dj_vs_listeners]
+  intensity: mid
+  topic: 겨울 간식
+  # 엔딩은 남은 시간이 5분 30초보다 적어지면 시작한다 — 코너(약 5분)가 그 전에 끝나게 넉넉히 둔다
+  broadcast_minutes: 13
+sim:
+  vote_people: 12
+tracks:
+  - {title: 첫눈 오는 밤, artist: 가상의 가수, sec: 20}
+  - {title: 새벽 버스, artist: 모의 밴드, sec: 20}
+  - {title: 따뜻한 차 한 잔, artist: 시뮬레이션 트리오, sec: 20}
+inputs:
+  # 투표 창이 열린 동안의 채팅 — 코너의 계약(chat: quote)대로 DJ 이야기에 인용된다
+  - {at: "1:10", kind: chat, who: phone, body: "저는 무조건 꼬리부터예요", id: side_chat}
+expect:
+  - {type: min_vote_rounds, value: 3, note: 투표 세 번을 결과 공개까지 한다}
+  - {type: max_silence_sec, value: 5, note: 투표 창이 열린 동안 방송이 5초 넘게 비지 않는다}
+  - {type: max_fallback, value: 0, note: 대체 멘트 없음}

@@ -19,6 +19,7 @@ from .domain import ListenerRequest, RequestState, StationConfig, StationProfile
 from .format import Clock, load_format
 from .glue import GlueBank
 from .inputs.classify import keywords
+from .inputs.dilemmas import DilemmaPlan
 from .inputs.inbox import MessageInbox
 from .inputs.router import BOARD_STORY
 from .inputs.rules import load_chat_rules
@@ -69,6 +70,10 @@ class EngineSettings:
     # 켜면 corner.changed에 형식(format)을 싣는다 — 방송 중 형식 전환 때 화면이 새 형식의 첫 멘트에 맞춰 바뀐다 (#260).
     # 백엔드가 이 필드를 받게 배포된 뒤에 켠다: 그 전에는 모르는 필드라 이벤트째 격리된다
     emit_corner_format: bool = False
+    # 켜면 DJ 대 청취자 코너의 투표를 연다 (vote.open, 계약 10.8절, #279). 백엔드가 vote.open을 받고
+    # vote.result를 돌려주게 배포된 뒤에 켠다 — 꺼져 있으면 그 코너는 지금처럼 주제 토크로 대체된다
+    emit_votes: bool = False
+    vote_window_sec: float = 60.0  # 투표 창 길이 — 기준 세그먼트의 재생 시작부터 [예시]
     # 뉴스 피드 읽기를 바꿔 끼운다 (URL → 바이트). 시나리오 실행기와 테스트가 네트워크 없이 돌릴 때 쓴다
     rss_fetch: Callable[[str], bytes] | None = None
     # 엔진→백엔드 이벤트의 계약 버전. 2면 segment.submitted에 input_refs·reflection_levels를, request.state에
@@ -81,6 +86,10 @@ class EngineSettings:
     api_host: str = "127.0.0.1"
     api_port: int = 8100
     draft_timeout_sec: float = 30.0  # persona 초안 생성 상한 — 응답 목표는 15초 [예시]
+
+
+# 방송 하나에 만들어 두는 투표 고민 수 — 코너 한 번에 세 개를 쓴다. 두 번째 진입에는 남은 것만 쓴다 [예시]
+_DILEMMA_COUNT = 5
 
 
 class StationRejected(Exception):
@@ -174,6 +183,9 @@ class StationEngine:
         self.story_judge = StoryJudge(llm, self.topic, self.sources.stories, telemetry=self.telemetry)
         self._llm = llm
         self.topic_plan = self._make_topic_plan(fmt)
+        self.sources.votes.window_sec = settings.vote_window_sec
+        self._dilemma_task: asyncio.Task | None = None  # 투표 고민 만들기 — 방송에 한 번
+        self._dilemmas_planned = False
         self.glue = GlueBank(tts=tts, audio_root=audio_root, station_id=config.station_id,
                              profile=config.profile, fmt=fmt, safety=safety)
         self.scheduler = Scheduler(
@@ -234,11 +246,27 @@ class StationEngine:
             telemetry=self.telemetry,
         )
 
+    def _plan_dilemmas(self, fmt, corners: list[str] | None) -> None:
+        """본 코너에 투표 코너가 있으면 고민을 뒤에서 만든다 (#279). 방송에 한 번만 만든다.
+
+        끝나기 전에 그 코너의 차례가 오면 고민이 없어 주제 토크로 대체되고, 다음 차례부터 열린다.
+        """
+        mains = corners or fmt.default_main or fmt.host_corners
+        if (not self.settings.emit_votes or self._dilemmas_planned
+                or not any(fmt.corner(name).requires.get("vote") for name in mains)):
+            return
+        self._dilemmas_planned = True
+        plan = DilemmaPlan(self._llm, self.topic, self._profile, count=_DILEMMA_COUNT,
+                           violates=self._safety.check_l2, on_ready=self.sources.votes.add,
+                           telemetry=self.telemetry)
+        self._dilemma_task = asyncio.create_task(plan.run())
+
     async def run(self, max_segments: int | None = None) -> None:
         # 수집은 사전 렌더링과 동시에 시작한다 — 방송 시작을 피드 시간만큼 더 늦추지 않는다
         poller = self._poller = asyncio.create_task(self.rss.run()) if self.rss.feeds else None
         # 갈래 계획도 기다리지 않는다 — 오프닝과 첫 곡이 나가는 동안 끝나면 첫 주제 토크부터 쓴다
         self._plan_task = asyncio.create_task(self.topic_plan.run()) if self.topic_plan else None
+        self._plan_dilemmas(self._fmt, self.config.corners)
         judge: asyncio.Task | None = None
         try:
             # 접착 요소는 방송 시작 전에 이 스테이션의 보이스로 사전 렌더링한다 (설계 문서 4.5)
@@ -260,7 +288,8 @@ class StationEngine:
             await self.scheduler.run(self._stop, max_segments=max_segments)
         finally:
             # 방송 중 형식 전환으로 폴링과 갈래 계획이 바뀌었을 수 있다 — 지금 것을 멈춘다
-            tasks = [t for t in (self._poller, self._plan_task, judge, self._glue_task) if t is not None]
+            tasks = [t for t in (self._poller, self._plan_task, judge, self._glue_task, self._dilemma_task)
+                     if t is not None]
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -409,12 +438,22 @@ class StationEngine:
             self.topic_plan = plan
             self._plan_task = asyncio.create_task(plan.run())
         self._fmt = fmt
+        self._plan_dilemmas(fmt, corners)
         self._use_glue(glue)
         self.scheduler.switch_format(FormatSwitch(
             fmt=fmt, clock=clock, intensity=fmt.intensity[self.config.intensity], rss=rss,
             corners=corners, news_sections=sections, topic_plan=plan,
             ready=rss.ready if rss.feeds else None))
         return True
+
+    def on_vote_result(self, payload: dict) -> None:
+        """투표 창이 닫혔다 (계약 10.8절 vote.result) — 결과 공개 멘트의 소재가 된다."""
+        vote_id, counts = payload.get("vote_id"), payload.get("counts")
+        if (not isinstance(vote_id, str) or not isinstance(counts, dict)
+                or not all(isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool) and v >= 0
+                           for k, v in counts.items())):
+            raise ValueError(f"vote.result 형식 오류: {payload!r}"[:200])
+        self.scheduler.on_vote_result(vote_id, counts)
 
     def _reject_format(self, reason: str, detail: str) -> bool:
         logger.warning("FORMAT_REJECTED %s %s: %s", self.config.station_id, reason, detail)

@@ -284,6 +284,8 @@ class EngineManager:
             await engine.on_persona_changed(payload, voice_known=self.voice_known)
         elif event_type == "station.format_changed":  # 형식 전환 (#260)
             engine.on_format_changed(payload)
+        elif event_type == "vote.result":  # 투표 창이 닫혔다 (#279)
+            engine.on_vote_result(payload)
         elif event_type == "station.closed":
             engine.stop()  # 방송 태스크가 끝나면 _run_station이 방을 정리한다
         elif event_type:

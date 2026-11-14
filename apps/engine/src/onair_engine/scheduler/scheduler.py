@@ -51,6 +51,7 @@ from ..inputs.router import BOARD_STORY, CHAT, MESSAGE, SONG_REQUEST, normalize_
 from ..inputs.rules import ChatRules
 from ..inputs.selector import RELEVANCE, QuoteSelector
 from ..inputs.topic_plan import NEW, Angle, TopicPlan
+from ..inputs.votes import PENDING, VoteRound, view
 from ..pipeline.pipeline import GenerationPipeline
 from ..pipeline.tts import TtsClient
 from ..sources.rss import RssCollector
@@ -70,6 +71,7 @@ _BACKEND_REPORT_TTL_SEC = 30.0
 _MAX_EMPTY_CORNERS = 20
 _NO_MATERIAL_SLEEP_SEC = 3.0
 _WAIT = object()  # _next_planned: 낼 수 있는 단계가 지금은 없다
+_PENDING = object()  # _next_planned: 지금 코너가 투표 결과를 기다린다 — 곧 다시 본다
 # v1 계약은 세그먼트당 요청 하나(request_ref)만 싣는다 — 참여 강도가 2여도 1건이고, 주 소재가 있는 멘트에는
 # 채팅을 함께 싣지 못한다. v2로 보낼 때(input_refs)만 여러 건을 싣는다 (#267)
 _V1_QUOTES_PER_SEGMENT = 1
@@ -371,6 +373,7 @@ class Scheduler:
     def on_segment_started(self, segment_id: str, started_at: float) -> None:
         """재생 시작 확인 — 인용이 들어 있으면 반영 확정 (CORNER_DESIGN 9.3, 9.4절). 재전달은 무시한다."""
         self._unaired.pop(segment_id, None)
+        self.sources.votes.started(segment_id, started_at)  # 투표를 여는 멘트면 창이 이때 열린다
         if not self.timeline.sync_started(segment_id, started_at):
             return
         quoted = self._quoted.pop(segment_id, None)
@@ -489,10 +492,17 @@ class Scheduler:
                 self.telemetry.log_decision(ctx, Decision(action="wait"))
                 await asyncio.sleep(_IDLE_SLEEP_SEC)
                 continue
+            # 투표 창이 열린 동안의 이야기는 그 멘트가 방송에 나갈 시각으로 창을 본다 (#279)
+            self.sources.votes.queued_until = ctx.now + ctx.generated_buffer_sec
             planned = self._deferred or self._next_planned(ctx)
             if planned is None:  # 엔딩까지 편성을 마쳤다 — 남은 생성이 끝나면 종료
                 self.telemetry.log_decision(ctx, Decision(action="idle"))
                 break
+            if planned is _PENDING:  # 투표 창이 닫히길 기다린다 (#279) — 그동안 만든 멘트가 방송을 잇는다
+                self.telemetry.log_decision(ctx, Decision(action="wait", corner_type=self.current_corner,
+                                                          step="game_reveal"))
+                await asyncio.sleep(_IDLE_SLEEP_SEC)
+                continue
             if planned is _WAIT:  # 진입할 수 있는 코너가 없다 — 소재(곡 등)가 들어오길 기다린다
                 self.telemetry.log_decision(ctx, Decision(action="no_material"))
                 await asyncio.sleep(_NO_MATERIAL_SLEEP_SEC)
@@ -588,6 +598,8 @@ class Scheduler:
                 self.telemetry.log_corner(entry.corner.corner_type, entry.label, "enter",
                                           self._produced_ms, entry.corner.title)
             planned = self._run.next_step()
+            if planned is PENDING:
+                return _PENDING
             if planned is not None:
                 if planned.step.kind == "glue" and self.glue.get(
                         planned.corner.corner_type, planned.step.glue) is None:
@@ -729,6 +741,7 @@ class Scheduler:
             self._next_pub = self._seq
         self._sem = asyncio.Semaphore(self.max_concurrent)
         self._steer_pending = False
+        self.sources.votes.abandon()  # 진행 중인 투표 라운드를 접는다 — 열린 투표의 결과는 받지 않는다
         if self._deferred is not None:  # 만들 때를 기다리던 곡 소개 — 곡을 되돌린다
             self.sources.tracks.put_back(self._deferred.items[0])
             self._deferred = None
@@ -801,6 +814,15 @@ class Scheduler:
         elif step.kind == "news_recap":
             material.extra["covered"] = list(self.sources.covered_news)
             self.sources.covered_news.clear()  # 다음 순환은 새로 센다
+        elif step.kind == "game_final":
+            material.extra["score"] = dict(self.sources.votes.score)
+        if step.items in ("vote", "vote_wait", "vote_result"):
+            round_: VoteRound = planned.items[0]["round"]
+            if step.items == "vote_result":  # 결과를 공개한다 — 점수는 이 멘트를 만들기 전에 매긴다
+                self.sources.votes.settle()
+                self.telemetry.log_vote_result(round_, self.sources.votes.score)
+            material.items = [view(round_, self.sources.votes.score)]
+            material.extra["round"] = round_
         point = planned.items[0] if step.items == "talk_point" else None
         if point is not None:
             material.items = []
@@ -1112,6 +1134,7 @@ class Scheduler:
                     return
                 if sub is None:  # L1/L2 REJECT — 인용한 입력 때문일 수 있다
                     self._put_back_track(job)
+                    self._drop_round(job, requeue=False)  # 걸린 고민은 다시 쓰지 않는다
                     for req in inputs:
                         await self._transition(req, RequestState.REJECTED)  # F-15
                     return
@@ -1140,6 +1163,7 @@ class Scheduler:
             sub = None
             if seq not in self._abandoned or seq in self._settling:
                 self._put_back_track(job)
+                self._drop_round(job)
                 for req in inputs:
                     if req.state == RequestState.GENERATING:
                         await self._requeue_or_reject(req, job)
@@ -1176,12 +1200,19 @@ class Scheduler:
                 job.provider_failed = True
                 await self._requeue_or_reject(req, job)
 
+    def _drop_round(self, job: GenerationJob, *, requeue: bool = True) -> None:
+        """고민을 소개하는 멘트가 나가지 못했다 — 그 라운드를 접는다. 남은 단계(이야기·결과 공개)는 건너뛴다."""
+        votes = self.sources.votes
+        if job.step == "game_ask" and votes.active is not None and votes.active is job.material.extra.get("round"):
+            votes.abandon(requeue=requeue)
+
     async def _take_back(self, sub: SegmentSubmission, job: GenerationJob | None) -> int:
         """만들었지만 방송에 나가지 않게 된 세그먼트 — 소개하려던 곡과 인용한 입력을 되돌린다 (#259).
 
         되돌린 입력 수를 돌려준다.
         """
         self._unaired.pop(sub.id, None)
+        self.sources.votes.discarded(sub.id)  # 투표를 열 멘트였으면 그 투표는 열리지 않는다
         self.pipeline.take_aired(sub.id)
         if job is not None:
             self._put_back_track(job)
@@ -1308,7 +1339,31 @@ class Scheduler:
         self._produced_ms += sub.duration_ms + track_ms
         self._submitted += 1
         await self._announce_corner(sub)
+        await self._open_vote(sub, job)
         await self.transport.publish_segment(sub)
+
+    async def _open_vote(self, sub: SegmentSubmission, job: GenerationJob | None) -> None:
+        """고민을 소개하는 멘트를 제출하기 전에 투표를 알린다 — 백엔드가 그 멘트의 재생 시작에 창을 연다 (계약 10.8절)."""
+        round_ = job.material.extra.get("round") if job is not None and job.step == "game_ask" else None
+        if round_ is None:
+            return
+        votes = self.sources.votes
+        if job.provider_failed or sub.kind == SegmentKind.FILLER:  # 고민이 방송에 나가지 않았다 — 투표를 열지 않는다
+            if votes.active is round_:
+                votes.abandon()
+            return
+        if not votes.submitted(round_, sub.id, time.time()):
+            return
+        dilemma = round_.dilemma
+        await self.transport.notify_station("vote.open", {
+            "vote_id": round_.vote_id, "kind": "game", "question": dilemma.question,
+            "options": list(dilemma.options), "segment_id": sub.id, "window_sec": int(votes.window_sec),
+        })
+        self.telemetry.log_vote_open(round_)
+
+    def on_vote_result(self, vote_id: str, counts: dict[str, int]) -> None:
+        """vote.result — 진행 중인 라운드의 것만 받는다. 버린 투표와 재전달은 무시한다 (계약 10.8절)."""
+        self.sources.votes.result(vote_id, counts)
 
 
 def _reflection_level(req: ListenerRequest, job: GenerationJob) -> int:
