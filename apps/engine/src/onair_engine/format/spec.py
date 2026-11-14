@@ -111,6 +111,8 @@ class FormatSpec(BaseModel):
     guide: str = ""  # 오프닝의 참여 방법 안내 — 형식의 계약에서 정한 고정 문장
     opening: str = "opening"
     closing: str = "closing"
+    # 방송 중에 이 형식으로 바꿔 들어올 때 먼저 들어갈 코너 (#260). 없으면 순환의 첫 코너부터다
+    entry_corner: str | None = None
     cycle: list[str] = Field(min_length=1)
     host_corners: list[str] = Field(default_factory=list)  # $main 후보
     default_main: list[str] = Field(default_factory=list)  # 호스트가 고르지 않았을 때 (계약 v2 기본값과 같게)
@@ -129,6 +131,7 @@ class FormatSpec(BaseModel):
                  *(c for c in self.cycle if not c.startswith("$")),
                  *(c.split(":", 1)[1] for c in self.cycle if c.startswith("$section:"))]
         names += [c.fallback for c in self.corners.values() if c.fallback]
+        names += [self.entry_corner] if self.entry_corner else []
         missing = sorted({n for n in names if n not in self.corners})
         if missing:
             raise ValueError(f"정의되지 않은 코너: {missing}")

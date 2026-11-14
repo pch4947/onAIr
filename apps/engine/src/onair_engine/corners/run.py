@@ -110,6 +110,10 @@ class MaterialSources:
         # 이야기 단계의 말할 거리 — 채팅 풀·다시 꺼낼 이야기·갈래를 아는 편성 관리자가 채운다. 없으면 이야기 단계는 건너뛴다
         self.talk_points: Callable[[CornerRun], dict | None] | None = None
 
+    def use_rss(self, rss: RssCollector) -> None:
+        """방송 중에 형식이 바뀌어 뉴스 소재가 바뀐다 (#260). 이미 전한 기사 기록은 그대로 둔다."""
+        self._rss = rss
+
     def count(self, source: str, section: str | None = None) -> int:
         if source in ("track", "next_track"):
             return 1 if self.tracks.peek() else 0

@@ -302,10 +302,27 @@ class Telemetry:
                     reason=reason, detail=detail)
         self._db.commit()
 
+    def log_format_switch(self, before: str, after: str, dropped: int) -> None:
+        """방송 중 형식 전환 (#260) — 그 뒤의 코너 기록은 새 형식의 것이다."""
+        self._db.execute(
+            "INSERT INTO station_log VALUES (?,?,?,?)",
+            (self.station_id, time.time(), "station.format_changed",
+             json.dumps({"before": before, "after": after}, ensure_ascii=False)),
+        )
+        summary = f"형식 전환 · {before} → {after}" + (f" · 만들던 멘트 {dropped}개 버림" if dropped else "")
+        self._event("station", summary, event="format_changed", before=before, after=after, dropped=dropped)
+        self._db.commit()
+
+    def log_format_rejected(self, reason: str, detail: str) -> None:
+        """받아들이지 않은 형식 전환 — 이전 형식으로 계속 방송한다. 패널에만 남긴다."""
+        self._event("station", f"형식 전환 거절 · {detail}", event="format_rejected",
+                    reason=reason, detail=detail)
+        self._db.commit()
+
     def log_glue(self, count: int, elapsed_sec: float, error: str | None = None) -> None:
-        """페르소나 전환 뒤 연결 멘트를 새 목소리로 다시 합성한 결과 — 패널에만 남긴다."""
+        """페르소나·형식 전환 뒤 연결 멘트를 다시 합성한 결과 — 패널에만 남긴다."""
         summary = (f"연결 멘트 합성 실패 → 연결 멘트 없이 진행 ({error})" if error
-                   else f"연결 멘트 {count}개 새 목소리로 합성 · {elapsed_sec:.1f}초")
+                   else f"연결 멘트 {count}개 다시 합성 · {elapsed_sec:.1f}초")
         self._event("station", summary, event="glue_failed" if error else "glue_ready",
                     count=count, elapsed_sec=round(elapsed_sec, 1))
         self._db.commit()

@@ -22,7 +22,8 @@ class ClockEntry:
 
 class Clock:
     def __init__(self, fmt: FormatSpec, *, main_corners: list[str] | None = None,
-                 sections: list[str] | None = None):
+                 sections: list[str] | None = None, skip_opening: bool = False):
+        """skip_opening — 방송 중에 형식을 바꿔 들어온 클락이다. 오프닝 없이 순환부터 시작한다 (#260)."""
         self.fmt = fmt
         self._main = list(main_corners or fmt.default_main or fmt.host_corners)
         unknown = [c for c in self._main if c not in fmt.host_corners]
@@ -32,7 +33,7 @@ class Clock:
                           for code in (sections or fmt.default_sections)]
         self._cycle = self._cycle_entries()
         self._ahead: deque[ClockEntry] = deque()  # upcoming()이 미리 꺼낸 코너
-        self._phase = "opening"  # opening → cycle → closing → done
+        self._phase = "cycle" if skip_opening else "opening"  # opening → cycle → closing → done
 
     @property
     def phase(self) -> str:

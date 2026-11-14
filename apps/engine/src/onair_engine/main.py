@@ -78,6 +78,7 @@ def load_config(path: Path) -> tuple[StationConfig, EngineSettings]:
         llm_base_url=pipe.get("llm_base_url"),
         llm_reasoning_effort=pipe.get("llm_reasoning_effort"),
         emit_corner_changed=bool(pipe.get("emit_corner_changed", False)),
+        emit_corner_format=bool(pipe.get("emit_corner_format", False)),
         tts=pipe.get("tts", "dummy"),
         tts_voice=pipe.get("tts_voice"),
         tts_cache_dir=Path(pipe["tts_cache_dir"]) if pipe.get("tts_cache_dir") else None,
