@@ -5,6 +5,7 @@ import type {
   BoardComment,
   BoardPost,
   BroadcastStateResponse,
+  CurrentVote,
   LikeStatus,
   MusicQueueResponse,
   NotificationItem,
@@ -85,6 +86,46 @@ export async function getEngineEvents(stationId: string, after?: number | null):
     throw new Error(`GET events failed: ${res.status}`)
   }
   return res.json() as Promise<{ events: EngineEvent[]; next: number | null }>
+}
+
+// 청취 화면 투표 카드 (#279). 로그인 경로라 내가 고른 선택지(mine)까지 온다
+export async function getCurrentVote(stationId: string): Promise<{ vote: CurrentVote | null }> {
+  const res = await fetch(`${API_BASE}${stationPath(stationId, '/votes/current')}`, {
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
+  })
+  if (res.status === 401) {
+    throw new Error('UNAUTHORIZED')
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status, `GET votes/current failed: ${res.status}`)
+  }
+  return res.json() as Promise<{ vote: CurrentVote | null }>
+}
+
+// 한 사람 한 표. 이미 다른 선택지로 투표했으면 409와 함께 처음 고른 선택지(mine)를 준다
+export class VoteError extends ApiError {
+  readonly mine: string | null
+
+  constructor(status: number, mine: string | null) {
+    super(status, `POST vote failed: ${status}`)
+    this.mine = mine
+  }
+}
+
+export async function castVote(stationId: string, voteId: string, option: string): Promise<{ vote_id: string; mine: string }> {
+  const res = await fetch(`${API_BASE}${stationPath(stationId, `/votes/${encodeURIComponent(voteId)}`)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getAccessToken() ?? ''}` },
+    body: JSON.stringify({ option }),
+  })
+  if (res.status === 401) {
+    throw new Error('UNAUTHORIZED')
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => null)
+    throw new VoteError(res.status, body?.detail?.mine ?? null)
+  }
+  return res.json() as Promise<{ vote_id: string; mine: string }>
 }
 
 export async function sendPresenceHeartbeat(stationId: string, clientId: string): Promise<void> {

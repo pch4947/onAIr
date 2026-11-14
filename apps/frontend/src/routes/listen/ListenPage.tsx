@@ -13,7 +13,7 @@ import {
 import { useCurrentUser } from '@/shared/useCurrentUser'
 import { randomId } from '@/shared/randomId'
 import { CornerGuide } from '@/routes/listen/CornerGuide'
-import { ExperimentSurveyModal } from '@/routes/listen/ExperimentSurveyModal'
+import { VoteCard } from '@/routes/listen/VoteCard'
 import { isUnauthorizedError, LoginExpiredNotice } from '@/routes/listen/LoginExpiredNotice'
 import { MessageModal } from '@/routes/listen/MessageModal'
 import { SongRequestModal } from '@/routes/listen/SongRequestModal'
@@ -74,7 +74,6 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
   const { stationId: routeStationId } = useParams()
   // 라우트(/listen/:stationId)나 테스트 화면이 항상 넘긴다
   const stationId = stationIdProp ?? routeStationId ?? ''
-  const [isSurveyOpen, setIsSurveyOpen] = useState(false)
   const [isSongRequestOpen, setIsSongRequestOpen] = useState(false)
   const [isMessageOpen, setIsMessageOpen] = useState(false)
   const [isEmojiPickerOpen, setIsEmojiPickerOpen] = useState(false)
@@ -357,90 +356,106 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
         <section className={`flex min-h-0 w-full flex-col gap-3 rounded-md border border-border bg-surface p-4 md:h-full md:w-[clamp(300px,28vw,360px)] md:flex-none ${testPanel ? 'flex-1 basis-0 md:basis-auto' : 'flex-1'}`}>
           <header className="flex items-center justify-between">
             <p className="text-sm font-semibold text-text">채팅</p>
-            <span className="flex items-center gap-1 text-[11px] text-text-muted">
-              <ViewIcon className="size-3" />
-              {viewerCount?.toLocaleString() ?? '-'}
-            </span>
+            <div className="flex items-center gap-2">
+              {/* 모바일은 신청곡 대기 버튼을 시청자 수 왼쪽에 둔다 (데스크톱은 입력창 아래) */}
+              <button
+                type="button"
+                onClick={() => setIsQueueOpen(true)}
+                className="flex items-center gap-1 rounded-full bg-primary px-2.5 py-1 text-[10px] font-semibold text-white md:hidden"
+              >
+                <MusicNoteIcon className="size-3" />
+                대기 {musicQueue.length}
+              </button>
+              <span className="flex items-center gap-1 text-[11px] text-text-muted">
+                <ViewIcon className="size-3" />
+                {viewerCount?.toLocaleString() ?? '-'}
+              </span>
+            </div>
           </header>
 
           <CornerGuide corner={broadcastStateQuery.data?.currentCorner} stationFormat={stationFormat} />
 
-          <ul
-            ref={chatListRef}
-            onScroll={handleChatScroll}
-            className="flex flex-1 flex-col gap-2 overflow-y-auto rounded-md bg-field-bg p-3 text-[11px] text-text"
-          >
-            {chatMessages.map((message) =>
-              message.kind === 'song_request' ? (
-                <li
-                  key={message.id}
-                  className="flex flex-col gap-1 rounded-md border border-primary/30 bg-primary/10 px-3 py-2"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="flex min-w-0 items-center gap-1 font-semibold text-primary">
-                      <MusicNoteIcon className="size-3.5 shrink-0" />
-                      <span className="truncate" title={message.author}>{message.author}</span>
-                      <span className="shrink-0">님의 신청곡</span>
-                    </span>
-                    <span
-                      className={`shrink-0 rounded-xl px-2 py-0.5 text-[10px] font-semibold text-white ${STATUS_VARIANT_CLASS[message.kind === 'song_request' && message.status === 'published' ? 'queued' : STATUS_VARIANT[message.status] ?? 'queued']}`}
-                    >
-                      {message.status.toUpperCase()}
-                    </span>
-                  </div>
-                  {message.trackTitle ? (
-                    <div className="flex items-center gap-2">
-                      {message.trackThumbnailUrl && (
-                        <img
-                          src={message.trackThumbnailUrl}
-                          alt=""
-                          referrerPolicy="no-referrer"
-                          className="size-10 shrink-0 rounded object-cover"
-                        />
-                      )}
-                      <div className="min-w-0">
-                        <p className="truncate text-text">{message.trackTitle}</p>
-                        {message.trackArtist && (
-                          <p className="truncate text-[10px] text-text-muted">{message.trackArtist}</p>
-                        )}
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="text-text">{message.text}</p>
-                  )}
-                </li>
-              ) : message.kind === 'message' ? (
-                <li
-                  key={message.id}
-                  className="flex flex-col gap-1 rounded-md border border-border bg-surface px-3 py-2"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="flex min-w-0 items-center gap-1 font-semibold text-text-muted">
-                      <MessageIcon className="size-3.5 shrink-0" />
-                      <span className="truncate" title={message.author}>{message.author}</span>
-                      <span className="shrink-0">님의 사연</span>
-                    </span>
-                    <span
-                      className={`shrink-0 rounded-xl px-2 py-0.5 text-[10px] font-semibold text-white ${STATUS_VARIANT_CLASS[STATUS_VARIANT[message.status] ?? 'queued']}`}
-                    >
-                      {message.status.toUpperCase()}
-                    </span>
-                  </div>
-                  <p className="wrap-break-word text-text">{message.text}</p>
-                </li>
-              ) : (
-                <li key={message.id} className="flex items-baseline gap-1.5">
-                  <span
-                    className="max-w-18 shrink-0 truncate font-semibold text-text-muted"
-                    title={message.author}
+          {/* 채팅 칸 — 투표가 열리면 칸 안 맨 위에 고정하고, 채팅은 그 아래에서 스크롤된다 */}
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md bg-field-bg">
+            <VoteCard stationId={stationId} userId={currentUser?.id} />
+
+            <ul
+              ref={chatListRef}
+              onScroll={handleChatScroll}
+              className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3 text-[11px] text-text"
+            >
+              {chatMessages.map((message) =>
+                message.kind === 'song_request' ? (
+                  <li
+                    key={message.id}
+                    className="flex flex-col gap-1 rounded-md border border-primary/30 bg-primary/10 px-3 py-2"
                   >
-                    {message.author}
-                  </span>
-                  <span className="min-w-0 flex-1 wrap-break-word">{message.text}</span>
-                </li>
-              ),
-            )}
-          </ul>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="flex min-w-0 items-center gap-1 font-semibold text-primary">
+                        <MusicNoteIcon className="size-3.5 shrink-0" />
+                        <span className="truncate" title={message.author}>{message.author}</span>
+                        <span className="shrink-0">님의 신청곡</span>
+                      </span>
+                      <span
+                        className={`shrink-0 rounded-xl px-2 py-0.5 text-[10px] font-semibold text-white ${STATUS_VARIANT_CLASS[message.kind === 'song_request' && message.status === 'published' ? 'queued' : STATUS_VARIANT[message.status] ?? 'queued']}`}
+                      >
+                        {message.status.toUpperCase()}
+                      </span>
+                    </div>
+                    {message.trackTitle ? (
+                      <div className="flex items-center gap-2">
+                        {message.trackThumbnailUrl && (
+                          <img
+                            src={message.trackThumbnailUrl}
+                            alt=""
+                            referrerPolicy="no-referrer"
+                            className="size-10 shrink-0 rounded object-cover"
+                          />
+                        )}
+                        <div className="min-w-0">
+                          <p className="truncate text-text">{message.trackTitle}</p>
+                          {message.trackArtist && (
+                            <p className="truncate text-[10px] text-text-muted">{message.trackArtist}</p>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-text">{message.text}</p>
+                    )}
+                  </li>
+                ) : message.kind === 'message' ? (
+                  <li
+                    key={message.id}
+                    className="flex flex-col gap-1 rounded-md border border-border bg-surface px-3 py-2"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="flex min-w-0 items-center gap-1 font-semibold text-text-muted">
+                        <MessageIcon className="size-3.5 shrink-0" />
+                        <span className="truncate" title={message.author}>{message.author}</span>
+                        <span className="shrink-0">님의 사연</span>
+                      </span>
+                      <span
+                        className={`shrink-0 rounded-xl px-2 py-0.5 text-[10px] font-semibold text-white ${STATUS_VARIANT_CLASS[STATUS_VARIANT[message.status] ?? 'queued']}`}
+                      >
+                        {message.status.toUpperCase()}
+                      </span>
+                    </div>
+                    <p className="wrap-break-word text-text">{message.text}</p>
+                  </li>
+                ) : (
+                  <li key={message.id} className="flex items-baseline gap-1.5">
+                    <span
+                      className="max-w-18 shrink-0 truncate font-semibold text-text-muted"
+                      title={message.author}
+                    >
+                      {message.author}
+                    </span>
+                    <span className="min-w-0 flex-1 wrap-break-word">{message.text}</span>
+                  </li>
+                ),
+              )}
+            </ul>
+          </div>
           {submitRequestMutation.isPending && (
             <p className="text-[11px] text-text-muted">전송 중...</p>
           )}
@@ -515,7 +530,8 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
             </form>
           </div>
 
-          <div className="flex items-center justify-between">
+          {/* 신청곡 대기·글자 수 줄은 데스크톱만 — 모바일은 대기 버튼이 채팅 머리에 있다 */}
+          <div className="hidden items-center justify-between md:flex">
             <button
               type="button"
               onClick={() => setIsQueueOpen(true)}
@@ -531,18 +547,6 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
         </section>
       </main>
 
-      {/* 테스트 방송은 실험 설문 대상이 아니다 */}
-      {!testPanel && (
-        <button
-          type="button"
-          onClick={() => setIsSurveyOpen(true)}
-          className="fixed bottom-20 right-4 flex items-center gap-1.5 rounded-full bg-experiment px-3.5 py-2.5 text-[13px] font-semibold text-white shadow-lg md:bottom-8 md:right-8"
-        >
-          🧪 실험 참여
-        </button>
-      )}
-
-      {isSurveyOpen && <ExperimentSurveyModal onClose={() => setIsSurveyOpen(false)} />}
       {isSongRequestOpen && (
         <SongRequestModal
           onClose={() => setIsSongRequestOpen(false)}
