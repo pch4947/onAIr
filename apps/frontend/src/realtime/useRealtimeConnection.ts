@@ -60,7 +60,12 @@ export function useRealtimeConnection(stationId: string | undefined) {
       }),
     ]
     client.connect()
+    const wake = () => { if (document.visibilityState === 'visible') client.wake() }
+    document.addEventListener('visibilitychange', wake)
+    window.addEventListener('online', wake)
     return () => {
+      document.removeEventListener('visibilitychange', wake)
+      window.removeEventListener('online', wake)
       unsubscribes.forEach((unsubscribe) => unsubscribe())
       client.close()
     }

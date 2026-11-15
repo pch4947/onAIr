@@ -13,6 +13,10 @@ const INITIAL_BACKOFF_MS = 500
 const MAX_BACKOFF_MS = 15000
 // 서버는 20초마다 ping을 보낸다. 이만큼 아무것도 안 오면 끊긴 것으로 보고 다시 붙는다 (모바일 절전·네트워크 전환)
 const SILENCE_LIMIT_MS = 45000
+// 화면으로 돌아왔을 때 이만큼 조용했으면 소켓이 죽었을 수 있어 바로 다시 붙는다 (모바일 백그라운드)
+const STALE_ON_RETURN_MS = 25000
+// 서버가 이 코드로 닫으면(로그인 필요·없는 방송) 다시 붙어도 같으므로 멈춘다. 폴링은 원래 주기로 돈다
+const FINAL_CLOSE_CODES = new Set([4401, 4404])
 
 export class RealtimeClient {
   private url: string
@@ -24,10 +28,16 @@ export class RealtimeClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private silenceTimer: ReturnType<typeof setTimeout> | null = null
   private closedByUser = false
+  private lastMessageAt = 0
 
   constructor(url: string, getToken: () => string | null) {
     this.url = url
     this.getToken = getToken
+    // 서버가 토큰을 받아들여 hello를 보내야 연결된 것이다 — 거절(4401)이면 연결됨이 잠깐도 뜨지 않게
+    this.on('hello', () => {
+      this.backoffMs = INITIAL_BACKOFF_MS
+      this.setStatus('connected')
+    })
   }
 
   connect(): void {
@@ -39,25 +49,37 @@ export class RealtimeClient {
     socket.addEventListener('open', () => {
       // 토큰은 주소에 넣으면 서버 접근 로그에 남아서 첫 메시지로 보낸다. 내 채팅 여부(mine)를 서버가 정하는 데 쓴다
       socket.send(JSON.stringify({ type: 'auth', token: this.getToken() }))
-      this.backoffMs = INITIAL_BACKOFF_MS
-      this.setStatus('connected')
       this.watchSilence()
     })
 
     socket.addEventListener('message', (event) => {
+      this.lastMessageAt = Date.now()
       this.watchSilence()
       this.dispatch(event.data)
     })
 
-    socket.addEventListener('close', () => {
+    socket.addEventListener('close', (event) => {
       if (this.socket !== socket) return
       this.socket = null
       this.clearSilence()
       this.setStatus('disconnected')
-      if (!this.closedByUser) this.scheduleReconnect()
+      if (!this.closedByUser && !FINAL_CLOSE_CODES.has(event.code)) this.scheduleReconnect()
     })
 
     socket.addEventListener('error', () => socket.close())
+  }
+
+  // 화면 복귀·네트워크 복구 때 부른다. 끊겨서 다시 붙기를 기다리는 중이면 바로 붙고, 조용히 죽은 소켓이면 끊고 다시 붙는다
+  wake(): void {
+    if (this.closedByUser) return
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+      this.backoffMs = INITIAL_BACKOFF_MS
+      this.connect()
+    } else if (this.socket?.readyState === WebSocket.OPEN && Date.now() - this.lastMessageAt > STALE_ON_RETURN_MS) {
+      this.socket.close()
+    }
   }
 
   private watchSilence(): void {

@@ -147,40 +147,139 @@ class HubTests(unittest.IsolatedAsyncioTestCase):
         await self.settle()
         self.assertNotIn(socket, self.hub.clients)
 
+    async def test_watcher_survives_a_failing_publish(self):
+        socket = await self.joined()
+        socket.take()
+        calls = []
+        original = self.hub.publish
 
-class TokenTests(unittest.TestCase):
-    def test_auth_message_gives_user_id_and_anything_else_is_anonymous(self):
-        token = create_access_token({'email': 'a@example.com', 'id': 'u1'}, 'secret')
-        self.assertEqual(user_id_from({'type': 'auth', 'token': token}, 'secret'), 'u1')
-        self.assertIsNone(user_id_from({'type': 'auth', 'token': token}, 'other-secret'))
-        self.assertIsNone(user_id_from({'type': 'auth', 'token': None}, 'secret'))
-        self.assertIsNone(user_id_from(None, 'secret'))
+        async def flaky(before, after, skip=frozenset()):
+            calls.append(1)
+            if len(calls) == 1:
+                raise KeyError('broken entry')
+            await original(before, after, skip)
+
+        self.hub.publish = flaky
+        self.current = state(broadcast=('stopping',))
+        self.hub.poke()
+        await self.settle()
+        self.assertFalse(self.hub.task.done())
+        # 실패한 회차의 값도 기준이 됐으므로 다음 변경부터 정상으로 알린다
+        self.current = state(broadcast=('ended',))
+        self.hub.poke()
+        await self.settle()
+        self.assertEqual(socket.take(), [{'type': 'changed', 'topics': ['broadcast']}])
+
+    async def test_snapshot_failure_logs_once_and_recovers(self):
+        failing = True
+        good = self.hub.snapshot
+
+        async def snapshot():
+            if failing:
+                raise ConnectionError('redis down')
+            return await good()
+
+        self.hub.snapshot = snapshot
+        with self.assertLogs('app.realtime', level='INFO') as logs:
+            socket = await self.joined()
+            for _ in range(3):
+                self.hub.poke()
+                await self.settle()
+            self.assertEqual(socket.take(), [])  # 읽기 전에는 기준이 없어 아무것도 안 보낸다
+            failing = False
+            self.hub.poke()
+            await self.settle()
+        warnings = [line for line in logs.output if 'failed' in line]
+        self.assertEqual(len(warnings), 1)
+        self.assertTrue(any('recovered' in line for line in logs.output))
+        # 복구 뒤 막 들어온 소켓은 전체를 다시 받으라는 알림을 받는다
+        self.assertEqual(socket.take(), [{'type': 'changed', 'topics': list(ALL_TOPICS)}])
+
+    async def test_stations_do_not_share_messages(self):
+        other_hub = StationHub(SimpleNamespace(station_id='st_other'))
+        other_current = state()
+
+        async def other_snapshot():
+            return json.loads(json.dumps(other_current))
+
+        other_hub.snapshot = other_snapshot
+        here, there = await self.joined(), FakeSocket()
+        other_hub.join(there, 'u1')
+        await self.settle()
+        here.take(), there.take()
+        self.current = state([entry('only-here')])
+        self.hub.poke()
+        await self.settle()
+        self.assertEqual(len(here.take()), 1)
+        self.assertEqual(there.take(), [])
+        other_hub.leave(there)
+
+
+class FakeUsers:
+    def __init__(self, *users):
+        self.users = {user['email']: user for user in users}
+
+    async def get_by_email(self, email):
+        return self.users.get(email)
+
+
+USER = {'email': 'a@example.com', 'id': 'u1'}
+
+
+class TokenTests(unittest.IsolatedAsyncioTestCase):
+    async def test_same_rules_as_rest_login(self):
+        app = SimpleNamespace(state=SimpleNamespace(settings=SimpleNamespace(jwt_secret='secret'), users=FakeUsers(USER)))
+        token = create_access_token(USER, 'secret')
+        self.assertEqual(await user_id_from(app, {'type': 'auth', 'token': token}), 'u1')
+        # 서명이 다르거나, 토큰이 없거나, 형식이 다르거나, 계정이 지워졌으면(로그아웃한 게스트) 거절
+        self.assertIsNone(await user_id_from(app, {'type': 'auth', 'token': create_access_token(USER, 'other')}))
+        self.assertIsNone(await user_id_from(app, {'type': 'auth', 'token': None}))
+        self.assertIsNone(await user_id_from(app, {'type': 'auth', 'token': 123}))
+        self.assertIsNone(await user_id_from(app, {'type': 'hello', 'token': token}))
+        self.assertIsNone(await user_id_from(app, ['auth', token]))
+        self.assertIsNone(await user_id_from(app, None))
+        gone = create_access_token({'email': 'gone@example.com', 'id': 'u9'}, 'secret')
+        self.assertIsNone(await user_id_from(app, {'type': 'auth', 'token': gone}))
 
 
 class EndpointTests(unittest.TestCase):
     def setUp(self):
         self.app = create_app(Settings('127.0.0.1', 3000, station_id='st_ws', jwt_secret='secret'))
+        self.app.state.users = FakeUsers(USER)
         self.client = TestClient(self.app)
         station = ensure_runtimes(self.app.state)['st_ws']
         self.hub = hub_for(station)
         self.current = state([entry('r1', listener='u1')])
+        self.token = create_access_token(USER, 'secret')
 
         async def snapshot():
             return json.loads(json.dumps(self.current))
 
         self.hub.snapshot = snapshot
 
-    def test_unknown_station_is_closed(self):
+    def closed_with(self, path, first=None, raw=None):
         from starlette.websockets import WebSocketDisconnect
         with self.assertRaises(WebSocketDisconnect) as caught:
-            with self.client.websocket_connect('/ws/stations/nope') as socket:
+            with self.client.websocket_connect(path) as socket:
+                if raw is not None:
+                    socket.send_text(raw)
+                elif first is not None:
+                    socket.send_json(first)
                 socket.receive_json()
-        self.assertEqual(caught.exception.code, 4404)
+        return caught.exception.code
+
+    def test_unknown_station_is_closed_with_a_code_the_browser_sees(self):
+        self.assertEqual(self.closed_with('/ws/stations/nope'), 4404)
+
+    def test_missing_or_bad_token_is_closed_4401(self):
+        self.assertEqual(self.closed_with('/ws/stations/st_ws', {'type': 'auth', 'token': None}), 4401)
+        self.assertEqual(self.closed_with('/ws/stations/st_ws', {'type': 'auth', 'token': 'nope'}), 4401)
+        self.assertEqual(self.closed_with('/ws/stations/st_ws', raw='not json'), 4401)
+        self.assertEqual(self.hub.clients, {})
 
     def test_hello_then_full_refetch_then_live_request(self):
-        token = create_access_token({'email': 'a@example.com', 'id': 'u1'}, 'secret')
         with self.client.websocket_connect('/ws/stations/st_ws') as socket:
-            socket.send_json({'type': 'auth', 'token': token})
+            socket.send_json({'type': 'auth', 'token': self.token})
             hello = socket.receive_json()
             self.assertEqual(hello['type'], 'hello')
             self.assertAlmostEqual(hello['serverTime'], time.time(), delta=5)
@@ -191,6 +290,17 @@ class EndpointTests(unittest.TestCase):
             self.assertEqual(message['type'], 'requests')
             self.assertEqual((message['requests'][0]['status'], message['requests'][0]['mine']), ('selected', True))
         self.assertEqual(self.hub.clients, {})
+
+    def test_client_messages_after_auth_are_ignored(self):
+        with self.client.websocket_connect('/ws/stations/st_ws') as socket:
+            socket.send_json({'type': 'auth', 'token': self.token})
+            socket.receive_json(), socket.receive_json()
+            socket.send_text('garbage')
+            socket.send_bytes(b'\x00\x01')
+            socket.send_json({'type': 'auth', 'token': 'other'})
+            self.current = state([entry('r1', 'reflected', listener='u1')])
+            ensure_runtimes(self.app.state)['st_ws'].notify()
+            self.assertEqual(socket.receive_json()['requests'][0]['status'], 'reflected')
 
 
 @unittest.skipUnless(os.environ.get('ONAIR_INTEGRATION_TEST') == '1', 'Requires Redis')

@@ -40,13 +40,14 @@ class StationHub:
 
     def __init__(self, station):
         self.station = station
-        self.clients: dict[WebSocket, str | None] = {}  # 소켓 → 사용자 ID (토큰 없으면 None)
+        self.clients: dict[WebSocket, str] = {}  # 소켓 → 사용자 ID
         self.wake = asyncio.Event()
         self.task: asyncio.Task | None = None
         self.last: dict | None = None
         # 막 들어온 소켓. 다음 비교 기준을 읽은 뒤 전체를 다시 받으라고 알린다 —
         # 접속 전에 받아 둔 데이터와 비교 기준 사이에 바뀐 것을 놓치지 않게
         self.joining: set[WebSocket] = set()
+        self.failing = False  # 읽기 실패 로그를 실패가 시작될 때 한 번만 남긴다
 
     def poke(self):
         self.wake.set()
@@ -71,27 +72,36 @@ class StationHub:
         while self.clients:
             # 비교 중에 들어온 깨우기를 놓치지 않게 읽기 전에 지운다
             self.wake.clear()
+            # 한 번 실패해도 작업이 죽지 않게 한다 — 죽으면 화면은 "연결됨"인데 갱신이 멈춘다
             try:
-                current = await self.snapshot()
-            except (RedisError, TimeoutError, OSError):
-                log.warning('Realtime snapshot failed for %s; retrying', self.station.station_id)
-                current = None
-            except Exception:
-                log.exception('Realtime snapshot failed for %s', self.station.station_id)
-                current = None
-            if current is not None:
-                joined, self.joining = self.joining, set()
-                if self.last is not None:
-                    await self.publish(self.last, current, skip=joined)
-                self.last = current
-                if joined:
-                    await self.send_all(lambda _: {'type': 'changed', 'topics': list(ALL_TOPICS)}, only=joined)
+                await self.tick()
+                if self.failing:
+                    log.info('Realtime snapshot recovered for %s', self.station.station_id)
+                self.failing = False
+            except Exception as error:
+                if not self.failing:
+                    if isinstance(error, (RedisError, TimeoutError, OSError)):
+                        log.warning('Realtime snapshot failed for %s; retrying', self.station.station_id)
+                    else:
+                        log.exception('Realtime snapshot failed for %s; retrying', self.station.station_id)
+                self.failing = True
             if time.monotonic() >= next_ping:
                 await self.send_all(lambda _: {'type': 'ping', 'serverTime': time.time()})
                 next_ping = time.monotonic() + PING_SECONDS
             with contextlib.suppress(TimeoutError):
                 async with asyncio.timeout(TICK_SECONDS):
                     await self.wake.wait()
+
+    async def tick(self):
+        current = await self.snapshot()
+        joined, self.joining = self.joining, set()
+        try:
+            if self.last is not None:
+                await self.publish(self.last, current, skip=joined)
+        finally:
+            self.last = current
+            if joined:
+                await self.send_all(lambda _: {'type': 'changed', 'topics': list(ALL_TOPICS)}, only=joined)
 
     async def snapshot(self) -> dict:
         """화면이 보는 값만 모은다. 버퍼 길이처럼 계속 바뀌는 값은 넣지 않는다."""
@@ -159,37 +169,70 @@ def hub_for(station) -> StationHub:
     return station.realtime
 
 
-def user_id_from(message, secret) -> str | None:
-    """첫 메시지 {"type": "auth", "token": ...}의 토큰에서 사용자 ID를 꺼낸다. 없거나 틀리면 익명.
-    토큰을 주소(쿼리)에 넣으면 접근 로그에 남아서 메시지로 받는다."""
-    if not isinstance(message, dict) or message.get('type') != 'auth' or not message.get('token'):
+# 닫는 코드 — 프론트는 이 둘이면 다시 붙지 않는다
+CLOSE_UNAUTHORIZED = 4401
+CLOSE_NOT_FOUND = 4404
+
+
+def token_from(message) -> str | None:
+    """첫 메시지 {"type": "auth", "token": ...}. 토큰을 주소(쿼리)에 넣으면 접근 로그에 남아서 메시지로 받는다."""
+    if not isinstance(message, dict) or message.get('type') != 'auth':
+        return None
+    token = message.get('token')
+    return token if isinstance(token, str) and token else None
+
+
+async def user_id_from(app, message) -> str | None:
+    """REST(get_current_user)와 같은 기준 — 서명·만료가 맞고 계정이 아직 있어야 한다(로그아웃한 게스트는 지워진다).
+    채팅 내용은 REST에서도 로그인해야 보이므로 토큰이 없거나 틀리면 받지 않는다."""
+    token = token_from(message)
+    if token is None:
         return None
     try:
-        return jwt.decode(message['token'], secret, algorithms=[JWT_ALGORITHM]).get('uid')
+        payload = jwt.decode(token, app.state.settings.jwt_secret, algorithms=[JWT_ALGORITHM])
     except jwt.PyJWTError:
+        return None
+    if not payload.get('sub'):
+        return None
+    async with asyncio.timeout(3):
+        user = await app.state.users.get_by_email(payload['sub'])
+    return user['id'] if user else None
+
+
+async def receive_json_or_none(websocket):
+    message = await websocket.receive()
+    if message['type'] == 'websocket.disconnect':
+        raise WebSocketDisconnect(message.get('code', 1000))
+    try:
+        return json.loads(message.get('text') or '')
+    except ValueError:
         return None
 
 
 @router.websocket('/ws/stations/{station_id}')
 async def station_socket(websocket: WebSocket, station_id: str):
+    # 수락 전에 닫으면 브라우저는 닫는 코드를 못 받고(HTTP 403) 계속 다시 붙는다 — 수락한 뒤 코드를 실어 닫는다
+    await websocket.accept()
     station = ensure_runtimes(websocket.app.state).get(station_id)
     if station is None:
-        await websocket.close(code=4404)
+        await websocket.close(code=CLOSE_NOT_FOUND)
         return
-    await websocket.accept()
     hub = hub_for(station)
     try:
         try:
             async with asyncio.timeout(AUTH_WAIT_SECONDS):
-                first = await websocket.receive_json()
-        except (TimeoutError, ValueError):
-            first = None
-        user_id = user_id_from(first, websocket.app.state.settings.jwt_secret)
+                first = await receive_json_or_none(websocket)
+            user_id = await user_id_from(websocket.app, first)
+        except (TimeoutError, RedisError):
+            user_id = None
+        if user_id is None:
+            await websocket.close(code=CLOSE_UNAUTHORIZED)
+            return
         await websocket.send_json({'type': 'hello', 'serverTime': time.time()})
         hub.join(websocket, user_id)
-        # 보내기는 감시 작업이 한다. 여기서는 끊길 때까지 받기만 한다
-        while True:
-            await websocket.receive_text()
+        # 보내기는 감시 작업이 한다. 여기서는 끊길 때까지 받기만 하고 내용은 버린다(텍스트·바이너리 모두)
+        while (await websocket.receive())['type'] != 'websocket.disconnect':
+            pass
     except WebSocketDisconnect:
         pass
     finally:
