@@ -241,6 +241,35 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
     )
   }
 
+  // 방송 이름·다시듣기 저장 — 데스크톱은 방송 화면 위, 모바일은 뒤로가기 오른쪽에 같은 것을 둔다
+  const stationTitle = djName ? `${djName}의 방송` : STATION_INFO.name
+  // 테스트 방송은 다시듣기를 남기지 않는다
+  const replaySave = !testPanel && (
+    <>
+      <button
+        type="button"
+        onClick={() => stream?.sessionId && bookmarkLiveMutation.mutate(stream.sessionId)}
+        disabled={!stream?.sessionId || ended || stationStatus === 'cleaning'
+          || stationStatus === 'stopping' || bookmarkLiveMutation.isPending}
+        className="flex shrink-0 items-center gap-1 rounded-full bg-black/45 px-2.5 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
+      >
+        <ReplaySaveIcon className="size-3.5" />
+        <span className="hidden sm:inline">
+          {bookmarkLiveMutation.isPending
+            ? '저장 중...'
+            : bookmarkLiveMutation.isSuccess
+              ? '저장됨'
+              : '다시듣기 저장'}
+        </span>
+      </button>
+      {bookmarkLiveMutation.isError && (
+        <span className="text-[11px] text-danger">
+          저장 실패: {(bookmarkLiveMutation.error as Error).message}
+        </span>
+      )}
+    </>
+  )
+
   return (
     <div
       className="flex h-dvh overflow-hidden md:h-screen"
@@ -253,14 +282,24 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
         {/* 테스트 패널이 붙으면 모바일은 플레이어를 한 줄로 줄이고 로그·채팅을 반씩 나눠 한 화면에 둔다 */}
         {/* 테스트 화면(모바일): 채팅 입력 중에는 테스트 패널을 숨기고 띠만 남겨 채팅이 키보드 위 공간을 다 쓴다 */}
         <section className={`flex flex-col md:h-full md:flex-1 md:basis-auto ${testPanel ? `min-h-0 gap-2.5 md:gap-3.5 ${collapsed ? 'shrink-0' : 'flex-[3] basis-0'}` : 'shrink-0 gap-3.5'}`}>
-          <button
-            type="button"
-            onClick={() => navigate(-1)}
-            aria-label="뒤로가기"
-            className={`flex w-fit shrink-0 items-center text-text-muted ${collapsed ? 'max-md:hidden' : ''}`}
-          >
-            <BackIcon className="size-4.5" />
-          </button>
+          {/* 모바일은 뒤로가기 오른쪽에 방송 이름·다시듣기 저장·방송 종료를 둔다. 채팅 입력 중에는 줄째 숨긴다 */}
+          <div className={`flex shrink-0 items-center gap-2 ${collapsed ? 'max-md:hidden' : ''}`}>
+            <button
+              type="button"
+              onClick={() => navigate(-1)}
+              aria-label="뒤로가기"
+              className="flex w-fit shrink-0 items-center text-text-muted"
+            >
+              <BackIcon className="size-4.5" />
+            </button>
+            <div className="flex min-w-0 flex-1 items-center justify-between gap-2 md:hidden">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="truncate text-[13px] font-semibold text-text">{stationTitle}</span>
+                {replaySave}
+              </div>
+              <StationStopButton stationId={stationId} userId={currentUser?.id} />
+            </div>
+          </div>
           {testPanel && (
             <div className="flex shrink-0 items-center gap-3 rounded-lg bg-thumbnail px-4 py-2.5 md:hidden">
               <button
@@ -283,33 +322,8 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
           <div className={`relative h-auto overflow-hidden rounded-lg bg-thumbnail md:block md:h-full md:flex-1 ${testPanel ? 'hidden' : ''}`}>
             <div className="absolute inset-x-4 top-4 hidden flex-wrap items-center justify-between gap-y-2 md:flex">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[13px] font-semibold text-white">{djName ? `${djName}의 방송` : STATION_INFO.name}</span>
-                {/* 테스트 방송은 다시듣기를 남기지 않는다 */}
-                {!testPanel && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => stream?.sessionId && bookmarkLiveMutation.mutate(stream.sessionId)}
-                      disabled={!stream?.sessionId || ended || stationStatus === 'cleaning'
-                        || stationStatus === 'stopping' || bookmarkLiveMutation.isPending}
-                      className="flex items-center gap-1 rounded-full bg-black/45 px-2.5 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
-                    >
-                      <ReplaySaveIcon className="size-3.5" />
-                      <span className="hidden sm:inline">
-                        {bookmarkLiveMutation.isPending
-                          ? '저장 중...'
-                          : bookmarkLiveMutation.isSuccess
-                            ? '저장됨'
-                            : '다시듣기 저장'}
-                      </span>
-                    </button>
-                    {bookmarkLiveMutation.isError && (
-                      <span className="text-[11px] text-danger">
-                        저장 실패: {(bookmarkLiveMutation.error as Error).message}
-                      </span>
-                    )}
-                  </>
-                )}
+                <span className="text-[13px] font-semibold text-white">{stationTitle}</span>
+                {replaySave}
               </div>
               <div className="flex items-center gap-2 text-[11px] text-nav-inactive">
                 <StationStopButton stationId={stationId} userId={currentUser?.id} />
