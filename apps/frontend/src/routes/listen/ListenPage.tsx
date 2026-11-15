@@ -6,7 +6,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { Sidebar, type NavKey } from '@/app/Sidebar'
 import { useLivePlayback } from '@/player/useLivePlayback'
 import { useRealtimeConnection } from '@/realtime/useRealtimeConnection'
-import { useRealtimeStore } from '@/realtime/store'
+import { useRealtimePollInterval, useRealtimeStore } from '@/realtime/store'
 import {
   ApiError, bookmarkReplay, getBroadcastState, getMusicQueue, getRequests, sendPresenceHeartbeat, submitRequest,
 } from '@/shared/api'
@@ -82,14 +82,16 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
   const [volume, setVolume] = useState(1)
   const [chatInput, setChatInput] = useState('')
   const [presenceClientId] = useState(getOrCreatePresenceClientId)
-  useRealtimeConnection()
+  useRealtimeConnection(stationId)
   const connectionStatus = useRealtimeStore((state) => state.connectionStatus)
+  const broadcastPollMs = useRealtimePollInterval(BROADCAST_STATE_POLL_INTERVAL_MS)
+  const requestsPollMs = useRealtimePollInterval(REQUESTS_POLL_INTERVAL_MS)
   const { data: currentUser } = useCurrentUser()
   const broadcastStateQuery = useQuery({
     queryKey: ['broadcast-state', stationId],
     queryFn: () => getBroadcastState(stationId),
     enabled: Boolean(stationId),
-    refetchInterval: BROADCAST_STATE_POLL_INTERVAL_MS,
+    refetchInterval: broadcastPollMs,
     // 없는 방송(404)은 다시 물어도 없다
     retry: (count, error) => !(error instanceof ApiError && error.status === 404) && count < 3,
   })
@@ -115,13 +117,13 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
     queryKey: ['requests', stationId, currentUser?.id],
     queryFn: () => getRequests(stationId),
     enabled: Boolean(currentUser && stationId),
-    refetchInterval: REQUESTS_POLL_INTERVAL_MS,
+    refetchInterval: requestsPollMs,
   })
   const musicQueueQuery = useQuery({
     queryKey: ['music-queue', stationId],
     queryFn: () => getMusicQueue(stationId),
     enabled: Boolean(stationId),
-    refetchInterval: REQUESTS_POLL_INTERVAL_MS,
+    refetchInterval: requestsPollMs,
   })
 
   const stream = broadcastStateQuery.data?.stream

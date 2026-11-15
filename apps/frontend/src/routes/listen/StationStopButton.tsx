@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createStationClient, StationApiError } from '@/routes/station-create/client'
 import { getAccessToken } from '@/shared/authToken'
+import { useRealtimePollInterval } from '@/realtime/store'
 
 const client = createStationClient(import.meta.env.VITE_API_BASE_URL ?? '', getAccessToken)
 
@@ -9,6 +10,7 @@ export function StationStopButton({ stationId, userId }: { stationId?: string; u
   const [confirming, setConfirming] = useState(false)
   const [targetCreatedAt, setTargetCreatedAt] = useState<number | null>(null)
   const cache = useQueryClient()
+  const pollMs = useRealtimePollInterval(3000)
   const station = useQuery({
     queryKey: ['owned-station', stationId, userId],
     enabled: Boolean(stationId && userId),
@@ -20,7 +22,7 @@ export function StationStopButton({ stationId, userId }: { stationId?: string; u
       }
     },
     retry: false,
-    refetchInterval: 3000,
+    refetchInterval: pollMs,
   })
   const stop = useMutation({
     mutationFn: (createdAt: number) => client.stopStation(stationId!, createdAt),
