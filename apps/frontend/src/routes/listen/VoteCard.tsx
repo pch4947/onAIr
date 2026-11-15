@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { isUnauthorizedError, LoginExpiredNotice } from '@/routes/listen/LoginExpiredNotice'
+import { useRealtimePollInterval } from '@/realtime/store'
 import { castVote, getCurrentVote, VoteError } from '@/shared/api'
 
 const VOTE_POLL_INTERVAL_MS = 2000
@@ -10,11 +11,12 @@ const VOTE_POLL_INTERVAL_MS = 2000
 export function VoteCard({ stationId, userId }: { stationId: string; userId?: string }) {
   const cache = useQueryClient()
   const queryKey = ['vote', stationId, userId]
+  const pollMs = useRealtimePollInterval(VOTE_POLL_INTERVAL_MS)
   const voteQuery = useQuery({
     queryKey,
     queryFn: () => getCurrentVote(stationId),
     enabled: Boolean(stationId && userId),
-    refetchInterval: VOTE_POLL_INTERVAL_MS,
+    refetchInterval: pollMs,
   })
   const vote = voteQuery.data?.vote
 

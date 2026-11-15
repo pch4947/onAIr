@@ -10,6 +10,7 @@ import { TEST_STATION_KEY, testStationQuery } from '@/routes/test/testStation'
 import {
   describeEvent, describeInputChange, describePolicy, type LogEntry,
 } from '@/routes/test/engineLog'
+import { useRealtimePollInterval } from '@/realtime/store'
 import { getEngineEvents, getRequests, skipCorner } from '@/shared/api'
 import type { BroadcastStateResponse, StationFormat } from '@/shared/types'
 
@@ -97,8 +98,9 @@ export function TestPanel({ state }: { state: BroadcastStateResponse }) {
   }, [currentCorner])
 
   // 청취자 입력의 상태 변화 — 접수·대기·생성·방송·만료
+  const requestsPollMs = useRealtimePollInterval(REQUESTS_POLL_INTERVAL_MS)
   const requestsQuery = useQuery({
-    queryKey: ['test-requests', stationId], queryFn: () => getRequests(stationId), refetchInterval: REQUESTS_POLL_INTERVAL_MS,
+    queryKey: ['test-requests', stationId], queryFn: () => getRequests(stationId), refetchInterval: requestsPollMs,
   })
   // 서버가 이번 방송 요청만 준다 (#250). 처음 받은 목록은 이미 지난 일이라 기준으로만 쓴다
   const lastStatus = useRef<Map<string, string> | null>(null)

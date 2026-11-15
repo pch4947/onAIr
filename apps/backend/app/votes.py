@@ -148,4 +148,5 @@ async def cast_vote(station_id: str, vote_id: str, body: BallotInput, request: R
         raise HTTPException(422, 'Option is not in this vote')
     if result == 'voted' and choice != body.option:
         raise HTTPException(409, {'message': 'Already voted', 'mine': choice})
+    station.notify()
     return {'vote_id': vote_id, 'mine': choice}

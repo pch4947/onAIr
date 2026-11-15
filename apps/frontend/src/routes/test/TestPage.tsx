@@ -11,6 +11,7 @@ import { ListenPage } from '@/routes/listen/ListenPage'
 import { TestPanel } from '@/routes/test/TestPanel'
 import { PERSONA_PRESETS, presetVoice, TEST_STATION } from '@/routes/test/presets'
 import { TEST_STATION_KEY } from '@/routes/test/testStation'
+import { useRealtimePollInterval } from '@/realtime/store'
 import { getBroadcastState } from '@/shared/api'
 import { randomId } from '@/shared/randomId'
 import { useCurrentUser } from '@/shared/useCurrentUser'
@@ -31,11 +32,13 @@ export function TestPage() {
   // 끝난 방송은 내 방송에서 빠지므로, 마지막으로 연 방송 ID를 기억해 '끝났어요'를 보여준다
   const [startedId, setStartedId] = useState<string | null>(null)
   const stationId = myStationQuery.data?.station_id ?? startedId ?? undefined
+  // 방송이 열리면 그 안의 청취 화면이 웹소켓을 붙인다
+  const broadcastPollMs = useRealtimePollInterval(BROADCAST_STATE_POLL_INTERVAL_MS)
   const broadcastStateQuery = useQuery({
     queryKey: ['broadcast-state', stationId],
     queryFn: () => getBroadcastState(stationId!),
     enabled: Boolean(stationId),
-    refetchInterval: BROADCAST_STATE_POLL_INTERVAL_MS,
+    refetchInterval: broadcastPollMs,
   })
   const voicesQuery = useQuery({ queryKey: ['voices'], queryFn: getVoices, enabled: isAdmin })
   const voice = presetVoice(voicesQuery.data, 0)

@@ -318,7 +318,7 @@ FFmpeg를 먼저 설치하고 `ffmpeg -version`을 확인합니다. PATH에서 �
 ### 현재 범위와 한계
 
 오디오 재생은 연동되어 있지만, 사연 전송·채팅·청취자 수·요청 상태 UI에는 아직 mock이 남아 있습니다.
-WebSocket은 미연동이므로 화면의 연결 상태는 HLS 재생 여부와 별개입니다.
+화면의 연결 상태는 실시간 알림 웹소켓(`/ws/stations/{station_id}`) 연결이며 HLS 재생 여부와 별개입니다.
 POST /api/stations/{station_id}/requests → 엔진 request.arrived 발행은 다음 단계입니다.
 HLS에 마지막 조각을 발행한 뒤 큐에서 제거하며, 실제 청취 완료(PLAYED)를 의미하지 않습니다.
 모든 세그먼트는 첫 조각 발행 때 서버 방송 시각으로 엔진에 segment.started를 한 번 보냅니다(계약 10.6절). 그 시각이 되기 전에는 전달하지 않고, 복구로 다시 송출해도 처음 시각을 유지합니다.
@@ -417,7 +417,6 @@ $env:ONAIR_FFMPEG = "ffmpeg"
 ```powershell
 cd apps/frontend
 $env:VITE_API_BASE_URL = "http://127.0.0.1:3000"
-$env:VITE_WS_URL = ""
 $env:VITE_HLS_URL = ""
 npm.cmd run dev -- --host 127.0.0.1 --port 18080 --strictPort
 ```
@@ -453,7 +452,7 @@ $env:ONAIR_REDIS_URL = "redis://127.0.0.1:6379/0"
 
 방송 상태 URL: http://127.0.0.1:3000/api/stations/st_local_dev/stream/state
 정상 준비 상태는 `status: ready`, `error: null`입니다. 준비됨 자체가 음성 존재를 뜻하지는 않습니다.
-화면 위 WebSocket 연결 끊김 표시는 현재 HLS 재생 여부와 별개입니다.
+화면 위 연결 상태 표시는 실시간 알림 웹소켓 기준이며 HLS 재생 여부와 별개입니다.
 
 ### 재생 metadata API 확인 (백엔드)
 
