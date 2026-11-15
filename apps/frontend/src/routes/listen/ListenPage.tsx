@@ -155,6 +155,46 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
   const playingSegmentId = musicQueueQuery.data?.playingSegmentId ?? null
 
   const chatListRef = useRef<HTMLUListElement>(null)
+
+  // 모바일에서 채팅을 치는 동안(키보드가 올라온 동안)은 뒤로가기·하단 탭을 숨겨 채팅 칸을 넓힌다 (#308)
+  const chatInputRef = useRef<HTMLInputElement>(null)
+  const [chatFocused, setChatFocused] = useState(false)
+  const blurTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const handleChatFocus = () => {
+    if (blurTimer.current) clearTimeout(blurTimer.current)
+    setChatFocused(true)
+  }
+  // 전송·이모지 버튼을 누르는 순간 화면이 먼저 펼쳐지면 버튼 위치가 바뀌어 눌리지 않는다 — 조금 뒤에 펼친다
+  const handleChatBlur = () => {
+    blurTimer.current = setTimeout(() => setChatFocused(false), 150)
+  }
+  useEffect(() => () => { if (blurTimer.current) clearTimeout(blurTimer.current) }, [])
+  // 키보드가 올라온 동안 실제로 보이는 높이. 아이폰 사파리는 키보드가 올라와도 페이지 높이를 줄이지 않고
+  // 화면을 통째로 밀어 올리므로, 이 높이에 화면을 맞춰 채팅 목록이 키보드 위 공간에만 들어가게 한다
+  const [keyboardViewport, setKeyboardViewport] = useState<number | null>(null)
+  // 안드로이드 뒤로 가기로 키보드만 내리면 입력창은 포커스를 쥔 채 남는다 — 화면 높이가 돌아오면 놓는다
+  useEffect(() => {
+    const viewport = window.visualViewport
+    if (!viewport) return
+    let tallest = viewport.height
+    let shrunk = false
+    const onResize = () => {
+      tallest = Math.max(tallest, viewport.height)
+      if (viewport.height < tallest * 0.8) {
+        shrunk = true
+        setKeyboardViewport(Math.round(viewport.height))
+        // 사파리가 입력창을 보이려고 밀어 올린 스크롤을 되돌린다 — 화면을 보이는 높이에 맞췄으니 필요 없다
+        window.scrollTo(0, 0)
+      } else if (shrunk) {
+        shrunk = false
+        setKeyboardViewport(null)
+        if (document.activeElement === chatInputRef.current) chatInputRef.current?.blur()
+      }
+    }
+    viewport.addEventListener('resize', onResize)
+    return () => viewport.removeEventListener('resize', onResize)
+  }, [])
+  const collapsed = chatFocused
   const isNearBottomRef = useRef(true)
 
   const handleChatScroll = () => {
@@ -202,17 +242,22 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
   }
 
   return (
-    <div className="flex h-dvh overflow-hidden md:h-screen">
-      <Sidebar active={navActive} />
+    <div
+      className="flex h-dvh overflow-hidden md:h-screen"
+      style={collapsed && keyboardViewport ? { height: keyboardViewport } : undefined}
+    >
+      <Sidebar active={navActive} hideMobileNav={collapsed} />
 
-      <main className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col gap-4 bg-field-bg p-3.5 pb-20 md:flex-row">
+      {/* 채팅 입력 중(모바일)에는 하단 탭이 숨으므로 그 자리만큼 띄우던 아래 여백도 줄인다 */}
+      <main className={`flex h-full min-h-0 w-full min-w-0 flex-1 flex-col gap-4 bg-field-bg p-3.5 md:flex-row md:pb-20 ${collapsed ? 'pb-3.5' : 'pb-20'}`}>
         {/* 테스트 패널이 붙으면 모바일은 플레이어를 한 줄로 줄이고 로그·채팅을 반씩 나눠 한 화면에 둔다 */}
-        <section className={`flex flex-col md:h-full md:flex-1 md:basis-auto ${testPanel ? 'min-h-0 flex-1 basis-0 gap-2.5 md:gap-3.5' : 'shrink-0 gap-3.5'}`}>
+        {/* 테스트 화면(모바일): 채팅 입력 중에는 테스트 패널을 숨기고 띠만 남겨 채팅이 키보드 위 공간을 다 쓴다 */}
+        <section className={`flex flex-col md:h-full md:flex-1 md:basis-auto ${testPanel ? `min-h-0 gap-2.5 md:gap-3.5 ${collapsed ? 'shrink-0' : 'flex-[3] basis-0'}` : 'shrink-0 gap-3.5'}`}>
           <button
             type="button"
             onClick={() => navigate(-1)}
             aria-label="뒤로가기"
-            className="flex w-fit shrink-0 items-center text-text-muted"
+            className={`flex w-fit shrink-0 items-center text-text-muted ${collapsed ? 'max-md:hidden' : ''}`}
           >
             <BackIcon className="size-4.5" />
           </button>
@@ -234,8 +279,9 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
             </div>
           )}
           {testPanel && playbackError && <p role="alert" className="text-xs text-danger md:hidden">{playbackError}</p>}
-          <div className={`relative h-72 overflow-hidden rounded-lg bg-thumbnail md:block md:h-full md:flex-1 ${testPanel ? 'hidden' : ''}`}>
-            <div className="absolute inset-x-4 top-4 flex flex-wrap items-center justify-between gap-y-2">
+          {/* 모바일은 채팅 칸을 넓히려고 방송 화면 없이 컨트롤 띠(재생·볼륨·재생 바·LIVE·방송 상태)만 둔다 (#308) */}
+          <div className={`relative h-auto overflow-hidden rounded-lg bg-thumbnail md:block md:h-full md:flex-1 ${testPanel ? 'hidden' : ''}`}>
+            <div className="absolute inset-x-4 top-4 hidden flex-wrap items-center justify-between gap-y-2 md:flex">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[13px] font-semibold text-white">{djName ? `${djName}의 방송` : STATION_INFO.name}</span>
                 {/* 테스트 방송은 다시듣기를 남기지 않는다 */}
@@ -278,23 +324,23 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
             {stream?.error && (
               <div
                 role="alert"
-                className="absolute inset-x-3.5 top-14 rounded-md bg-danger/90 px-3.5 py-2 text-xs font-semibold text-white"
+                className="m-2 rounded-md bg-danger/90 px-3.5 py-2 text-xs font-semibold text-white md:absolute md:inset-x-3.5 md:top-14 md:m-0"
               >
                 ⚠ 방송 송출 문제: {stream.error}
               </div>
             )}
 
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <div className="pointer-events-none absolute inset-0 hidden items-center justify-center md:flex">
               <div className="flex size-20 items-center justify-center rounded-xl bg-album md:size-30">
                 <span className="text-2xl text-thumbnail-icon md:text-4xl">♪</span>
               </div>
             </div>
 
             <audio ref={audioRef} />
-            {playbackError && <p role="alert" className="absolute bottom-36 left-4 text-sm text-red-300">{playbackError}</p>}
+            {playbackError && <p role="alert" className="px-4 pt-2 text-sm text-red-300 md:absolute md:bottom-36 md:left-4 md:p-0">{playbackError}</p>}
 
-            <div className="absolute inset-x-0 bottom-0 flex flex-col gap-1.5 bg-black/35 px-4 py-3.5">
-              <p className="text-base font-semibold text-white">
+            <div className="flex flex-col gap-1.5 bg-black/35 px-4 py-3.5 md:absolute md:inset-x-0 md:bottom-0">
+              <p className="hidden text-base font-semibold text-white md:block">
                 {ended ? '방송이 종료되었습니다' : ending ? '방송 종료 후 정리 중입니다' : isPlaying ? '라이브 방송 청취 중' : hlsUrl ? '' : '방송 준비 중…'}
               </p>
               <div className="flex items-center gap-3">
@@ -351,10 +397,10 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
               </p>
             </div>
           </div>
-          {testPanel}
+          {testPanel && <div className={collapsed ? 'hidden md:contents' : 'contents'}>{testPanel}</div>}
         </section>
 
-        <section className={`flex min-h-0 w-full flex-col gap-3 rounded-md border border-border bg-surface p-4 md:h-full md:w-[clamp(300px,28vw,360px)] md:flex-none ${testPanel ? 'flex-1 basis-0 md:basis-auto' : 'flex-1'}`}>
+        <section className={`flex min-h-0 w-full flex-col gap-3 rounded-md border border-border bg-surface p-4 md:h-full md:w-[clamp(300px,28vw,360px)] md:flex-none ${testPanel ? 'flex-[2] basis-0 md:basis-auto' : 'flex-1'}`}>
           <header className="flex items-center justify-between">
             <p className="text-sm font-semibold text-text">채팅</p>
             <div className="flex items-center gap-2">
@@ -497,8 +543,11 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
               className="flex items-center gap-2 rounded-lg border border-border bg-[#f2f2f2] px-3 py-1.5"
             >
               <input
+                ref={chatInputRef}
                 type="text"
                 value={chatInput}
+                onFocus={handleChatFocus}
+                onBlur={handleChatBlur}
                 onChange={(event) => setChatInput(event.target.value)}
                 maxLength={CHAT_MAX_LENGTH}
                 placeholder="메시지 보내기"

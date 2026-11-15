@@ -33,6 +33,9 @@ const chipClass = (active: boolean) =>
     active ? 'border-primary bg-primary-soft text-primary' : 'border-border bg-surface text-text'
   }`
 
+// 모바일 드롭다운 (#308) — 버튼 세 줄 대신 한 줄에 둬서 엔진 로그 칸을 넓힌다
+const selectClass = 'h-8 w-full min-w-0 rounded-md border border-field-border bg-field-bg px-2 text-[13px] text-text disabled:opacity-60'
+
 function clock(at: number) {
   const time = new Date(at * 1000)
   return [time.getHours(), time.getMinutes(), time.getSeconds()].map((part) => String(part).padStart(2, '0')).join(':')
@@ -167,9 +170,60 @@ export function TestPanel({ state }: { state: BroadcastStateResponse }) {
 
   return (
     <section aria-label="테스트 패널" className="flex min-h-0 flex-1 flex-col gap-3 rounded-md border border-border bg-surface p-3.5 md:h-[44%] md:flex-none">
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-        {/* 모바일은 로그 자리를 넓히려고 코너 버튼을 한 줄로 두고 옆으로 민다 */}
-        <div className="flex max-w-full items-center gap-1.5 overflow-x-auto [scrollbar-width:none] md:flex-wrap [&>*]:shrink-0">
+      {/* 모바일: 코너·페르소나·스테이션을 드롭다운 한 줄로. 지금 값이 선택돼 있고, 다른 값을 고르면 바로 요청한다 */}
+      <div className="grid grid-cols-3 gap-2 md:hidden">
+        <label className="flex min-w-0 flex-col gap-0.5">
+          <span className="text-[10px] font-semibold text-text-muted">코너</span>
+          <select
+            aria-label="코너"
+            value={currentCorner && corners.includes(currentCorner.corner) ? currentCorner.corner : ''}
+            disabled={!started || skipMutation.isPending}
+            onChange={(event) => event.target.value && skipMutation.mutate(event.target.value)}
+            className={selectClass}
+          >
+            {!(currentCorner && corners.includes(currentCorner.corner)) && (
+              <option value="">{currentCorner ? cornerLabel(currentCorner.corner) : '선택'}</option>
+            )}
+            {corners.map((corner) => <option key={corner} value={corner}>{cornerLabel(corner)}</option>)}
+          </select>
+        </label>
+        <label className="flex min-w-0 flex-col gap-0.5">
+          <span className="text-[10px] font-semibold text-text-muted">페르소나</span>
+          <select
+            aria-label="페르소나"
+            value={PERSONA_PRESETS.find((preset) => preset.persona.djName === djName)?.id ?? ''}
+            disabled={!started || personaMutation.isPending || !voicesQuery.data?.length}
+            onChange={(event) => {
+              const index = PERSONA_PRESETS.findIndex((preset) => preset.id === event.target.value)
+              if (index >= 0) personaMutation.mutate(index)
+            }}
+            className={selectClass}
+          >
+            {!PERSONA_PRESETS.some((preset) => preset.persona.djName === djName) && <option value="">{djName ?? '선택'}</option>}
+            {PERSONA_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+          </select>
+        </label>
+        <label className="flex min-w-0 flex-col gap-0.5">
+          <span className="text-[10px] font-semibold text-text-muted">스테이션</span>
+          <select
+            aria-label="스테이션"
+            value={format}
+            disabled={!started || formatMutation.isPending}
+            onChange={(event) => formatMutation.mutate(event.target.value as StationFormat)}
+            className={selectClass}
+          >
+            {(Object.keys(FORMAT_LABEL) as StationFormat[]).map((key) => <option key={key} value={key}>{FORMAT_LABEL[key]}</option>)}
+          </select>
+        </label>
+      </div>
+      {(skipMutation.isError || personaMutation.isError || formatMutation.isError) && (
+        <p role="alert" className="text-[11px] text-danger md:hidden">
+          {skipMutation.isError ? '코너 변경 요청을 보내지 못했어요.' : personaMutation.isError ? personaError : formatError}
+        </p>
+      )}
+
+      <div className="hidden flex-wrap items-center gap-x-6 gap-y-2 md:flex">
+        <div className="flex flex-wrap items-center gap-1.5">
           <h2 className="shrink-0 text-xs font-semibold text-text">코너</h2>
           {corners.map((corner) => {
             const active = corner === currentCorner?.corner

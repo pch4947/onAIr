@@ -51,6 +51,8 @@ export type NavKey = 'main' | 'board' | 'mypage' | 'test'
 
 interface SidebarProps {
   active?: NavKey
+  // 모바일에서 채팅을 치는 동안 하단 탭을 숨겨 채팅 칸을 넓힌다 (#308)
+  hideMobileNav?: boolean
 }
 
 type NavItem = { key: NavKey; label: string; icon: ComponentType<{ className?: string }>; path: string }
@@ -68,7 +70,7 @@ const MOBILE_NAV_ITEMS: NavItem[] = [
   { key: 'mypage', label: '마이페이지', icon: UserIcon, path: '/mypage' },
 ]
 
-export function Sidebar({ active }: SidebarProps) {
+export function Sidebar({ active, hideMobileNav = false }: SidebarProps) {
   const navigate = useNavigate()
   const { data: user } = useCurrentUser()
   const name = user?.name ?? ''
@@ -155,7 +157,7 @@ export function Sidebar({ active }: SidebarProps) {
       </aside>
 
       {/* 모바일: 하단 탭 바 */}
-      <nav className="fixed inset-x-0 bottom-0 z-40 flex h-16 items-center justify-around bg-linear-to-r from-[#6f387b]/90 via-[#3f327a]/90 to-[#17727b]/90 px-1 backdrop-blur-md md:hidden">
+      <nav className={`fixed inset-x-0 bottom-0 z-40 h-16 items-center justify-around bg-linear-to-r from-[#6f387b]/90 via-[#3f327a]/90 to-[#17727b]/90 px-1 backdrop-blur-md md:hidden ${hideMobileNav ? 'hidden' : 'flex'}`}>
         {MOBILE_NAV_ITEMS.map((item) => (
           <button
             key={item.key}
