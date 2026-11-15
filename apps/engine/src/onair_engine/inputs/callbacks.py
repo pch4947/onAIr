@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..domain import ChatType, ListenerRequest
+from ..domain import ListenerRequest
+from .pool import is_mood
 from .router import BOARD_STORY, MESSAGE, SONG_REQUEST
 
 MIN_AGE_SEC = 180.0  # [예시] 방금 한 얘기를 곧바로 되풀이하지 않는다
@@ -38,7 +39,7 @@ def _worth_recalling(chat: ListenerRequest) -> bool:
     그때 나가던 말에 대한 반응("맞는 것 같아요")과 질문("그게 무슨 말이에요?")은 그 자리에서 끝난 말이다.
     몇 분 뒤 다른 화제에서 다시 꺼내면 무엇에 대한 말인지 알 수 없다 (2026-11-15 실제 방송).
     """
-    return chat.chat_type != ChatType.REACTION and "?" not in chat.body and "？" not in chat.body
+    return not is_mood(chat) and "?" not in chat.body and "？" not in chat.body
 
 
 class CallbackStore:

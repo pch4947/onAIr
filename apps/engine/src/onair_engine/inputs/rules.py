@@ -38,6 +38,7 @@ class ChatRules(BaseModel):
     song_story_every: int = Field(default=3, ge=0)
     callback_gap_sec: float = Field(default=600.0, ge=0)
     mood_gap_sec: float = Field(default=45.0, ge=0)
+    mood_window_sec: float = Field(default=300.0, ge=1)
 
 
 def load_chat_rules(path: str | Path) -> ChatRules:

@@ -167,7 +167,7 @@ class Scheduler:
         self.pool = QuotePool(
             reaction_window_sec=experiment.get("window_sec", chat_rules.reaction_window_sec),
             standalone_window_sec=chat_rules.standalone_window_sec,
-            track_end=self.timeline.track_end,
+            track_end=self.timeline.track_end, mood_window_sec=chat_rules.mood_window_sec,
         )
         self.selector = QuoteSelector(
             experiment.get("selector", RELEVANCE), flood_threshold=chat_rules.flood_threshold,
@@ -365,6 +365,7 @@ class Scheduler:
         anchor = self.timeline.current(req.received_at)
         req.chat_type, req.rule = classify(req.body, anchor, self.chat_rules)
         req.heard = self.timeline.heard(req.received_at - _REACTION_LAG_SEC)
+        req.back_ref = req.rule == "pointing" or any(p in req.body for p in self.chat_rules.steer_clarify)
         if anchor is not None:
             req.anchor_id, req.anchor_seq = anchor.id, anchor.seq
         self.telemetry.log_input(req, anchor.kind if anchor else None)

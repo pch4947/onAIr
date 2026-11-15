@@ -12,7 +12,11 @@ from __future__ import annotations
 from collections import Counter
 from itertools import pairwise
 
-_SIZES = (4, 3)  # 어절 수. 두 어절은 "것 같아요"처럼 말버릇이 아닌 문법 표현이 걸린다
+_SIZES = (4, 3, 2)  # 어절 수
+# 두 어절은 "것 같아요"처럼 말버릇이 아닌 문법 표현이 걸린다 — 길고 세 번 넘게 나온 것만 센다.
+# 2026-11-15 실제 LLM 실행에서 "수능까지 나흘"이 말을 바꿔 가며 방송당 4~11번 나왔다 (T-012)
+_PAIR_MIN_SCRIPTS = 3
+_PAIR_MIN_CHARS = 6  # 띄어쓰기를 뺀 글자 수
 _EDGE = " \t\n.,!?…~\"'“”‘’()[]·"
 MIN_SCRIPTS = 2  # 서로 다른 멘트 이만큼에 나왔으면 이미 여러 번 쓴 표현이다
 MAX_PHRASES = 6  # 프롬프트에 알려 주는 수 — 많으면 지시가 묻힌다
@@ -54,9 +58,17 @@ class WornPhrases:
                 self._counts[phrase] += 1
                 self._last_seen[phrase] = self._scripts
 
+    def _needed(self, phrase: str) -> float:
+        """이만큼의 멘트에 나와야 되풀이로 본다. 짧은 두 어절은 세지 않는다."""
+        if phrase.count(" ") > 1:
+            return self.min_scripts
+        if len(phrase.replace(" ", "")) < _PAIR_MIN_CHARS:
+            return float("inf")
+        return max(self.min_scripts, _PAIR_MIN_SCRIPTS)
+
     def worn(self) -> list[str]:
         """여러 멘트에 나온 표현 — 많이 쓴 것, 최근에 쓴 것, 긴 것 순. 이미 고른 표현과 겹치는 묶음은 뺀다."""
-        found = [p for p, n in self._counts.items() if n >= self.min_scripts]
+        found = [p for p, n in self._counts.items() if n >= self._needed(p)]
         found.sort(key=lambda p: (-self._counts[p], -self._last_seen[p], -len(p), p))
         picked: list[str] = []
         seen: set[tuple[str, str]] = set()

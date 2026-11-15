@@ -10,7 +10,13 @@ from pathlib import Path
 import pytest
 
 from onair_engine.corners.run import PlannedStep
-from onair_engine.corners.steps import MOOD_HEARD_RULE, MOOD_RULE, QUOTE_RULE, build_prompt
+from onair_engine.corners.steps import (
+    MOOD_HEARD_RULE,
+    MOOD_RULE,
+    QUOTE_HEARD_RULE,
+    QUOTE_RULE,
+    build_prompt,
+)
 from onair_engine.domain import (
     Anchor,
     ChatType,
@@ -22,7 +28,7 @@ from onair_engine.domain import (
 )
 from onair_engine.inputs.classify import classify
 from onair_engine.inputs.on_air import OnAirTimeline
-from onair_engine.inputs.pool import is_mood
+from onair_engine.inputs.pool import QuotePool, is_mood
 from onair_engine.inputs.rules import load_chat_rules
 from onair_engine.pipeline.llm import detect_step
 from onair_engine.pipeline.pipeline import GenerationPipeline
@@ -39,9 +45,11 @@ AGREE = "오 그 말 들어보니까 맞는 것 같아요"
 
 
 def _chat(body: str, rid: str = "r1", who: str = "u1", chat_type: ChatType | None = None,
-          heard: str | None = None) -> ListenerRequest:
+          heard: str | None = None, rule: str | None = None, back_ref: bool = False) -> ListenerRequest:
+    if chat_type == ChatType.REACTION and rule is None:
+        rule = "pointing"
     return ListenerRequest(request_id=rid, kind="chat", body=body, requester_ref=who, received_at=time.time(),
-                           chat_type=chat_type, heard=heard)
+                           chat_type=chat_type, rule=rule, heard=heard, back_ref=back_ref)
 
 
 # ── 무엇이 분위기로 가는가 ─────────────────────────────────────────────
@@ -60,6 +68,9 @@ def test_only_reactions_without_a_question_go_to_mood():
     assert is_mood(_chat(AGREE, chat_type=ChatType.REACTION))
     assert not is_mood(_chat("방금 그 말 무슨 뜻이에요?", chat_type=ChatType.REACTION)), "질문은 답해야 한다"
     assert not is_mood(_chat("저는 김밥 싸 갔어요", chat_type=ChatType.STANDALONE))
+    assert is_mood(_chat("대박 ㅋㅋ", chat_type=ChatType.REACTION, rule="short_reaction"))
+    # 화제 낱말이 든 채팅은 글만으로 뜻이 통한다 — 한 건씩 인용한다
+    assert not is_mood(_chat("저는 수능 날 김밥 싸 갔어요", chat_type=ChatType.REACTION, rule="anchor_keyword"))
 
 
 # ── 그때 방송에 나가던 것 ──────────────────────────────────────────────
@@ -75,7 +86,8 @@ def test_timeline_knows_what_the_listener_was_hearing():
     assert timeline.heard(105.0) == "도시락 이야기를 해 볼게요."
     assert timeline.heard(111.0) == "도시락 이야기를 해 볼게요.", "대본을 모르는 항목이면 그 앞 멘트를 본다"
     assert timeline.heard(113.0) == "다음 곡 들려드릴게요."
-    assert timeline.heard(130.0) == "곡: 밤편지 — 아이유"
+    # 곡이 나가는 동안의 반응은 곡 전에 한 말에 대한 것일 수 있다 — 둘 다 알려 준다
+    assert timeline.heard(130.0) == "곡: 밤편지 — 아이유\n곡 전에 한 말: 도시락 이야기를 해 볼게요. 다음 곡 들려드릴게요."
 
 
 # ── 프롬프트 ───────────────────────────────────────────────────────────
@@ -98,6 +110,31 @@ def test_mood_prompt_without_known_context_and_alongside_a_quote():
     assert f'<data label="{CHAT}">\n저는 김밥 싸 갔어요\n</data>' in user
     with pytest.raises(ValueError, match="반응"):
         build_prompt("text_read", Material(items=[{"body": "문자"}], mood=mood), PROFILE)
+
+
+def test_question_about_what_was_said_carries_what_was_on_air():
+    """되묻는 채팅은 무엇을 가리키는지 알려 줘야 답을 지어내지 않는다."""
+    ask = _chat("그게 무슨 말이에요?", rid="q1", back_ref=True, heard="알고 있는 것을 제자리에 두는 시간이에요.")
+    own = _chat("저는 김밥 싸 갔어요", rid="q2", heard="알고 있는 것을 제자리에 두는 시간이에요.")
+    user = build_prompt("talk", Material(topic="수능 응원", quotes=[ask]), PROFILE).user
+    assert QUOTE_HEARD_RULE in user
+    assert f'<data label="{HEARD}">\n알고 있는 것을 제자리에 두는 시간이에요.\n</data>' in user
+    plain = build_prompt("talk", Material(topic="수능 응원", quotes=[own]), PROFILE).user
+    assert QUOTE_HEARD_RULE not in plain and HEARD not in plain, "자기 이야기에는 붙이지 않는다"
+
+
+def test_mood_reactions_outlive_the_reaction_window_and_anchor_changes():
+    """무엇에 대한 반응인지 함께 전하므로 곡 하나를 지나서 전해도 된다 — 60초 창으로는 대부분 만료됐다 (T-012)."""
+    pool = QuotePool(reaction_window_sec=60, standalone_window_sec=600, track_end=lambda anchor_id: None,
+                     mood_window_sec=300)
+    agree = _chat(AGREE, chat_type=ChatType.REACTION)
+    agree.received_at, agree.anchor_seq = 1000.0, 3
+    on_topic = _chat("저는 수능 날 김밥 싸 갔어요", rid="r2", chat_type=ChatType.REACTION, rule="anchor_keyword")
+    on_topic.received_at, on_topic.anchor_seq = 1000.0, 3
+    pool.add(agree)
+    pool.add(on_topic)
+    assert [r.request_id for r in pool.expire(1200.0, 6)] == ["r2"], "한 건씩 인용하는 반응은 예전 그대로 만료된다"
+    assert pool.expire(1301.0, 6) == [agree]
 
 
 # ── 편성 ──────────────────────────────────────────────────────────────
@@ -139,6 +176,7 @@ def test_question_reaction_is_still_quoted_one_by_one(tmp_path):
     scheduler.enqueue_request(_chat("방금 그 말 무슨 뜻이에요?", rid="ask"))
     job = _talk_job(scheduler, run)
     assert [q.request_id for q in job.material.quotes] == ["ask"] and job.material.mood == []
+    assert job.material.quotes[0].back_ref, "방금 들은 말을 가리킨다 — 그때 나가던 말을 프롬프트에 넣는다"
     assert not job.material.extra.get("steer"), "되묻는 채팅은 화제로 삼지 않는다"
 
 

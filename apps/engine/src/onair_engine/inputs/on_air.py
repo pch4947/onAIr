@@ -62,18 +62,22 @@ class OnAirTimeline:
         return None
 
     def heard(self, now: float) -> str | None:
-        """그 순간 청취자가 듣고 있던 것 — 멘트면 대본, 곡이면 곡 이름. 모르면 None.
+        """그 순간 청취자가 듣고 있던 것 — 멘트면 대본, 곡이면 곡 이름과 곡 전에 한 말. 모르면 None.
 
-        대본을 모르는 항목(접착 문구)이면 그 앞 항목을 본다.
+        곡이 나가는 동안 올라온 "그 말 맞는 것 같아요"는 곡이 아니라 곡 전에 한 말에 대한 것이다. 어느 쪽인지는
+        반응의 내용으로만 알 수 있어 둘 다 돌려준다. 대본을 모르는 항목(접착 문구)이면 그 앞 항목을 본다.
         """
-        for entry in reversed(self._entries):
-            if entry.start > now:
-                continue
-            if entry.track_ms and now >= entry.song_start:
-                return f"곡: {entry.track}" if entry.track else None
-            if entry.text:
-                return entry.text
-        return None
+        past = [entry for entry in self._entries if entry.start <= now]
+        if not past:
+            return None
+        said = [entry.text for entry in past if entry.text]
+        last = past[-1]
+        if last.track_ms and now >= last.song_start:
+            lines = [f"곡: {last.track}"] if last.track else []
+            if said:
+                lines.append("곡 전에 한 말: " + " ".join(said[-2:]))
+            return "\n".join(lines) or None
+        return said[-1] if said else None
 
     def anchor_of(self, segment_id: str) -> Anchor | None:
         entry = self._by_segment.get(segment_id)

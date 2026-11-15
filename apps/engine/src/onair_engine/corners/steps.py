@@ -50,10 +50,18 @@ MULTI_STEER_RULE = "그리고 마지막에 인용한 채팅의 얘기를 조금 
 MOOD_RULE = ("아래는 방송을 듣던 청취자들이 보낸 반응이다. 한 건씩 인용하지 않고, 어떤 반응이 있었는지 "
              "분위기만 멘트 첫머리에 한 문장으로 전한다. 반응의 글귀를 그대로 읽지 않고, 숫자와 닉네임을 "
              "말하지 않는다. 반응이 한 건뿐이면 여러 사람인 것처럼 말하지 않는다.")
-MOOD_HEARD_RULE = ("반응은 아래 그때 방송에 나가던 말을 듣고 보낸 것이다. 지금 하려는 이야기가 아니라 "
-                   "그 이야기에 대한 반응으로 전한다.")
+# 곡이 나가는 동안 올라온 반응은 곡에 대한 것일 수도, 곡 전에 한 말에 대한 것일 수도 있다. 곡만 알려 줬더니
+# "그 말 맞는 것 같아요"를 곡에 대한 반응으로 전하고 "풍경을 떠올린 듯한 반응"처럼 뜻을 지어냈다 (T-012)
+MOOD_HEARD_RULE = ("반응은 아래 그때 방송에 나가던 것을 듣고 보낸 것이다. 지금 하려는 이야기가 아니라 그때의 말이나 "
+                   "곡에 대한 반응으로 전한다. 곡과 말이 함께 적혀 있으면 반응의 내용을 보고 어느 쪽에 대한 것인지 "
+                   "판단하고, 분명하지 않으면 무엇에 대한 반응인지 말하지 않는다. 반응에 없는 뜻을 지어내지 않는다.")
+# 방금 들은 말을 가리키거나 되묻는 채팅("그게 무슨 말이에요?") — 무엇을 가리키는지 알려 주지 않으면 답을 지어낸다
+QUOTE_HEARD_RULE = ("채팅 가운데 방금 들은 말을 가리키거나 되묻는 것은 아래 그때 방송에 나가던 것을 듣고 보낸 것이다. "
+                    "그 말을 두고 답하거나 반응한다.")
+# 화제 블록이 멘트마다 들어가, 두면 멘트마다 주제를 다시 알리며 시작한다 ("수능까지 나흘 남았네요", T-012)
+NO_RESTATE_RULE = "주제를 다시 알리는 말로 멘트를 시작하지 않는다. 청취자는 오늘의 주제를 이미 안다."
 _MOOD_MAX_LINES = 8
-_HEARD_MAX_CHARS = 200
+_HEARD_MAX_CHARS = 400
 # 채팅이 꺼낸 화제로 잇는 멘트 — 화제 블록에 그 채팅이 그대로 들어 있어, 두면 멘트마다 다시 인용한다
 STEERED_RULE = ("아래 지금 화제는 앞 멘트에서 이미 인용한 청취자 채팅이다. 그 채팅을 다시 인용하거나 "
                 "누가 물었다고 다시 말하지 않고, 그 내용으로 DJ의 이야기만 이어간다.")
@@ -180,7 +188,7 @@ def _talk_open(m: Material) -> str:
 def _talk_resume(m: Material) -> str:
     # 다른 말 코너를 거쳐 왔으면 직전에 접착 문구(resume)가 "다시 … 돌아왔어요"를 이미 말했다
     text = ("다른 순서를 지나 다시 오늘의 이야기로 돌아온 멘트를 3문장 이내로 작성하라. "
-            "주제를 처음 소개하듯 말하지 않고, 돌아왔다는 말도 하지 않는다.")
+            f"주제를 처음 소개하듯 말하지 않고, 돌아왔다는 말도 하지 않는다. {NO_RESTATE_RULE}")
     text += _angle_rule(m, " 아래 이번 갈래로 화제를 옮긴다.") or " 앞에서 한 말과 다른 면을 꺼낸다."
     rule, block = _after_song(m)
     return _with_topic(text + rule + _opener_context(m), m) + _angle(m) + block
@@ -188,7 +196,8 @@ def _talk_resume(m: Material) -> str:
 
 def _talk(m: Material) -> str:
     # 소재 하나로 한 멘트 — 편성 관리자가 채팅·다시 꺼낼 이야기·갈래의 말할 거리 중 하나를 골라 넣는다 (7.7절)
-    text = "지금 화제로 이야기를 이어가는 멘트를 3문장 이내로 작성하라. 직전 멘트와 같은 말을 되풀이하지 않는다."
+    text = ("지금 화제로 이야기를 이어가는 멘트를 3문장 이내로 작성하라. 직전 멘트와 같은 말을 되풀이하지 않는다. "
+            f"{NO_RESTATE_RULE}")
     text += f" {NO_QUESTION_RULE}" if m.extra.get("no_question") else " 질문으로 끝내지 않아도 된다."
     if m.extra.get("steered"):
         text += f" {STEERED_RULE}"
@@ -486,6 +495,10 @@ def build_prompt(step: str, material: Material, profile: StationProfile, *,
             rule += f" {TRACK_LAST_RULE}"
         chats = "\n".join(q.body for q in quotes)
         user += f"\n{rule}\n" + data_block(CHAT, chats)
+        heard = list(dict.fromkeys(q.heard for q in quotes if q.back_ref and q.heard))[:2]
+        if heard:
+            user += f"\n{QUOTE_HEARD_RULE}\n" + data_block(
+                HEARD, "\n".join(h[:_HEARD_MAX_CHARS] for h in heard))
     if material.mood:
         if not kind.quotable:
             raise ValueError(f"{step} 단계는 채팅 반응을 전하지 않는다")

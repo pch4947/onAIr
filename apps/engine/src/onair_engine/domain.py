@@ -137,6 +137,7 @@ class ListenerRequest:
     anchor_id: str | None = None  # 도착 순간 방송에 나가고 있던 것
     anchor_seq: int | None = None
     heard: str | None = None  # 그때 나가던 멘트의 대본(또는 곡) — 반응이 무엇에 대한 것인지 프롬프트에 알린다
+    back_ref: bool = False  # 방금 들은 말을 가리키거나 되묻는다 — 인용할 때 그때 나가던 말을 함께 넣는다
 
 
 @dataclass

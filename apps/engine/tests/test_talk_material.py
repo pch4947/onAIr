@@ -46,7 +46,7 @@ def test_reactions_and_questions_are_not_called_back():
     """그 자리에서 끝난 말은 몇 분 뒤에 다시 꺼내지 않는다 (2026-11-15 실제 방송)."""
     store = CallbackStore(min_age_sec=0)
     reaction = _req("chat", "오 그 말 들어보니까 맞는 것 같아요")
-    reaction.chat_type = ChatType.REACTION
+    reaction.chat_type, reaction.rule = ChatType.REACTION, "pointing"
     store.add(reaction, aired_at=0)
     store.add(_req("chat", "그게 무슨 말이에요?"), aired_at=0)
     store.add(_req("chat", "저는 수능 날 도시락으로 김밥 싸 갔어요"), aired_at=0)

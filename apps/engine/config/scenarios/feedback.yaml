@@ -28,8 +28,8 @@ inputs:
   - {at: "6:00", kind: chat, who: b, body: "그 얘기 완전 공감돼요", id: agree3}
   # DJ에게 묻는 질문 — 화제가 된다. 이어지는 멘트가 이 채팅을 다시 인용하지 않아야 한다
   - {at: "7:30", kind: chat, who: c, body: "DJ님은 시험 전날 긴장 어떻게 푸세요?", id: ask}
-  - {at: "9:30", kind: chat, who: a, body: "이 노래 좋네요", id: song}
-  - {at: "11:00", kind: chat, who: b, body: "동생이 올해 수능 봐서 저까지 떨려요", id: sibling}
+  - {at: "8:50", kind: chat, who: a, body: "이 노래 좋네요", id: song}
+  - {at: "9:20", kind: chat, who: b, body: "동생이 올해 수능 봐서 저까지 떨려요", id: sibling}
 expect:
   - {type: reflected, input: gimbap, note: 청취자 자신의 이야기는 인용된다}
   - {type: reflected, input: what, note: 되묻는 채팅은 인용하고 답한다}
