@@ -143,6 +143,14 @@ class ChooseChannelTests(unittest.TestCase):
             choose_channel(channels, 'u1', 'other-key', 'fp')
         self.assertEqual((caught.exception.status_code, caught.exception.detail['station_id']), (409, 'st_a'))
 
+    def test_test_and_real_broadcasts_count_separately(self):
+        # 어드민 테스트 방송(#306)은 실제 방송의 1인 1방송 제한에 걸리지 않고, 테스트끼리는 하나만
+        channels = [(self.a, record('st_a', 'u1', 'started') | {'test': True}), (self.b, None)]
+        self.assertIs(choose_channel(channels, 'u1', 'real-key', 'fp'), self.b)
+        with self.assertRaises(HTTPException) as caught:
+            choose_channel(channels, 'u1', 'test-key', 'fp', test=True)
+        self.assertEqual((caught.exception.status_code, caught.exception.detail['station_id']), (409, 'st_a'))
+
     def test_first_free_or_ended_channel_then_busy(self):
         self.assertIs(choose_channel([(self.a, record('st_a', 'u2')), (self.b, None)], 'u1', 'k1', 'fp'), self.b)
         self.assertIs(choose_channel([(self.a, record('st_a', 'u2', 'ended')), (self.b, None)], 'u1', 'k1', 'fp'),
@@ -167,7 +175,8 @@ class ChannelCreationRedisTests(unittest.IsolatedAsyncioTestCase):
             station.hls = SimpleNamespace(ready=False)
 
         def user_from_header(request: Request):
-            return {'id': request.headers['x-user'], 'kind': 'member', 'name': request.headers['x-user']}
+            return {'id': request.headers['x-user'], 'kind': request.headers.get('x-kind', 'member'),
+                    'name': request.headers['x-user']}
         self.app.dependency_overrides[get_current_user] = user_from_header
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(self.app), base_url='http://test')
 
@@ -220,6 +229,36 @@ class ChannelCreationRedisTests(unittest.IsolatedAsyncioTestCase):
         await self.redis.set(f"backend:{created['station_id']}:station", json.dumps(raw | {'status': 'ended'}))
         self.assertEqual((await self.client.get('/api/stations', headers={'x-user': 'host-a'})).json()['stations'],
                          [])
+
+
+    async def test_admin_test_broadcast_is_kept_out_of_listings(self):
+        admin = {'x-user': 'admin-a', 'x-kind': 'admin'}
+        test = await self.client.post('/api/stations', json=BODY | {'test': True}, headers=admin | {'Idempotency-Key': 't1'})
+        self.assertEqual(test.status_code, 202)
+        test_id = test.json()['station']['station_id']
+        record = json.loads(await self.redis.get(f'backend:{test_id}:station'))
+        self.assertTrue(record['test'])
+        control = [f for _, f in await self.redis.xrange('engine:control') if f.get('station_id') == test_id]
+        self.assertNotIn('test', json.loads(control[0]['payload']))  # 엔진에는 보내지 않는다
+        # 테스트 방송이 있어도 실제 방송을 연다
+        real = await self.client.post('/api/stations', json=BODY, headers=admin | {'Idempotency-Key': 'r1'})
+        self.assertEqual(real.status_code, 202)
+        real_id = real.json()['station']['station_id']
+        self.assertNotEqual(real_id, test_id)
+        # 홈 목록에는 실제 방송만
+        listed = (await self.client.get('/api/stations', headers={'x-user': 'listener'})).json()['stations']
+        self.assertEqual([c['station_id'] for c in listed], [real_id])
+        # 내 방송은 기본이 실제 방송, test=true면 테스트 방송
+        mine = (await self.client.get('/api/stations/mine', headers=admin)).json()['station']
+        self.assertEqual(mine['station_id'], real_id)
+        mine_test = (await self.client.get('/api/stations/mine?test=true', headers=admin)).json()['station']
+        self.assertEqual(mine_test['station_id'], test_id)
+        # 테스트 방송은 하나만, 회원은 열 수 없다
+        again = await self.client.post('/api/stations', json=BODY | {'test': True}, headers=admin | {'Idempotency-Key': 't2'})
+        self.assertEqual((again.status_code, again.json()['detail']['station_id']), (409, test_id))
+        member = await self.client.post('/api/stations', json=BODY | {'test': True},
+                                        headers={'x-user': 'host-b', 'Idempotency-Key': 'm1'})
+        self.assertEqual(member.status_code, 403)
 
 
 @unittest.skipUnless(os.environ.get('ONAIR_INTEGRATION_TEST') == '1', 'Requires Redis')

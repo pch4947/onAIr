@@ -1,8 +1,10 @@
 // 테스트 페이지 프리셋
 import type { NewsSection, Persona, StationFormat, TalkCorner } from '@/shared/types'
 
-// 테스트 화면에 들어오면 바로 여는 방송. 고를 수 있는 최대 3개 코너를 넣어 모든 토크 코너 버튼이 순환 안에 있게 한다
+// 테스트 화면의 "테스트 방송 시작하기"로 여는 방송. 고를 수 있는 최대 3개 코너를 넣어 모든 토크 코너 버튼이 순환 안에 있게 한다
 export const TEST_STATION = {
+  // 홈 목록·내 방송·다시듣기에서 빠지는 어드민 테스트 방송 (#306)
+  test: true,
   format: 'talk' as StationFormat,
   corners: ['topic_talk', 'story_corner', 'dj_vs_listeners'] as TalkCorner[],
   broadcastMinutes: 30,

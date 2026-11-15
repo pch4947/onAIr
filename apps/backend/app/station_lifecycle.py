@@ -63,6 +63,7 @@ for i=1,#replays,2 do
  local replay = cjson.decode(replays[i+1])
  if not replay.ownerId then
   replay.ownerId = station.owner_id
+  if station.test then replay.test = true end
   redis.call('HSET', prefix .. ':replay-sessions', replays[i], cjson.encode(replay))
  end
 end

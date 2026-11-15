@@ -107,11 +107,13 @@ export function createStationClient(base: string, getToken: () => string | null)
         format: input.format, intensity: input.intensity,
         ...(input.format === 'talk' && input.corners ? { corners: input.corners } : {}),
         ...(input.format === 'news' && input.newsSections ? { news_sections: input.newsSections } : {}),
+        ...(input.test ? { test: true } : {}),
       }, key)).station
     },
     // 진행 중인 내 방송 (없으면 null) — 끝난 방송은 서버가 뺀다
-    async getMyStation(): Promise<StationResult | null> {
-      return (await request<{ station: StationResult | null }>('/stations/mine')).station
+    // test=true면 어드민의 테스트 방송 (#306). 기본은 실제 방송만
+    async getMyStation(test = false): Promise<StationResult | null> {
+      return (await request<{ station: StationResult | null }>(`/stations/mine${test ? '?test=true' : ''}`)).station
     },
     async getStation(id: string, signal?: AbortSignal): Promise<StationResult> {
       return (await request<{ station: StationResult }>(`/stations/${encodeURIComponent(id)}`, undefined, undefined, signal)).station

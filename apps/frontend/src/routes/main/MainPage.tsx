@@ -97,7 +97,7 @@ export function MainPage() {
   // 진행 중인 내 방송이 있으면 새로 만들지 않고 그 방송으로 돌아간다 (한 사람당 하나)
   const myStationQuery = useQuery({
     queryKey: ['my-station'],
-    queryFn: getMyStation,
+    queryFn: () => getMyStation(),
     enabled: canCreate,
     refetchInterval: STATIONS_POLL_INTERVAL_MS,
   })
