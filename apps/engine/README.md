@@ -196,7 +196,7 @@ onair-engine --tts cartesia --max-segments 15 --demo-request "요즘 잠이 안 
 - **무엇을 보고 고르나** (`inputs/song_picks.py`): persona의 선곡 취향(장르), 스테이션 컨셉, 오늘의 주제, 이번 방송에서 튼 곡과 이미 제안한 곡. 같은 곡을 두 번 제안하지 않습니다.
 - **소개**: 백엔드가 찾은 곡의 제목·아티스트로 소개합니다. LLM이 낸 제목은 검색어일 뿐이라 없는 곡을 지어내도 소개가 어긋나지 않습니다. 고를 때 적어 둔 까닭 한 줄을 소개에 곁들입니다.
 - **실패**: 백엔드가 `track.suggest_failed`로 답하면 다른 후보로 다시 제안합니다. 연달아 세 번 실패하면 2분 쉽니다. 답이 300초 동안 없으면 다시 제안합니다.
-- **켜기**: 설정 `pipeline.emit_song_picks`(기본 꺼짐). 백엔드가 `track.suggest`를 받게 배포된 뒤에 켭니다.
+- **켜기**: 설정 `pipeline.emit_song_picks`(기본 꺼짐). 백엔드가 `track.suggest`를 받게 배포된 뒤에 켭니다. **운영 설정(`apps/engine/config/station.example.yaml`)에서는 2026-11-15에 켰습니다 (#295).** 백엔드의 곡 소개 모드(`ONAIR_TRACK_INTRO_ENABLED=1`)가 켜져 있어야 DJ가 소개한 뒤에 곡이 나갑니다.
 - **엔진 패널**: `선곡 제안 · 밤편지 — 아이유 외 2곡`, `DJ 선곡 도착 · …`, `선곡 실패 · not_found`.
 - **시나리오**: `config/scenarios/demo_pick.yaml`(플레이리스트 없는 방송). 가짜 백엔드가 제안을 받아 곡을 넣습니다(`sim.pick_latency_sec`, `sim.pick_song_sec`, `sim.pick_miss_rate`). 선곡을 끈 기준선은 `--set engine.emit_song_picks=0`입니다.
 
