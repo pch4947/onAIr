@@ -288,6 +288,7 @@ async def create_request(body: ListenerInput, request: Request,
         raise HTTPException(409, "Idempotency-Key already used with different input") from None
     except (RedisError, TimeoutError):
         raise HTTPException(503, "Redis unavailable; retry with the same Idempotency-Key") from None
+    station.notify()
     return {"request": public_request(entry, user)}
 
 

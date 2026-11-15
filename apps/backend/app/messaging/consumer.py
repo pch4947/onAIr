@@ -124,6 +124,9 @@ class EngineConsumer:
     async def handle(self, entry_id, fields):
         async with self.lifecycle_lock:
             await self._handle(entry_id, fields)
+        # 요청 상태·투표·코너가 바뀌었을 수 있다 — 웹소켓 접속자에게 바로 알린다 (#312)
+        if self.state is not None and hasattr(self.state, 'notify'):
+            self.state.notify()
 
     async def _handle(self, entry_id, fields):
         try:

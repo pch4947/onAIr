@@ -23,6 +23,12 @@ class StationRuntime:
         self.replay_sessions = self.replay_bookmarks = None
         self.music = self.story_feed = None
         self.engine_consumer = self.hls = self.lifecycle = None
+        self.realtime = None  # 웹소켓 접속자가 생기면 realtime.StationHub (#312)
+
+    def notify(self):
+        """상태를 바꾼 직후 부른다 — 웹소켓 감시 작업이 다음 주기(0.5초)를 기다리지 않고 바로 비교한다."""
+        if self.realtime is not None:
+            self.realtime.poke()
 
     @property
     def redis(self):
