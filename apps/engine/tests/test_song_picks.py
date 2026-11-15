@@ -20,6 +20,7 @@ from onair_engine.inputs.song_picks import (
     song_key,
 )
 from onair_engine.inputs.song_picks import build_prompt as pick_prompt
+from onair_engine.main import load_config
 from onair_engine.manager import EngineManager
 from onair_engine.pipeline.llm import DummyLlmClient
 from onair_engine.prompt_data import GENRES, PICK_WHY, PLAYED
@@ -226,6 +227,13 @@ def test_song_picks_are_off_by_default_and_first_song_counts_as_played(tmp_path)
     on = _engine(tmp_path / "on", Backend(), first_song=dict(SONG))
     assert on.song_picker is not None and on._played == ["밤편지 — 아이유"]
     on.telemetry.close()
+
+
+def test_production_config_turns_song_picks_on():
+    """운영 설정은 DJ 선곡을 켠다 — 백엔드가 track.suggest를 받게 된 뒤에 켰다 (#295). 설정에 없으면 꺼짐이다."""
+    root = Path(__file__).resolve().parent.parent
+    assert load_config(root / "config" / "station.example.yaml")[1].emit_song_picks is True
+    assert EngineSettings().emit_song_picks is False
 
 
 def test_manager_routes_suggest_failures(tmp_path):
