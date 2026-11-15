@@ -229,6 +229,7 @@ class Scheduler:
         # 청취자가 적은 방송의 흐름 (CORNER_DESIGN 7.7.1절, #262)
         self._last_chat_at = float("-inf")  # 마지막 채팅 도착 — 한동안 없으면 조용한 방송이다
         self._last_question_at = float("-inf")  # 청취자에게 마지막으로 물은 때
+        self._last_callback_at = float("-inf")  # 청취자 이야기를 마지막으로 다시 꺼낸 때
         self._last_talk_corner: str | None = None  # 곡 소개가 아닌 마지막 코너
         self._song_since_talk = False  # 그 코너 뒤에 곡이 나갔다
         self._last_track: dict | None = None  # 마지막으로 소개한 곡 — 곡 뒤 첫 멘트가 받는다
@@ -901,8 +902,7 @@ class Scheduler:
             return
         if run is None:
             return
-        if block is not None and not run.called_back and (aired := self.callbacks.take(now)) is not None:
-            run.called_back = True
+        if block is not None and (aired := self._take_callback(run, now)) is not None:
             material.extra["callback"] = aired
             self.telemetry.log_callback(aired)
         if self.topic_plan is None:
@@ -935,21 +935,30 @@ class Scheduler:
         """채팅 없이 말할 거리."""
         if run is None:
             return None
-        # 덩어리를 쓴 진입은 다시 꺼내기도 덩어리 안에서만 한다 — 문단 뒤에 멘트를 더 붙이지 않는다
-        if (run.block is None and not run.called_back
-                and (aired := self.callbacks.take(time.time())) is not None):
-            run.called_back = True
-            return {"source": "callback", "callback": aired}
         thread = run.thread
         if thread.angle is not None:
             if thread.points_left > 0 and self.topic_plan is not None and (points := self.topic_plan.more()):
                 thread.points_left -= 1
                 return {"source": "angle", "point": points[0]}
-            return None
-        if thread.free_points > 0:  # 갈래가 없다(계획 실패·다 씀·화제 전환) — 주제만으로 정해진 횟수
+        elif thread.free_points > 0:  # 갈래가 없다(계획 실패·다 씀·화제 전환) — 주제만으로 정해진 횟수
             thread.free_points -= 1
             return {"source": "topic"}
+        # 할 말이 떨어졌다 — 앞서 나온 청취자 이야기를 꺼낸다. 갈래보다 먼저 꺼내던 때는 코너에 들어올 때마다
+        # "아까 ~라고 해 주셨죠"가 나왔다 (2026-11-15 실제 방송).
+        # 덩어리를 쓴 진입은 다시 꺼내기도 덩어리 안에서만 한다 — 문단 뒤에 멘트를 더 붙이지 않는다
+        if run.block is None and (aired := self._take_callback(run, time.time())) is not None:
+            return {"source": "callback", "callback": aired}
         return None
+
+    def _take_callback(self, run: CornerRun, now: float):
+        """다시 꺼낼 청취자 이야기 — 한 코너에 한 번, 방송 전체로는 callback_gap_sec에 한 번."""
+        if run.called_back or now - self._last_callback_at < self.chat_rules.callback_gap_sec:
+            return None
+        aired = self.callbacks.take(now)
+        if aired is not None:
+            run.called_back = True
+            self._last_callback_at = now
+        return aired
 
     def _use_point(self, point: dict, material: Material) -> None:
         material.extra["material"] = point["source"]

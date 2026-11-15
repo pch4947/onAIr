@@ -10,6 +10,7 @@ import hashlib
 import os
 import shutil
 import uuid
+import wave
 from pathlib import Path
 
 from .pipeline.normalize import normalize_for_tts
@@ -28,11 +29,14 @@ class CachedTts:
     캐시는 엔진 전용이며 백엔드와 공유하는 오디오 루트 밖에 둔다.
     """
 
-    def __init__(self, inner: TtsClient, cache_dir: Path | None = None):
+    def __init__(self, inner: TtsClient, cache_dir: Path | None = None, pause_ms: int = 0):
         self._inner = inner
         self._cache_dir = Path(cache_dir) if cache_dir else None
         self.file_ext = inner.file_ext
-        self.cache_namespace = inner.cache_namespace
+        # 멘트 끝에 붙이는 쉬는 시간 — 멘트가 숨 쉴 틈 없이 이어 붙지 않게 한다 (2026-11-15 실제 방송 피드백).
+        # 길이가 다르면 다른 파일이다 — 캐시를 따로 둔다
+        self._pause_ms = max(0, int(pause_ms))
+        self.cache_namespace = inner.cache_namespace + (f"+pause{self._pause_ms}" if self._pause_ms else "")
         self.hits = 0
         self.misses = 0
 
@@ -67,10 +71,33 @@ class CachedTts:
         tmp = temp_path_for(dest)
         try:
             estimate = await self._inner.synthesize(text, tmp)
+            if self._pause_ms and append_silence(tmp, self._pause_ms):
+                estimate += self._pause_ms
             os.replace(tmp, dest)
         finally:
             tmp.unlink(missing_ok=True)
         return measure_duration_ms(dest) or estimate
+
+
+def append_silence(path: Path, ms: int) -> bool:
+    """WAV 파일 끝에 무음을 붙인다. WAV(PCM)가 아니면 그대로 두고 False."""
+    try:
+        with wave.open(str(path), "rb") as src:
+            params = src.getparams()
+            frames = src.readframes(src.getnframes())
+    except (wave.Error, EOFError):
+        return False
+    zero = b"\x80" if params.sampwidth == 1 else b"\x00" * params.sampwidth  # 8비트 PCM의 무음은 0x80이다
+    pad = zero * params.nchannels * (params.framerate * ms // 1000)
+    tmp = temp_path_for(path)
+    try:
+        with wave.open(str(tmp), "wb") as dst:
+            dst.setparams(params)
+            dst.writeframes(frames + pad)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return True
 
 
 def _publish(src: Path, dest: Path) -> None:
