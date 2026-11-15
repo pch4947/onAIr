@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { normalizeYoutubeLink } from '@/routes/listen/trackClient'
 import { GENRE_OPTIONS, MAX_MUSIC_TASTE, getVoices } from '@/routes/station-create/api'
+import { defaultVoiceId, voiceChoiceGroups } from '@/routes/station-create/voiceOptions'
 import type {
   Energy,
   Formality,
@@ -137,7 +138,7 @@ export function PersonaFormStep({ format, onBack, onSubmit, serverErrors = {} }:
       if (cancelled) return
       setVoices(result)
       setVoiceError('')
-      setVoice((current) => current || result[0]?.id || '')
+      setVoice((current) => current || defaultVoiceId(result))
       if (result.length === 0) setVoiceError('사용 가능한 목소리가 없어요.')
     }).catch((error: unknown) => {
       if (!cancelled) setVoiceError(error instanceof Error ? error.message : '목소리를 불러오지 못했어요.')
@@ -318,11 +319,10 @@ export function PersonaFormStep({ format, onBack, onSubmit, serverErrors = {} }:
         <div className="relative">
           <select value={voice} onChange={(event) => setVoice(event.target.value)} className={selectInputClass}>
             {voices.length === 0 && <option value="">불러오는 중...</option>}
-            {voices.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name} · {item.description}
-              </option>
-            ))}
+            {voiceChoiceGroups(voices).map((group) => {
+              const options = group.choices.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)
+              return group.label ? <optgroup key={group.label} label={group.label}>{options}</optgroup> : options
+            })}
           </select>
           <SelectArrow />
         </div>
