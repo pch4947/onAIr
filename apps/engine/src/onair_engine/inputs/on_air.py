@@ -22,6 +22,8 @@ class _Entry:
     track_ref: str | None
     track_ms: int
     synced: bool = False  # 시작 시각을 백엔드 이벤트로 확인했다
+    text: str | None = None  # 멘트의 대본 — 그때 올라온 반응이 무엇에 대한 것인지 알려 준다
+    track: str | None = None  # 곡 이름 (제목 — 아티스트)
     track_start: float | None = None  # track.started로 확인한 곡 시작 시각
 
     @property
@@ -44,10 +46,11 @@ class OnAirTimeline:
         return Anchor(id=anchor_id, kind=kind, keywords=frozenset(words), seq=next(self._next_seq))
 
     def append(self, segment_id: str | None, anchor: Anchor, duration_ms: int, now: float,
-               track_ref: str | None = None, track_ms: int = 0) -> None:
+               track_ref: str | None = None, track_ms: int = 0, *,
+               text: str | None = None, track: str | None = None) -> None:
         """제출 순서대로 쌓는다. 앞 항목이 끝난 뒤에 재생된다고 추정한다."""
         start = max(now, self._entries[-1].end) if self._entries else now
-        entry = _Entry(segment_id, anchor, start, duration_ms, track_ref, track_ms)
+        entry = _Entry(segment_id, anchor, start, duration_ms, track_ref, track_ms, text=text, track=track)
         self._entries.append(entry)
         if segment_id:
             self._by_segment[segment_id] = entry
@@ -56,6 +59,20 @@ class OnAirTimeline:
         for entry in reversed(self._entries):
             if entry.start <= now:
                 return entry.anchor
+        return None
+
+    def heard(self, now: float) -> str | None:
+        """그 순간 청취자가 듣고 있던 것 — 멘트면 대본, 곡이면 곡 이름. 모르면 None.
+
+        대본을 모르는 항목(접착 문구)이면 그 앞 항목을 본다.
+        """
+        for entry in reversed(self._entries):
+            if entry.start > now:
+                continue
+            if entry.track_ms and now >= entry.song_start:
+                return f"곡: {entry.track}" if entry.track else None
+            if entry.text:
+                return entry.text
         return None
 
     def anchor_of(self, segment_id: str) -> Anchor | None:

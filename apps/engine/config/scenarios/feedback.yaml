@@ -1,0 +1,39 @@
+# 2026-11-15 실제 방송 청취 피드백을 재현한다 (ENGINE_TUNING_LOG T-012).
+#  - 앞 이야기에 대한 반응("맞는 것 같아요")이 다른 이야기를 하는 멘트에 인용돼 그 이야기에 대한 반응처럼 들렸다
+#  - 되묻는 채팅("그게 무슨 말이에요?")이 화제가 되어 이어지는 멘트마다 다시 인용됐다
+#  - 주제를 풀어 말한 구절("수능이 나흘 남은 오늘")이 방송 내내 되풀이됐다
+#  - 예전 채팅을 다시 꺼내는 멘트가 많고 화제와 맞지 않았다
+# 기대 결과로 잴 수 있는 것은 일부다. 나머지는 대본을 읽어 확인한다.
+# 곡은 30초로 줄였다 — 주제 토크에 여러 번 들어가 되풀이와 다시 꺼내기를 볼 수 있게 하려는 것이다.
+name: feedback
+description: 반응 채팅은 분위기로, 되묻는 채팅은 한 번만, 주제 표현 되풀이와 다시 꺼내기를 줄였는지 본다.
+station:
+  format: talk
+  corners: [topic_talk]
+  intensity: mid
+  topic: 수능 D-4 화이팅
+  broadcast_minutes: 16
+tracks:
+  - {title: 첫눈 오는 밤, artist: 가상의 가수, sec: 30}
+  - {title: 새벽 버스, artist: 모의 밴드, sec: 30}
+  - {title: 따뜻한 차 한 잔, artist: 시뮬레이션 트리오, sec: 30}
+inputs:
+  # 그때 나가던 말에 대한 반응 — 한 건씩 인용하지 않고 분위기로 전한다
+  - {at: "1:40", kind: chat, who: a, body: "오 그 말 들어보니까 맞는 것 같아요", id: agree}
+  - {at: "1:50", kind: chat, who: b, body: "맞아요 맞아요", id: agree2}
+  # 청취자 자신의 이야기 — 한 건씩 인용한다. 나중에 다시 꺼낼 수 있는 이야기다
+  - {at: "3:00", kind: chat, who: c, body: "저는 수능 날 도시락으로 김밥 싸 갔어요", id: gimbap}
+  # 되묻는 채팅 — 한 번 인용하고 답한 뒤 화제로 삼지 않는다
+  - {at: "4:30", kind: chat, who: a, body: "그게 무슨 말이에요?", id: what}
+  - {at: "6:00", kind: chat, who: b, body: "그 얘기 완전 공감돼요", id: agree3}
+  # DJ에게 묻는 질문 — 화제가 된다. 이어지는 멘트가 이 채팅을 다시 인용하지 않아야 한다
+  - {at: "7:30", kind: chat, who: c, body: "DJ님은 시험 전날 긴장 어떻게 푸세요?", id: ask}
+  - {at: "9:30", kind: chat, who: a, body: "이 노래 좋네요", id: song}
+  - {at: "11:00", kind: chat, who: b, body: "동생이 올해 수능 봐서 저까지 떨려요", id: sibling}
+expect:
+  - {type: reflected, input: gimbap, note: 청취자 자신의 이야기는 인용된다}
+  - {type: reflected, input: what, note: 되묻는 채팅은 인용하고 답한다}
+  - {type: reflected, input: ask, note: DJ에게 묻는 질문은 인용된다}
+  - {type: reflected, input: sibling, note: 청취자 자신의 이야기는 인용된다}
+  - {type: max_fallback, value: 0, note: 대체 멘트 없음}
+  - {type: max_silence_sec, value: 5, note: 긴 무음 없음}

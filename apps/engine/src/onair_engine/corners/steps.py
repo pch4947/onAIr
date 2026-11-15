@@ -18,7 +18,9 @@ from ..prompt_data import (
     CORNERS,
     COVERED_ANGLES,
     DILEMMA,
+    HEARD,
     NOW,
+    REACTIONS,
     SOURCES,
     STORY,
     TOPIC,
@@ -43,6 +45,15 @@ STEER_RULE = "그리고 이 얘기를 조금 더 해 보겠다고 자연스럽�
 MULTI_QUOTE_RULE = ("채팅이 여러 건이다. 한 건씩 따로 인용하고 각각 한 문장으로 반응한다. "
                     "한 건도 빠뜨리지 않고, 여러 건을 한 문장으로 묶지 않는다.")
 MULTI_STEER_RULE = "그리고 마지막에 인용한 채팅의 얘기를 조금 더 해 보겠다고 자연스럽게 말한다."
+# 반응형 채팅은 한 건씩 인용하지 않는다 (2026-11-15 결정) — 멘트가 만들어져 나가는 사이 화제가 바뀌어,
+# 앞 이야기에 대한 "맞는 것 같아요"가 지금 이야기에 대한 말처럼 인용됐다. 분위기만 전한다
+MOOD_RULE = ("아래는 방송을 듣던 청취자들이 보낸 반응이다. 한 건씩 인용하지 않고, 어떤 반응이 있었는지 "
+             "분위기만 멘트 첫머리에 한 문장으로 전한다. 반응의 글귀를 그대로 읽지 않고, 숫자와 닉네임을 "
+             "말하지 않는다. 반응이 한 건뿐이면 여러 사람인 것처럼 말하지 않는다.")
+MOOD_HEARD_RULE = ("반응은 아래 그때 방송에 나가던 말을 듣고 보낸 것이다. 지금 하려는 이야기가 아니라 "
+                   "그 이야기에 대한 반응으로 전한다.")
+_MOOD_MAX_LINES = 8
+_HEARD_MAX_CHARS = 200
 # 채팅이 꺼낸 화제로 잇는 멘트 — 화제 블록에 그 채팅이 그대로 들어 있어, 두면 멘트마다 다시 인용한다
 STEERED_RULE = ("아래 지금 화제는 앞 멘트에서 이미 인용한 청취자 채팅이다. 그 채팅을 다시 인용하거나 "
                 "누가 물었다고 다시 말하지 않고, 그 내용으로 DJ의 이야기만 이어간다.")
@@ -443,6 +454,17 @@ STEP_KINDS: dict[str, StepKind] = {
 }
 
 
+def _mood(reactions: list) -> str:
+    """반응 분위기 지시와 데이터 블록 — 반응들과, 알면 그때 방송에 나가던 말."""
+    bodies = list(dict.fromkeys(r.body.strip() for r in reactions))[:_MOOD_MAX_LINES]
+    text = f"\n{MOOD_RULE}\n" + data_block(REACTIONS, "\n".join(bodies))
+    heard = list(dict.fromkeys(r.heard for r in reactions if r.heard))[:2]
+    if heard:
+        text += f"\n{MOOD_HEARD_RULE}\n" + data_block(
+            HEARD, "\n".join(h[:_HEARD_MAX_CHARS] for h in heard))
+    return text
+
+
 def build_prompt(step: str, material: Material, profile: StationProfile, *,
                  plain: bool = False) -> Prompt:
     kind = STEP_KINDS[step]
@@ -464,6 +486,10 @@ def build_prompt(step: str, material: Material, profile: StationProfile, *,
             rule += f" {TRACK_LAST_RULE}"
         chats = "\n".join(q.body for q in quotes)
         user += f"\n{rule}\n" + data_block(CHAT, chats)
+    if material.mood:
+        if not kind.quotable:
+            raise ValueError(f"{step} 단계는 채팅 반응을 전하지 않는다")
+        user += _mood(material.mood)
     if trend := material.extra.get("aggregate"):
         user += f"\n{AGGREGATE_RULE}\n" + data_block(TREND, trend.keyword)
     elif preview := material.extra.get("preview"):

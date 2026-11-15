@@ -130,6 +130,10 @@ class GenerationPipeline:
         self._worn.clear()
         self._persona_no += 1
 
+    def script_of(self, segment_id: str) -> str | None:
+        """아직 송출 확인이 안 된 세그먼트의 대본. 모르는 세그먼트면 None."""
+        return self._pending_air.get(segment_id)
+
     def take_aired(self, segment_id: str) -> str | None:
         """PUBLISHED를 받은 세그먼트의 대본. 재전달이나 모르는 세그먼트면 None."""
         return self._pending_air.pop(segment_id, None)
@@ -218,6 +222,8 @@ class GenerationPipeline:
         for quote in job.material.quotes:
             if self._check_quote(job, "chat", quote.body, script.text, t1, quote.request_id):
                 refs.append(quote.request_id)
+        # 분위기로 전한 반응은 대본에 글이 그대로 들어가지 않는다 — 검사하지 않고 싣는다
+        refs.extend(req.request_id for req in job.material.mood)
 
         # [4] L2 출력단 검사 — 덩어리는 문단마다 보고, 걸린 문단부터 뒤는 버린다
         clean = list(itertools.takewhile(lambda text: self.safety.check_l2(text) is None, texts))

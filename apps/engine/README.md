@@ -88,6 +88,9 @@ onair-engine --tts cartesia --max-segments 15 --demo-request "요즘 잠이 안 
 
 채팅은 도착할 때 규칙으로 반응형·독립형을 나누고 그 순간 방송에 나가던 것(앵커)을 기록한 뒤 풀에 쌓습니다. 인용할 수 있는 단계를 만들 때 선별기가 고릅니다 ([CORNER_DESIGN.md](../../docs/CORNER_DESIGN.md) 5.1.3, 5.7, 5.8절).
 
+- **반응형은 분위기로만 전합니다** (2026-11-15). "맞는 것 같아요", "이 노래 좋아요" 같은 반응은 한 건씩 인용하지 않고, 와 있는 반응을 모아 "공감해 주신 분이 계시네요"처럼 한 문장으로 전합니다. 반응이 올라올 때 방송에 나가던 멘트를 프롬프트에 함께 넣어, 지금 이야기가 아니라 그 이야기에 대한 반응으로 말하게 합니다. 질문은 반응이어도 한 건씩 인용하고 답합니다.
+- 한 건씩 인용하는 것은 독립형(청취자 자신의 이야기)과 질문입니다. 방금 들은 말을 되묻는 채팅("그게 무슨 말이에요?")은 답만 하고 화제로 삼지 않습니다(`steer_clarify`).
+- **같은 표현 되풀이**: 방송 전체에서 두 멘트 이상에 나온 구절(어절 3~4개 묶음)을 세어 다음 프롬프트에 "이미 여러 번 쓴 표현"으로 알립니다(`pipeline/repeats.py`). 직전 멘트 맥락은 최근 8개만 보기 때문에, 코너에 들어올 때마다 한 번씩 나오는 말은 이것으로 잡습니다. 뉴스 대본에는 쓰지 않습니다.
 - 수치와 표현 목록: `config/chat_rules.yaml` (설정 파일 `pipeline.chat_rules`로 경로 변경). 대부분 검증 전 임시값입니다.
 - 선별 기준: 일반 방은 화제 관련성 우선, 실험용 방은 `experiment.selector`·`window_sec`.
 - 지표: 계측 SQLite의 `input_log`·`selection_log`·`reflection_log`와 `telemetry.reflection_summary()`.
@@ -423,6 +426,7 @@ python -m onair_engine.scenario.compare var/scenario/<전> var/scenario/<후> --
   - **원자적 쓰기**: `.이름.랜덤.tmp.확장자`로 쓴 뒤 교체합니다. 백엔드는 완성된 파일만 봅니다.
   - **캐시**: `pipeline.tts_cache_dir`(기본 `var/tts_cache`)에 텍스트 단위로 저장합니다. 접착 문구·filler처럼 반복되는 문장은 API를 다시 호출하지 않습니다.
   - **길이 실측**: `duration_ms`는 파일에서 잰 값입니다 (mutagen).
+  - **멘트 끝 쉬는 시간**: `pipeline.pause_ms`만큼 무음을 끝에 붙입니다(운영 설정 700ms, 기본 0). 멘트가 숨 쉴 틈 없이 이어 붙는다는 실제 방송 피드백으로 넣었습니다. WAV를 내는 TTS(gemini, dummy)에만 붙고, 길이에 포함됩니다. 접착 문구에도 붙습니다. 값을 바꾸면 캐시를 따로 씁니다.
 - 파일 정리 책임과 보존 기간은 [Redis 계약 문서](../../docs/ENGINE_REDIS_CONTRACT.md) 5.1절에 있습니다.
 
 ### Redis 전송

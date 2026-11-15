@@ -11,6 +11,8 @@ from __future__ import annotations
 # 데이터 블록 라벨 — 더미 LLM이 슬롯을 꺼낼 때도 쓴다 (pipeline/llm.py)
 STORY = "청취자 사연"
 CHAT = "청취자 채팅"  # 인용할 채팅 — 편성 관리자가 고른 것만 들어간다 (CORNER_DESIGN 5.1절)
+REACTIONS = "청취자 반응"  # 분위기로만 전하는 반응형 채팅 (CORNER_DESIGN 5.1.3절)
+HEARD = "그때 방송에 나가던 말"  # 반응이 올라올 때 청취자가 듣고 있던 멘트나 곡 — DJ 대본이라 데이터로 넣는다
 TOPIC = "지금 화제"
 ANGLE = "이번 갈래"  # 갈래 계획에서 꺼낸 것 — LLM이 만든 글이라 데이터로 넣는다 (inputs/topic_plan.py)
 COVERED_ANGLES = "다룬 갈래"

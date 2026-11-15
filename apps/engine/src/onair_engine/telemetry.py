@@ -416,6 +416,8 @@ class Telemetry:
         )
         if kind == "aggregate":
             summary = f"집계 언급 · \"{keyword}\" {count}명 / 전체 {total}명"
+        elif kind == "mood":
+            summary = f"반응 분위기 · {count}명"
         else:
             summary = f"문자 코너 예고 · 받은편지함 {count}건"
         self._event("aggregate", summary, kind=kind, segment_id=segment_id, keyword=keyword,

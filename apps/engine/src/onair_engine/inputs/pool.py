@@ -9,6 +9,15 @@ from ..domain import ChatType, ListenerRequest
 _MAX_ANCHOR_GAP = 1  # 반응 대상은 재생될 때 현재 또는 바로 앞 앵커여야 한다
 
 
+def is_mood(req: ListenerRequest) -> bool:
+    """분위기로만 전하는 채팅 — 그때 나가던 말이나 곡에 대한 반응이다 (2026-11-15 결정).
+
+    한 건씩 인용하면 멘트가 만들어져 나가는 사이 화제가 바뀌어, 앞 이야기에 대한 반응이 지금 이야기에 대한
+    말처럼 들린다. 질문은 반응이어도 답해야 하므로 한 건씩 인용한다.
+    """
+    return req.chat_type == ChatType.REACTION and "?" not in req.body and "？" not in req.body
+
+
 class QuotePool:
     def __init__(self, *, reaction_window_sec: float, standalone_window_sec: float,
                  track_end: Callable[[str | None], float | None]):
@@ -38,6 +47,14 @@ class QuotePool:
                 self.items.remove(req)
                 return req
         return None
+
+    def quotable(self) -> list[ListenerRequest]:
+        """한 건씩 인용할 수 있는 채팅."""
+        return [req for req in self.items if not is_mood(req)]
+
+    def reactions(self) -> list[ListenerRequest]:
+        """분위기로만 전하는 반응."""
+        return [req for req in self.items if is_mood(req)]
 
     def recent_arrivals(self, now: float) -> int:
         """최근 W 동안 도착한 입력 수 — 상황(뜸함·보통·폭주) 판단 기준 (5.7절)."""

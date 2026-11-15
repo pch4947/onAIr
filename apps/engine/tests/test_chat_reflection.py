@@ -56,7 +56,7 @@ def _reopen_telemetry(engine, tmp_path):
     return engine.scheduler.telemetry
 
 
-def test_chat_during_song_is_anchored_to_it_and_reaches_the_next_talk(tmp_path):
+def test_chat_during_song_is_anchored_to_it_and_reaches_the_next_talk_as_mood(tmp_path):
     engine, transport = _engine(tmp_path, first_song=SONG)
 
     async def scenario():
@@ -74,7 +74,9 @@ def test_chat_during_song_is_anchored_to_it_and_reaches_the_next_talk(tmp_path):
     assert any(s.request_ref == req.request_id for s in transport.segments)
     logged = _rows(tmp_path, "SELECT chat_type, rule, anchor_id, anchor_kind FROM input_log")
     assert logged == [("reaction", "anchor_keyword", "track:1", "track")]
-    assert _rows(tmp_path, "SELECT situation, criterion FROM selection_log")[0] == ("normal", "relevance")
+    # 반응형은 한 건씩 인용하지 않고 분위기로 전한다 (2026-11-15) — 선별기를 거치지 않는다
+    assert _rows(tmp_path, "SELECT kind, count FROM aggregate_log") == [("mood", 1)]
+    assert _rows(tmp_path, "SELECT situation, criterion FROM selection_log") == []
 
 
 def test_expired_input_is_logged_and_sent_to_backend(tmp_path):
