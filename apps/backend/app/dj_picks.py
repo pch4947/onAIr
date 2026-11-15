@@ -9,6 +9,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 from uuid import uuid4
 
@@ -30,7 +31,24 @@ LOCK_WAIT_SEC = 60.0
 TOTAL_BUDGET_SEC = 240.0
 SEEN_TTL_SEC = 6 * 3600  # 같은 제안의 재전달을 거르는 표시
 
+# 원곡이 아닌 영상의 제목 표시 (#305). 영문은 낱말 단위로 본다 — Alive·Deliver가 live에 걸리면 안 된다
+NOT_ORIGINAL = [re.compile(pattern) for pattern in (
+    r'(?i)\blive\b', r'(?i)\bcovers?\b', r'(?i)\bfancam\b', r'(?i)\bconcert\b', r'(?i)\bkaraoke\b',
+    r'(?i)\binst(rumental)?\b', r'(?i)\breaction\b', r'(?i)\bplaylist\b', r'(?i)\bmedley\b',
+    r'(?i)\b1 ?hours?\b', r'\bMR\b',  # MR은 대문자만 — "Mr. Chu" 같은 제목과 구별한다
+    '라이브', '커버', '직캠', '콘서트', '노래방', '리액션', '1시간', '모음', '메들리')]
+
 _tasks: set[asyncio.Task] = set()
+
+
+def original_hit(hits, candidate):
+    """검색 결과에서 라이브·커버 표시가 없는 첫 영상. 없으면 None.
+
+    엔진이 낸 후보 자체에 그 말이 있으면 거르지 않는다 (곡 제목이 "Live Forever"인 경우).
+    """
+    wanted = f'{candidate.title} {candidate.artist}'
+    marks = [mark for mark in NOT_ORIGINAL if not mark.search(wanted)]
+    return next((hit for hit in hits if not any(mark.search(hit.title) for mark in marks)), None)
 
 
 def start_pick(state, event: TrackSuggest) -> asyncio.Task:
@@ -67,8 +85,8 @@ async def resolve_pick(state, event: TrackSuggest) -> str:
                 except HTTPException:
                     reason = 'unavailable'
                     continue
-                # 검색의 첫 결과만 본다 — 아래로 갈수록 커버·라이브·다른 곡이다. 이미 튼 곡이면 다음 후보로 간다
-                hit = next(iter(hits), None)
+                # 라이브·커버 표시가 없는 첫 결과를 고른다 (#305). 없거나 이미 튼 곡이면 다음 후보로 간다
+                hit = original_hit(hits, candidate)
                 if hit is None or 'yt:' + hit.video_id in known:
                     continue
                 if not await _wait_unlocked(state.music.lock):

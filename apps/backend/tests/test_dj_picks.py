@@ -27,8 +27,8 @@ def suggest(*titles, suggest_id='sg_1'):
                         candidates=[{'title': title, 'artist': '가수'} for title in titles or ('밤편지',)])
 
 
-def hit(video_id='aaaaaaaaaaa'):
-    return TrackCandidate(video_id=video_id, url='https://www.youtube.com/watch?v=' + video_id, title='찾은 곡',
+def hit(video_id='aaaaaaaaaaa', title='찾은 곡'):
+    return TrackCandidate(video_id=video_id, url='https://www.youtube.com/watch?v=' + video_id, title=title,
                           channel='채널', duration_ms=200_000, thumbnail_url='https://i.ytimg.com/x.jpg')
 
 
@@ -91,6 +91,42 @@ class ResolvePickTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await resolve_pick(state, suggest('없는 곡', '튼 곡', '새 곡')), 'queued')
         state.music.enqueue.assert_awaited_once_with(
             'ccccccccccc', 'dj', 'sg_1:2', 'dj', extra={'suggest_id': 'sg_1', 'candidate': 2})
+
+    async def test_live_and_cover_videos_are_skipped_for_the_original(self):
+        state = fake_state()
+        results = [hit('aaaaaaaaaaa', '아이유 - 밤편지 [LIVE] 콘서트'), hit('bbbbbbbbbbb', '밤편지 (Cover by 누구)'),
+                   hit('ccccccccccc', '[MV] IU(아이유) _ Through the Night(밤편지)')]
+        with patch.object(dj_picks, 'search_youtube', AsyncMock(return_value=results)):
+            self.assertEqual(await resolve_pick(state, suggest('밤편지')), 'queued')
+        self.assertEqual(state.music.enqueue.await_args.args[0], 'ccccccccccc')
+
+    async def test_only_live_results_fall_through_then_report_not_found(self):
+        state = fake_state()
+        results = [[hit('aaaaaaaaaaa', '밤편지 라이브'), hit('bbbbbbbbbbb', '밤편지 1시간')], [hit('ccccccccccc', '숲')]]
+        with patch.object(dj_picks, 'search_youtube', AsyncMock(side_effect=results)):
+            self.assertEqual(await resolve_pick(state, suggest('밤편지', '숲')), 'queued')
+        self.assertEqual(state.music.enqueue.await_args.args[:3], ('ccccccccccc', 'dj', 'sg_1:1'))
+        state = fake_state()
+        with patch.object(dj_picks, 'search_youtube', AsyncMock(return_value=[hit(title='밤편지 직캠')])):
+            self.assertEqual(await resolve_pick(state, suggest('밤편지')), 'not_found')
+        self.assertEqual(failed_reason(state), {'suggest_id': 'sg_1', 'reason': 'not_found'})
+
+    def test_marks_are_whole_words_and_a_candidate_with_the_mark_is_exempt(self):
+        def chosen(wanted, *titles):
+            candidate = suggest(wanted).candidates[0]
+            found = dj_picks.original_hit([hit(title=title) for title in titles], candidate)
+            return found and found.title
+
+        for title in ('Alive', 'Deliver Me', 'Discover', 'Mr. Chu', 'Instant Crush', 'Olivetti'):
+            with self.subTest(kept=title):
+                self.assertEqual(chosen('곡', title), title)
+        for title in ('Song (Live)', 'song live at wembley', 'Song COVER', 'Song MR', 'Song (Inst.)',
+                      'Song Instrumental', 'Song 1 Hour Loop', 'Song fancam', '노래방 Song', '히트곡 모음'):
+            with self.subTest(skipped=title):
+                self.assertIsNone(chosen('곡', title))
+        self.assertEqual(chosen('Live Forever', 'Oasis - Live Forever'), 'Oasis - Live Forever')
+        # 면제는 그 말에만 든다 — 제목에 Live가 있어도 커버는 거른다
+        self.assertEqual(chosen('Live Forever', 'Live Forever (cover)', 'Live Forever'), 'Live Forever')
 
     async def test_nothing_found_is_reported_to_the_engine(self):
         state = fake_state()
