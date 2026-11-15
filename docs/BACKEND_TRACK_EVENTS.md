@@ -32,6 +32,18 @@
 소개가 접수되어 예약된 곡, 인코딩 중인 곡, 방송 시간표에 발행된 곡은 버퍼에 포함합니다.
 직접 송출 모드(0)의 버퍼 계산은 유지합니다.
 
+## DJ 선곡 (#295)
+
+엔진이 `track.suggest`로 곡 후보를 보내면(계약 3.4절) 백엔드가 찾아 대기열에 넣습니다. 사람이 플레이리스트를 채우지 않아도 곡이 나가게 하려는 것입니다. 구현은 `app/dj_picks.py`입니다.
+
+- 엔진 이벤트 소비자는 기다리지 않고 뒤의 작업으로 넘깁니다. 검색과 음원 받기에 몇 분이 걸릴 수 있기 때문입니다.
+- 후보를 차례로 `"{artist} {title}"`로 검색하고(`music.search_youtube`, 신청곡 검색과 같은 함수), 검색의 첫 결과를 `MusicService.enqueue(source='dj')`로 넣습니다. 이번 방송에서 이미 넣은 곡이면 다음 후보로 갑니다.
+- `track.queued`에 `source: "dj"`, `suggest_id`, `candidate`가 실립니다.
+- 넣지 못하면 `track.suggest_failed`(`not_found` · `unavailable` · `busy` · `not_needed`)를 엔진에 보냅니다. 제안 하나에 최대 240초를 씁니다.
+- 다음 곡이 이미 정해져 있으면(`track-plan`의 `next`) 찾지 않고 `not_needed`로 답합니다.
+- 곡 순서(`streaming/tracks.py`): DJ 선곡은 신청곡처럼 정해 둔 다음 곡을 밀어내지 않고, 플레이리스트에도 넣지 않습니다(되풀이 재생되지 않음).
+- 같은 제안이 다시 전달되면 무시합니다(`dj-suggest:{suggest_id}` 표시, 6시간 뒤 만료).
+
 ## 음원 등록 API
 
 기존 `POST /api/stations/{station_id}/tracks`에 선택 필드 `source`(기본 playlist),
