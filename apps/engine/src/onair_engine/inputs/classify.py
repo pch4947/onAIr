@@ -48,6 +48,8 @@ def steer_rule(body: str, rules: ChatRules, dj_name: str) -> str | None:
     text = body.strip()
     if len(text) < rules.steer_min_chars or not keywords(text):
         return None
+    if any(p in text for p in rules.steer_clarify):  # 방금 한 말을 되묻는다 — 인용하고 답하면 끝이다
+        return None
     if any(p in text for p in rules.steer_questions):
         return "question"
     if any(p in text for p in rules.steer_requests):

@@ -36,6 +36,8 @@ pipeline:
   # tts_voice: kore           # gemini 기본값: kore — 목록: onair-engine --list-voices
                               # cartesia는 필수, google 기본값: ko-KR-Chirp3-HD-Aoede, edge 기본값: ko-KR-SunHiNeural
   tts_cache_dir: var/tts_cache  # 같은 문장 재합성 방지 캐시 — 엔진 전용, audio_dir 밖에 둔다
+  pause_ms: 700               # [임시값] 멘트 끝에 붙이는 쉬는 시간(무음, ms). 멘트가 숨 쉴 틈 없이 이어 붙는다는
+                              # 2026-11-15 실제 방송 피드백으로 넣었다. 0이면 붙이지 않는다. WAV를 내는 TTS(gemini)에만 붙는다
   max_concurrent_generations: 2
   dummy_tracks: true           # 백엔드 곡(track.queued)이 없을 때 더미 곡 이름으로 곡 소개 — 로컬용. --serve는 항상 끈다
   target_buffer_sec: 30        # 백엔드 backpressure의 d_total(실제 남은 방송 분량)이 이만큼이면 생성을 쉰다

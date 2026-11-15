@@ -22,6 +22,7 @@ class ChatRules(BaseModel):
     steer_questions: list[str] = Field(default_factory=list)
     steer_requests: list[str] = Field(default_factory=list)
     steer_address: list[str] = Field(default_factory=list)
+    steer_clarify: list[str] = Field(default_factory=list)
     aggregate_share: float = Field(default=0.4, gt=0, le=1)
     aggregate_min_people: int = Field(default=3, ge=1)
     aggregate_stopwords: list[str] = Field(default_factory=list)
@@ -35,6 +36,9 @@ class ChatRules(BaseModel):
     block_parts: int = Field(default=4, ge=1, le=6)
     block_points: int = Field(default=3, ge=1, le=6)
     song_story_every: int = Field(default=3, ge=0)
+    callback_gap_sec: float = Field(default=600.0, ge=0)
+    mood_gap_sec: float = Field(default=45.0, ge=0)
+    mood_window_sec: float = Field(default=300.0, ge=1)
 
 
 def load_chat_rules(path: str | Path) -> ChatRules:

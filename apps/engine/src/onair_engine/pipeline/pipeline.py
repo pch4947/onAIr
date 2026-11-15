@@ -28,9 +28,10 @@ from ..domain import (
     new_id,
     to_audio_ref,
 )
-from ..prompt_data import RECENT, data_block
+from ..prompt_data import RECENT, WORN, data_block
 from ..telemetry import Telemetry
 from .llm import REJECT, DummyLlmClient, LlmClient, LlmError
+from .repeats import WornPhrases
 from .safety import SafetyChecker, Subjective, split_sentences
 from .tts import TtsClient, TtsQuotaError
 
@@ -109,6 +110,8 @@ class GenerationPipeline:
         self._fallback_llm = DummyLlmClient(delay_sec=0)
         # 방송 맥락 = 최근 N개 대본 (확인 10). 실 LLM이 매번 같은 인사로 시작하지 않게 한다
         self._recent: deque[str] = deque(maxlen=recent_segments)
+        # 방송 전체에서 여러 멘트에 나온 구절 — 직전 멘트 창 밖에서 되풀이되는 말을 잡는다 (repeats.py)
+        self._worn = WornPhrases()
         # 생성했지만 아직 송출 확인이 안 된 대본 (context-memory 3.1절 pending_air)
         self._pending_air: dict[str, str] = {}
         # 대본은 한 번에 하나씩 쓴다 — 뒤 멘트가 앞 멘트의 대본을 보고 쓰게 한다. 합성은 그대로 동시에 돈다.
@@ -124,7 +127,12 @@ class GenerationPipeline:
         self.profile = profile
         self.tts = tts
         self._recent.clear()
+        self._worn.clear()
         self._persona_no += 1
+
+    def script_of(self, segment_id: str) -> str | None:
+        """아직 송출 확인이 안 된 세그먼트의 대본. 모르는 세그먼트면 None."""
+        return self._pending_air.get(segment_id)
 
     def take_aired(self, segment_id: str) -> str | None:
         """PUBLISHED를 받은 세그먼트의 대본. 재전달이나 모르는 세그먼트면 None."""
@@ -176,7 +184,7 @@ class GenerationPipeline:
         t0 = time.time()
         persona_no = self._persona_no
         prompt = self._with_context(
-            build_prompt(job.step, job.material, self.profile, plain=job.plain))
+            build_prompt(job.step, job.material, self.profile, plain=job.plain), plain=job.plain)
 
         # [2] LLM 호출
         try:
@@ -214,6 +222,8 @@ class GenerationPipeline:
         for quote in job.material.quotes:
             if self._check_quote(job, "chat", quote.body, script.text, t1, quote.request_id):
                 refs.append(quote.request_id)
+        # 분위기로 전한 반응은 대본에 글이 그대로 들어가지 않는다 — 검사하지 않고 싣는다
+        refs.extend(req.request_id for req in job.material.mood)
 
         # [4] L2 출력단 검사 — 덩어리는 문단마다 보고, 걸린 문단부터 뒤는 버린다
         clean = list(itertools.takewhile(lambda text: self.safety.check_l2(text) is None, texts))
@@ -224,6 +234,9 @@ class GenerationPipeline:
         # 쓰는 사이 페르소나가 바뀌었으면 이전 DJ의 대본이고 방송에도 나가지 않는다 — 넣지 않는다
         if persona_no == self._persona_no:
             self._recent.extend(clean)
+            if not job.plain:  # 뉴스는 "~에 따르면"처럼 되풀이해야 하는 말이 있다 — 세지 않는다
+                for text in clean:
+                    self._worn.add(text, prompt.user)
         if job.block is not None:
             job.block.resolve(clean)
         return script, refs
@@ -351,18 +364,28 @@ class GenerationPipeline:
                 logger.warning("RETRY %s %s %s: %r", stage, job.job_id, job.corner_type, exc)
         raise AssertionError("unreachable")
 
-    def _with_context(self, prompt: Prompt) -> Prompt:
+    def _with_context(self, prompt: Prompt, *, plain: bool = False) -> Prompt:
         if not self._recent:
             return prompt
+        worn = "" if plain else self._worn_note()
         # user가 아니라 system에 붙인다 — user는 코너 지시와 소재만 담는다.
         # 직전 대본은 사연을 인용할 수 있으므로 데이터 블록으로 넣는다 — 지연된 프롬프트 인젝션 대비
         recent = "\n".join(f"- {text}" for text in self._recent)
         return Prompt(
             system=(f"{prompt.system}\n\n직전에 한 멘트다. 아래로 갈수록 최근이고 마지막 줄이 방금 한 말이다. "
                     f"방금 한 말에 이어서 말하고, 같은 인사·표현·질문을 반복하지 않는다.\n"
-                    f"{data_block(RECENT, recent)}"),
+                    f"{data_block(RECENT, recent)}{worn}"),
             user=prompt.user,
         )
+
+    def _worn_note(self) -> str:
+        """방송에서 여러 번 쓴 구절을 알려 준다 — 직전 멘트 창에 없어도 되풀이하지 않게."""
+        phrases = self._worn.worn()
+        if not phrases:
+            return ""
+        return ("\n\n아래는 오늘 방송에서 이미 여러 번 쓴 표현이다. 같은 표현을 다시 쓰지 않고 다른 말로 한다. "
+                "주제를 같은 구절로 다시 풀어 말하지 않는다. 곡 제목이나 청취자 글처럼 소재에 있는 말은 그대로 써도 된다.\n"
+                + data_block(WORN, "\n".join(f"- {p}" for p in phrases)))
 
     def _check_quote(self, job: GenerationJob, kind: str, chat: str, script: str, started: float,
                      request_ref: str) -> bool:

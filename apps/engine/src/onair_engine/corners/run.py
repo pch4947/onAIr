@@ -40,6 +40,7 @@ class Thread:
     angle: Angle | None = None
     points_left: int = 2
     free_points: int = 1
+    steered: bool = False  # 청취자 채팅이 이 화제를 꺼냈다 — 그 채팅은 앞 멘트에서 이미 인용했다
 
 
 class TrackSource:

@@ -11,6 +11,8 @@ from __future__ import annotations
 # 데이터 블록 라벨 — 더미 LLM이 슬롯을 꺼낼 때도 쓴다 (pipeline/llm.py)
 STORY = "청취자 사연"
 CHAT = "청취자 채팅"  # 인용할 채팅 — 편성 관리자가 고른 것만 들어간다 (CORNER_DESIGN 5.1절)
+REACTIONS = "청취자 반응"  # 분위기로만 전하는 반응형 채팅 (CORNER_DESIGN 5.1.3절)
+HEARD = "그때 방송에 나가던 것"  # 반응이 올라올 때 청취자가 듣고 있던 멘트나 곡 — DJ 대본이라 데이터로 넣는다
 TOPIC = "지금 화제"
 ANGLE = "이번 갈래"  # 갈래 계획에서 꺼낸 것 — LLM이 만든 글이라 데이터로 넣는다 (inputs/topic_plan.py)
 COVERED_ANGLES = "다룬 갈래"
@@ -23,6 +25,7 @@ TRACK = "곡 정보"
 DILEMMA = "고민과 선택지"  # DJ 대 청취자 코너의 고민 — LLM이 만든 글이라 데이터로 넣는다 (inputs/dilemmas.py)
 VOTE_RESULT = "투표 결과"  # 백엔드가 센 표 수 — 숫자를 지시문과 섞지 않는다
 RECENT = "직전 멘트"
+WORN = "이미 여러 번 쓴 표현"  # 방송에서 되풀이된 구절 — DJ 대본에서 뽑은 것이라 데이터로 넣는다 (pipeline/repeats.py)
 EXAMPLES = "말투 예시"  # persona 예시 멘트 — 호스트 입력이므로 데이터로 넣는다 (F-25)
 HOST_NOTE = "호스트 메모"  # 방 생성 폼의 자유 문장 — persona 초안 생성 프롬프트에만 들어간다
 GENRES = "선곡 취향"  # 방 생성 폼의 장르 — 고정 목록이 정해지기 전까지는 자유 문자열이다

@@ -4,7 +4,7 @@ import time
 
 from onair_engine.corners.run import CornerRun, PlannedStep, Thread
 from onair_engine.corners.steps import CALLBACK_RULE, build_prompt
-from onair_engine.domain import ListenerRequest, Material
+from onair_engine.domain import ChatType, ListenerRequest, Material
 from onair_engine.format.clock import ClockEntry
 from onair_engine.inputs.callbacks import CallbackStore
 from onair_engine.inputs.topic_plan import Angle, TopicPlan
@@ -42,6 +42,19 @@ def test_callback_text_names_only_readers_not_chatters():
     assert chat.text() == "종류: 채팅\n채팅 본문", "채팅은 닉네임을 말하지 않는다"
 
 
+def test_reactions_and_questions_are_not_called_back():
+    """그 자리에서 끝난 말은 몇 분 뒤에 다시 꺼내지 않는다 (2026-11-15 실제 방송)."""
+    store = CallbackStore(min_age_sec=0)
+    reaction = _req("chat", "오 그 말 들어보니까 맞는 것 같아요")
+    reaction.chat_type, reaction.rule = ChatType.REACTION, "pointing"
+    store.add(reaction, aired_at=0)
+    store.add(_req("chat", "그게 무슨 말이에요?"), aired_at=0)
+    store.add(_req("chat", "저는 수능 날 도시락으로 김밥 싸 갔어요"), aired_at=0)
+    store.add(_req("message", "내일 시험인데 잘 볼 수 있을까요?"), aired_at=0)  # 낭독한 문자는 그대로 남긴다
+    assert [a.body for a in store.lookback(5)] == ["저는 수능 날 도시락으로 김밥 싸 갔어요",
+                                                    "내일 시험인데 잘 볼 수 있을까요?"]
+
+
 def test_lookback_spreads_over_the_broadcast():
     store = CallbackStore()
     for i in range(7):
@@ -65,7 +78,7 @@ def _scheduler_run(tmp_path, angle: Angle | None):
     return scheduler, run
 
 
-def test_talk_points_prefer_chat_then_callback_then_angle(tmp_path):
+def test_talk_points_prefer_chat_then_angle_then_callback(tmp_path):
     scheduler, run = _scheduler_run(tmp_path, Angle("호빵", ("데우는 법", "팥과 야채", "편의점 풍경", "남은 한 개")))
     scheduler.callbacks.min_age_sec = 0
     scheduler.callbacks.add(_req("message", "퇴근길 붕어빵"), aired_at=0)
@@ -73,12 +86,29 @@ def test_talk_points_prefer_chat_then_callback_then_angle(tmp_path):
     scheduler.enqueue_request(_req("chat", "저는 호빵파예요", rid="c1"))
     assert scheduler._talk_point(run) == {"source": "chat"}
     scheduler._last_quote_at = time.time()  # 인용 간격 안 — 채팅을 쓸 수 없다
+    assert [scheduler._talk_point(run) for _ in range(2)] == [
+        {"source": "angle", "point": "팥과 야채"}, {"source": "angle", "point": "편의점 풍경"},
+    ], "꺼내기가 쓴 첫 말할 거리는 빼고, 한 번 들어와서 둘까지만 더 쓴다"
     point = scheduler._talk_point(run)
-    assert point["source"] == "callback" and point["callback"].body == "퇴근길 붕어빵"
-    assert [scheduler._talk_point(run) for _ in range(3)] == [
-        {"source": "angle", "point": "팥과 야채"}, {"source": "angle", "point": "편의점 풍경"}, None,
-    ], "다시 꺼내기는 코너당 1번, 꺼내기가 쓴 첫 말할 거리는 빼고, 한 번 들어와서 둘까지만 더 쓴다"
+    assert point["source"] == "callback" and point["callback"].body == "퇴근길 붕어빵",         "청취자 이야기는 할 말이 떨어졌을 때 꺼낸다 (2026-11-15 — 갈래보다 먼저 꺼내면 들어올 때마다 나온다)"
+    assert scheduler._talk_point(run) is None, "다시 꺼내기는 코너당 1번"
     assert scheduler.topic_plan.more() == ("남은 한 개",), "남은 말할 거리는 다음에 들어와서 잇는다 (#262)"
+
+
+def test_callbacks_are_spaced_out_across_corner_entries(tmp_path):
+    """코너에 들어올 때마다 "아까 ~라고 해 주셨죠"가 나오지 않게 간격을 둔다 (callback_gap_sec)."""
+    scheduler, run = _scheduler_run(tmp_path, None)
+    scheduler.callbacks.min_age_sec = 0
+    scheduler.callbacks.add(_req("message", "퇴근길 붕어빵"), aired_at=0)
+    scheduler.callbacks.add(_req("message", "호떡 좋아요", rid="r2"), aired_at=0)
+    assert [p and p["source"] for p in (scheduler._talk_point(run) for _ in range(3))] == ["topic", "callback", None]
+    again = CornerRun(ClockEntry(scheduler.fmt.corner("topic_talk")), sources=scheduler.sources,
+                      intensity=scheduler.intensity, thread=Thread(topic="겨울 간식"))
+    assert [p and p["source"] for p in (scheduler._talk_point(again) for _ in range(2))] == ["topic", None],         "방금 한 번 꺼냈다 — 다음 진입에서는 꺼내지 않는다"
+    scheduler._last_callback_at -= scheduler.chat_rules.callback_gap_sec
+    later = CornerRun(ClockEntry(scheduler.fmt.corner("topic_talk")), sources=scheduler.sources,
+                      intensity=scheduler.intensity, thread=Thread(topic="겨울 간식"))
+    assert [p and p["source"] for p in (scheduler._talk_point(later) for _ in range(2))] == ["topic", "callback"]
 
 
 def test_without_an_angle_topic_talk_gets_one_free_point(tmp_path):
@@ -127,8 +157,9 @@ def test_broadcast_calls_back_an_aired_message_and_reports_materials(tmp_path):
     engine.scheduler.callbacks.add(_req("message", "퇴근길에 붕어빵 샀어요"), aired_at=0)  # 앞서 방송에 나갔다
     asyncio.run(engine.run(max_segments=20))
     talks = [j for j in pipeline.jobs if j.step == "talk"]
-    assert [j.material.extra["material"] for j in talks[:2]] == ["callback", "angle"]
-    assert sum(j.material.extra.get("material") == "callback" for j in talks) == 1
+    used = [j.material.extra["material"] for j in talks]
+    assert used[0] == "angle" and used.count("callback") == 1, "갈래의 말할 거리를 먼저 쓰고, 떨어지면 한 번 꺼낸다"
+    assert used.index("callback") > 0
 
     report = station_report(tmp_path / "metrics.sqlite", "st_test")
     materials = report["generation"]["talk_material"]

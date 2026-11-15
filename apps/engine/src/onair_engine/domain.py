@@ -136,6 +136,8 @@ class ListenerRequest:
     rule: str | None = None  # 유형을 정한 규칙 — 분류 정확도 측정용
     anchor_id: str | None = None  # 도착 순간 방송에 나가고 있던 것
     anchor_seq: int | None = None
+    heard: str | None = None  # 그때 나가던 멘트의 대본(또는 곡) — 반응이 무엇에 대한 것인지 프롬프트에 알린다
+    back_ref: bool = False  # 방금 들은 말을 가리키거나 되묻는다 — 인용할 때 그때 나가던 말을 함께 넣는다
 
 
 @dataclass
@@ -145,6 +147,8 @@ class Material:
     items: list[dict] = field(default_factory=list)  # 기사·사연·문자 등 (corners/run.py 출처별 형식)
     track: dict | None = None  # 곡 소개면 그 곡 — 계약 3.4절 track. music_ref가 된다
     quotes: list[ListenerRequest] = field(default_factory=list)  # 인용할 청취자 입력
+    # 반응형 채팅 — 한 건씩 인용하지 않고 분위기로만 전한다 (CORNER_DESIGN 5.1.3절, 2026-11-15 결정)
+    mood: list[ListenerRequest] = field(default_factory=list)
     topic: str | None = None  # 지금 화제 (Thread.topic)
     label: str | None = None  # 뉴스 분야처럼 코너를 다른 소재로 돌릴 때의 이름
     extra: dict = field(default_factory=dict)  # 단계별 부가 정보 (코너 예고 목록, 참여 안내 등)

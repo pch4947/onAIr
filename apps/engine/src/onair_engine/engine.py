@@ -60,6 +60,7 @@ class EngineSettings:
     tts: str = "dummy"
     tts_voice: str | None = None  # None이면 어댑터 기본 보이스
     tts_cache_dir: Path | None = None  # None이면 캐시 없이 매번 합성. 공유 오디오 루트 밖에 둔다
+    pause_ms: int = 0  # 멘트 끝에 붙이는 쉬는 시간(무음). WAV를 내는 TTS(gemini·dummy)에만 붙는다
     max_concurrent_generations: int = 2
     # 백엔드가 track.queued를 보내기 전에 더미 곡 이름으로 곡 소개를 만들지. 로컬 실행용이다 —
     # 운영(--serve)에서는 끈다: 실제로 나오지 않는 곡을 소개하게 된다
@@ -164,7 +165,7 @@ class StationEngine:
         # 제출 페이로드의 audio_ref는 이 루트 기준 상대 경로로 나간다 (설계 문서 5.1)
         audio_root = Path(settings.audio_dir)
         # 파이프라인과 접착 요소 모두 원자적 쓰기·캐시·길이 실측을 거친다
-        tts = CachedTts(tts_client, cache_dir=settings.tts_cache_dir)
+        tts = CachedTts(tts_client, cache_dir=settings.tts_cache_dir, pause_ms=settings.pause_ms)
         safety = SafetyChecker(settings.safety_rules_path)
         pipeline = GenerationPipeline(
             station_id=config.station_id, profile=config.profile,
@@ -383,7 +384,8 @@ class StationEngine:
             return self._reject_persona("unsafe_persona", f"persona.{name}: 안전 규칙에 걸렸습니다 ({rule})")
         profile = profile_from(persona)
         try:
-            tts = CachedTts(self.tts_factory(persona.voice), cache_dir=self.settings.tts_cache_dir)
+            tts = CachedTts(self.tts_factory(persona.voice), cache_dir=self.settings.tts_cache_dir,
+                            pause_ms=self.settings.pause_ms)
         except RuntimeError as exc:
             return self._reject_persona("tts_unavailable", str(exc)[:300])
         glue = self._new_glue(self._fmt, profile, tts)

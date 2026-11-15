@@ -74,7 +74,9 @@ def test_chat_during_song_is_anchored_to_it_and_reaches_the_next_talk(tmp_path):
     assert any(s.request_ref == req.request_id for s in transport.segments)
     logged = _rows(tmp_path, "SELECT chat_type, rule, anchor_id, anchor_kind FROM input_log")
     assert logged == [("reaction", "anchor_keyword", "track:1", "track")]
+    # 곡 제목이 든 반응은 글만으로 뜻이 통한다 — 분위기로 돌리지 않고 한 건씩 인용한다
     assert _rows(tmp_path, "SELECT situation, criterion FROM selection_log")[0] == ("normal", "relevance")
+    assert _rows(tmp_path, "SELECT kind FROM aggregate_log") == []
 
 
 def test_expired_input_is_logged_and_sent_to_backend(tmp_path):
@@ -82,7 +84,10 @@ def test_expired_input_is_logged_and_sent_to_backend(tmp_path):
 
     async def scenario():
         req = await engine.submit_request("story", "이 노래 좋아요", "u1")
+        # 분위기로 전하는 반응은 mood_window_sec(300초) 동안 후보다
         await engine.scheduler._expire_inputs(time.time() + 61)
+        assert req.state != RequestState.EXPIRED
+        await engine.scheduler._expire_inputs(time.time() + 301)
         return req
 
     req = asyncio.run(scenario())

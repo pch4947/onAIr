@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..domain import ListenerRequest
+from .pool import is_mood
 from .router import BOARD_STORY, MESSAGE, SONG_REQUEST
 
 MIN_AGE_SEC = 180.0  # [예시] 방금 한 얘기를 곧바로 되풀이하지 않는다
@@ -32,6 +33,15 @@ class Aired:
         return f"{head}\n{self.body[:MAX_BODY_CHARS]}"
 
 
+def _worth_recalling(chat: ListenerRequest) -> bool:
+    """나중에 다시 꺼내도 말이 되는 채팅 — 청취자 자신의 이야기다.
+
+    그때 나가던 말에 대한 반응("맞는 것 같아요")과 질문("그게 무슨 말이에요?")은 그 자리에서 끝난 말이다.
+    몇 분 뒤 다른 화제에서 다시 꺼내면 무엇에 대한 말인지 알 수 없다 (2026-11-15 실제 방송).
+    """
+    return not is_mood(chat) and "?" not in chat.body and "？" not in chat.body
+
+
 class CallbackStore:
     def __init__(self, min_age_sec: float = MIN_AGE_SEC):
         self.min_age_sec = min_age_sec
@@ -41,8 +51,11 @@ class CallbackStore:
         return len(self._aired)
 
     def add(self, req: ListenerRequest, aired_at: float) -> None:
-        if req.body and req.body.strip():  # 한마디 없는 신청곡은 다시 꺼낼 말이 없다
-            self._aired.append(Aired(req.kind, req.body.strip(), req.nickname, aired_at))
+        if not req.body or not req.body.strip():  # 한마디 없는 신청곡은 다시 꺼낼 말이 없다
+            return
+        if req.kind not in NAMED_KINDS and not _worth_recalling(req):
+            return
+        self._aired.append(Aired(req.kind, req.body.strip(), req.nickname, aired_at))
 
     def take(self, now: float) -> Aired | None:
         """방송된 지 min_age_sec가 지났고 아직 다시 꺼내지 않은 것 중 가장 먼저 나간 것. 한 항목은 한 번만."""

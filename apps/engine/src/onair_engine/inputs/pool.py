@@ -7,13 +7,27 @@ from collections.abc import Callable
 from ..domain import ChatType, ListenerRequest
 
 _MAX_ANCHOR_GAP = 1  # 반응 대상은 재생될 때 현재 또는 바로 앞 앵커여야 한다
+# 무엇에 대한 말인지가 글에 없는 반응 — 대상을 가리키기만 하거나("그 말"), 짧은 감탄이다.
+# 화제 낱말이 든 채팅(anchor_keyword)은 글만으로 뜻이 통해 한 건씩 인용한다
+_MOOD_RULES = ("pointing", "short_reaction")
+
+
+def is_mood(req: ListenerRequest) -> bool:
+    """분위기로만 전하는 채팅 — 그때 나가던 말이나 곡에 대한 반응이다 (2026-11-15 결정).
+
+    한 건씩 인용하면 멘트가 만들어져 나가는 사이 화제가 바뀌어, 앞 이야기에 대한 반응이 지금 이야기에 대한
+    말처럼 들린다. 질문은 반응이어도 답해야 하므로 한 건씩 인용한다.
+    """
+    return (req.chat_type == ChatType.REACTION and req.rule in _MOOD_RULES
+            and "?" not in req.body and "？" not in req.body)
 
 
 class QuotePool:
     def __init__(self, *, reaction_window_sec: float, standalone_window_sec: float,
-                 track_end: Callable[[str | None], float | None]):
+                 track_end: Callable[[str | None], float | None], mood_window_sec: float = 300.0):
         self.reaction_window_sec = reaction_window_sec
         self.standalone_window_sec = standalone_window_sec
+        self.mood_window_sec = mood_window_sec
         self._track_end = track_end
         self.items: list[ListenerRequest] = []
         self._arrivals: deque[float] = deque()
@@ -39,6 +53,14 @@ class QuotePool:
                 return req
         return None
 
+    def quotable(self) -> list[ListenerRequest]:
+        """한 건씩 인용할 수 있는 채팅."""
+        return [req for req in self.items if not is_mood(req)]
+
+    def reactions(self) -> list[ListenerRequest]:
+        """분위기로만 전하는 반응."""
+        return [req for req in self.items if is_mood(req)]
+
     def recent_arrivals(self, now: float) -> int:
         """최근 W 동안 도착한 입력 수 — 상황(뜸함·보통·폭주) 판단 기준 (5.7절)."""
         while self._arrivals and now - self._arrivals[0] > self.reaction_window_sec:
@@ -60,6 +82,8 @@ class QuotePool:
     def _alive(self, req: ListenerRequest, now: float, generating_seq: int | None) -> bool:
         if req.chat_type == ChatType.STANDALONE:
             return now - req.received_at <= self.standalone_window_sec
+        if is_mood(req):  # 무엇에 대한 반응인지 함께 전한다 — 앵커가 바뀐 뒤에 나가도 뜻이 통한다
+            return now - req.received_at <= self.mood_window_sec
         # 곡 위에서는 말하지 않으므로, 앵커 곡이 끝날 때까지는 창이 흐르지 않는다
         start = max(req.received_at, self._track_end(req.anchor_id) or req.received_at)
         if now - start > self.reaction_window_sec:

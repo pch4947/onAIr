@@ -18,7 +18,9 @@ from ..prompt_data import (
     CORNERS,
     COVERED_ANGLES,
     DILEMMA,
+    HEARD,
     NOW,
+    REACTIONS,
     SOURCES,
     STORY,
     TOPIC,
@@ -43,6 +45,26 @@ STEER_RULE = "그리고 이 얘기를 조금 더 해 보겠다고 자연스럽�
 MULTI_QUOTE_RULE = ("채팅이 여러 건이다. 한 건씩 따로 인용하고 각각 한 문장으로 반응한다. "
                     "한 건도 빠뜨리지 않고, 여러 건을 한 문장으로 묶지 않는다.")
 MULTI_STEER_RULE = "그리고 마지막에 인용한 채팅의 얘기를 조금 더 해 보겠다고 자연스럽게 말한다."
+# 반응형 채팅은 한 건씩 인용하지 않는다 (2026-11-15 결정) — 멘트가 만들어져 나가는 사이 화제가 바뀌어,
+# 앞 이야기에 대한 "맞는 것 같아요"가 지금 이야기에 대한 말처럼 인용됐다. 분위기만 전한다
+MOOD_RULE = ("아래는 방송을 듣던 청취자들이 보낸 반응이다. 한 건씩 인용하지 않고, 어떤 반응이 있었는지 "
+             "분위기만 멘트 첫머리에 한 문장으로 전한다. 반응의 글귀를 그대로 읽지 않고, 숫자와 닉네임을 "
+             "말하지 않는다. 반응이 한 건뿐이면 여러 사람인 것처럼 말하지 않는다.")
+# 곡이 나가는 동안 올라온 반응은 곡에 대한 것일 수도, 곡 전에 한 말에 대한 것일 수도 있다. 곡만 알려 줬더니
+# "그 말 맞는 것 같아요"를 곡에 대한 반응으로 전하고 "풍경을 떠올린 듯한 반응"처럼 뜻을 지어냈다 (T-012)
+MOOD_HEARD_RULE = ("반응은 아래 그때 방송에 나가던 것을 듣고 보낸 것이다. 지금 하려는 이야기가 아니라 그때의 말이나 "
+                   "곡에 대한 반응으로 전한다. 곡과 말이 함께 적혀 있으면 반응의 내용을 보고 어느 쪽에 대한 것인지 "
+                   "판단하고, 분명하지 않으면 무엇에 대한 반응인지 말하지 않는다. 반응에 없는 뜻을 지어내지 않는다.")
+# 방금 들은 말을 가리키거나 되묻는 채팅("그게 무슨 말이에요?") — 무엇을 가리키는지 알려 주지 않으면 답을 지어낸다
+QUOTE_HEARD_RULE = ("채팅 가운데 방금 들은 말을 가리키거나 되묻는 것은 아래 그때 방송에 나가던 것을 듣고 보낸 것이다. "
+                    "그 말을 두고 답하거나 반응한다.")
+# 화제 블록이 멘트마다 들어가, 두면 멘트마다 주제를 다시 알리며 시작한다 ("수능까지 나흘 남았네요", T-012)
+NO_RESTATE_RULE = "주제를 다시 알리는 말로 멘트를 시작하지 않는다. 청취자는 오늘의 주제를 이미 안다."
+_MOOD_MAX_LINES = 8
+_HEARD_MAX_CHARS = 400
+# 채팅이 꺼낸 화제로 잇는 멘트 — 화제 블록에 그 채팅이 그대로 들어 있어, 두면 멘트마다 다시 인용한다
+STEERED_RULE = ("아래 지금 화제는 앞 멘트에서 이미 인용한 청취자 채팅이다. 그 채팅을 다시 인용하거나 "
+                "누가 물었다고 다시 말하지 않고, 그 내용으로 DJ의 이야기만 이어간다.")
 # 주 소재(사연·신청곡)가 있는 멘트 — 채팅 때문에 사연이 요약되거나 곡 소개가 밀리면 안 된다
 WITH_FEATURE_RULE = ("이 멘트의 중심은 위에서 지시한 내용이다. 채팅 인용은 그 앞이나 뒤에 짧게 붙이고, "
                      "중심 내용을 줄이지 않는다. 위의 문장 수 제한에 채팅 인용은 넣지 않는다.")
@@ -55,7 +77,10 @@ AGGREGATE_RULE = ("멘트 첫머리에 지금 채팅창에서 아래 화제 얘�
 PREVIEW_RULE = ("멘트 끝에 사연 문자가 많이 와 있으니 이따 '{title}' 시간에 읽겠다고 "
                 "한 문장으로 알린다. 숫자를 말하지 않는다.")
 # 다시 꺼내기 — 이미 방송에 나간 청취자 글이다. 닉네임은 블록에 있는 것만 쓴다(채팅은 넣지 않는다)
-CALLBACK_RULE = ("아래 앞서 방송에서 소개한 청취자 이야기를 '아까 ~라고 해 주셨죠'처럼 짧게 다시 꺼내 지금 화제와 잇는다. "
+# 지금 화제와 억지로 잇게 하면 어색하다 — 2026-11-15 실제 방송에서 다시 꺼낸 말이 화제와 맞지 않았다
+CALLBACK_RULE = ("아래 앞서 방송에서 소개한 청취자 이야기를 '아까 ~라고 해 주셨죠'처럼 짧게 다시 꺼낸다. "
+                 "지금 화제와 닿는 데가 있으면 자연스럽게 잇고, 닿지 않으면 억지로 연결하지 않고 그 이야기가 "
+                 "다시 생각났다고 꺼내 한두 마디 덧붙인다. "
                  "내용을 지어내거나 뜻을 바꾸지 않고, 닉네임은 블록에 있을 때만 부른다.")
 # 시간 맥락은 화제를 꺼내는 단계에만 붙인다 — 매 멘트에 붙이면 "벌써 자정이네요"가 되풀이된다
 TIME_RULE = "아래 지금 시각은 이야기와 어울릴 때만 짧게 쓰고, 꼭 말하지 않아도 된다."
@@ -163,7 +188,7 @@ def _talk_open(m: Material) -> str:
 def _talk_resume(m: Material) -> str:
     # 다른 말 코너를 거쳐 왔으면 직전에 접착 문구(resume)가 "다시 … 돌아왔어요"를 이미 말했다
     text = ("다른 순서를 지나 다시 오늘의 이야기로 돌아온 멘트를 3문장 이내로 작성하라. "
-            "주제를 처음 소개하듯 말하지 않고, 돌아왔다는 말도 하지 않는다.")
+            f"주제를 처음 소개하듯 말하지 않고, 돌아왔다는 말도 하지 않는다. {NO_RESTATE_RULE}")
     text += _angle_rule(m, " 아래 이번 갈래로 화제를 옮긴다.") or " 앞에서 한 말과 다른 면을 꺼낸다."
     rule, block = _after_song(m)
     return _with_topic(text + rule + _opener_context(m), m) + _angle(m) + block
@@ -171,8 +196,11 @@ def _talk_resume(m: Material) -> str:
 
 def _talk(m: Material) -> str:
     # 소재 하나로 한 멘트 — 편성 관리자가 채팅·다시 꺼낼 이야기·갈래의 말할 거리 중 하나를 골라 넣는다 (7.7절)
-    text = "지금 화제로 이야기를 이어가는 멘트를 3문장 이내로 작성하라. 직전 멘트와 같은 말을 되풀이하지 않는다."
+    text = ("지금 화제로 이야기를 이어가는 멘트를 3문장 이내로 작성하라. 직전 멘트와 같은 말을 되풀이하지 않는다. "
+            f"{NO_RESTATE_RULE}")
     text += f" {NO_QUESTION_RULE}" if m.extra.get("no_question") else " 질문으로 끝내지 않아도 된다."
+    if m.extra.get("steered"):
+        text += f" {STEERED_RULE}"
     if callback := m.extra.get("callback"):
         return _with_topic(f"{text} {CALLBACK_RULE}", m) + "\n" + data_block(CALLBACK, callback.text())
     if m.extra.get("angle"):
@@ -435,6 +463,17 @@ STEP_KINDS: dict[str, StepKind] = {
 }
 
 
+def _mood(reactions: list) -> str:
+    """반응 분위기 지시와 데이터 블록 — 반응들과, 알면 그때 방송에 나가던 말."""
+    bodies = list(dict.fromkeys(r.body.strip() for r in reactions))[:_MOOD_MAX_LINES]
+    text = f"\n{MOOD_RULE}\n" + data_block(REACTIONS, "\n".join(bodies))
+    heard = list(dict.fromkeys(r.heard for r in reactions if r.heard))[:2]
+    if heard:
+        text += f"\n{MOOD_HEARD_RULE}\n" + data_block(
+            HEARD, "\n".join(h[:_HEARD_MAX_CHARS] for h in heard))
+    return text
+
+
 def build_prompt(step: str, material: Material, profile: StationProfile, *,
                  plain: bool = False) -> Prompt:
     kind = STEP_KINDS[step]
@@ -456,6 +495,14 @@ def build_prompt(step: str, material: Material, profile: StationProfile, *,
             rule += f" {TRACK_LAST_RULE}"
         chats = "\n".join(q.body for q in quotes)
         user += f"\n{rule}\n" + data_block(CHAT, chats)
+        heard = list(dict.fromkeys(q.heard for q in quotes if q.back_ref and q.heard))[:2]
+        if heard:
+            user += f"\n{QUOTE_HEARD_RULE}\n" + data_block(
+                HEARD, "\n".join(h[:_HEARD_MAX_CHARS] for h in heard))
+    if material.mood:
+        if not kind.quotable:
+            raise ValueError(f"{step} 단계는 채팅 반응을 전하지 않는다")
+        user += _mood(material.mood)
     if trend := material.extra.get("aggregate"):
         user += f"\n{AGGREGATE_RULE}\n" + data_block(TREND, trend.keyword)
     elif preview := material.extra.get("preview"):

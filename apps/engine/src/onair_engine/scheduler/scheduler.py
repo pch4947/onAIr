@@ -88,6 +88,9 @@ _MAX_SONGS_HELD = 2
 # 뉴스로 바꾼 뒤 첫 기사 수집을 기다리는 상한 — 그동안은 백엔드에 남은 분량이 나간다. 넘으면 기다리지 않고
 # 편성을 잇는다(기사가 없으면 뉴스 코너는 건너뛰고, 들어오는 대로 들어간다) [임시값]
 _FORMAT_READY_WAIT_SEC = 8.0
+# 반응은 들은 뒤 몇 초 지나 올라온다 — 그만큼 앞에 나가던 것을 들은 것으로 본다 [임시값]
+_REACTION_LAG_SEC = 5.0
+_MOOD_LEVEL = 1  # 기획서 4.2절 ① — 한 건씩 인용하지 않고 분위기로 언급했다
 _OPENERS = ("talk_open", "talk_resume")  # 코너의 화제를 꺼내는 단계 — 갈래와 시간 맥락은 여기에만 붙인다
 _KST = timezone(timedelta(hours=9))  # 방송 시각은 한국 시간이다 (서머타임 없음)
 _WEEKDAYS = "월화수목금토일"
@@ -164,7 +167,7 @@ class Scheduler:
         self.pool = QuotePool(
             reaction_window_sec=experiment.get("window_sec", chat_rules.reaction_window_sec),
             standalone_window_sec=chat_rules.standalone_window_sec,
-            track_end=self.timeline.track_end,
+            track_end=self.timeline.track_end, mood_window_sec=chat_rules.mood_window_sec,
         )
         self.selector = QuoteSelector(
             experiment.get("selector", RELEVANCE), flood_threshold=chat_rules.flood_threshold,
@@ -229,6 +232,8 @@ class Scheduler:
         # 청취자가 적은 방송의 흐름 (CORNER_DESIGN 7.7.1절, #262)
         self._last_chat_at = float("-inf")  # 마지막 채팅 도착 — 한동안 없으면 조용한 방송이다
         self._last_question_at = float("-inf")  # 청취자에게 마지막으로 물은 때
+        self._last_callback_at = float("-inf")  # 청취자 이야기를 마지막으로 다시 꺼낸 때
+        self._last_mood_at = float("-inf")  # 반응 분위기를 마지막으로 전한 때
         self._last_talk_corner: str | None = None  # 곡 소개가 아닌 마지막 코너
         self._song_since_talk = False  # 그 코너 뒤에 곡이 나갔다
         self._last_track: dict | None = None  # 마지막으로 소개한 곡 — 곡 뒤 첫 멘트가 받는다
@@ -359,6 +364,8 @@ class Scheduler:
     def enqueue_request(self, req: ListenerRequest) -> None:
         anchor = self.timeline.current(req.received_at)
         req.chat_type, req.rule = classify(req.body, anchor, self.chat_rules)
+        req.heard = self.timeline.heard(req.received_at - _REACTION_LAG_SEC)
+        req.back_ref = req.rule == "pointing" or any(p in req.body for p in self.chat_rules.steer_clarify)
         if anchor is not None:
             req.anchor_id, req.anchor_seq = anchor.id, anchor.seq
         self.telemetry.log_input(req, anchor.kind if anchor else None)
@@ -784,6 +791,8 @@ class Scheduler:
         corner, step = planned.corner, planned.step
         material = Material(items=list(planned.items), label=planned.label,
                             topic=self._run.thread.topic if self._run else self.topic)
+        if self._run is not None and self._run.thread.steered:
+            material.extra["steered"] = True
         feature = None
         step_kind = step.kind  # 조용한 방송에서는 꺼내는 단계가 이야기 덩어리로 바뀐다
         block: BlockScript | None = None
@@ -835,6 +844,7 @@ class Scheduler:
                 plain=corner.subjectivity == "none", anchor=anchor, block=point["block"], part=point["part"],
             )
         material.quotes = self._take_quotes(corner.mode("chat"), step_kind, anchor, material)
+        self._take_mood(corner.mode("chat"), step_kind, material)
         if point is not None:
             if point["source"] == "chat" and not material.quotes:  # 선별기가 고르지 않았다 — 다른 소재로
                 point = self._quiet_point(self._run) or {"source": "topic"}
@@ -899,8 +909,7 @@ class Scheduler:
             return
         if run is None:
             return
-        if block is not None and not run.called_back and (aired := self.callbacks.take(now)) is not None:
-            run.called_back = True
+        if block is not None and (aired := self._take_callback(run, now)) is not None:
             material.extra["callback"] = aired
             self.telemetry.log_callback(aired)
         if self.topic_plan is None:
@@ -925,7 +934,8 @@ class Scheduler:
         if run.block is not None and run.block_next < run.block.parts:
             run.block_next += 1
             return {"source": "block", "block": run.block, "part": run.block_next - 1}
-        if self._quote_ready(run.spec.mode("chat"), "talk"):
+        # 반응만 와 있어도 이야기 단계를 연다 — 인용할 채팅이 없으면 다른 소재로 말하고 분위기를 붙인다
+        if self._quote_ready(run.spec.mode("chat"), "talk") or self._mood_ready(run.spec.mode("chat"), "talk"):
             return {"source": "chat"}
         return self._quiet_point(run)
 
@@ -933,21 +943,30 @@ class Scheduler:
         """채팅 없이 말할 거리."""
         if run is None:
             return None
-        # 덩어리를 쓴 진입은 다시 꺼내기도 덩어리 안에서만 한다 — 문단 뒤에 멘트를 더 붙이지 않는다
-        if (run.block is None and not run.called_back
-                and (aired := self.callbacks.take(time.time())) is not None):
-            run.called_back = True
-            return {"source": "callback", "callback": aired}
         thread = run.thread
         if thread.angle is not None:
             if thread.points_left > 0 and self.topic_plan is not None and (points := self.topic_plan.more()):
                 thread.points_left -= 1
                 return {"source": "angle", "point": points[0]}
-            return None
-        if thread.free_points > 0:  # 갈래가 없다(계획 실패·다 씀·화제 전환) — 주제만으로 정해진 횟수
+        elif thread.free_points > 0:  # 갈래가 없다(계획 실패·다 씀·화제 전환) — 주제만으로 정해진 횟수
             thread.free_points -= 1
             return {"source": "topic"}
+        # 할 말이 떨어졌다 — 앞서 나온 청취자 이야기를 꺼낸다. 갈래보다 먼저 꺼내던 때는 코너에 들어올 때마다
+        # "아까 ~라고 해 주셨죠"가 나왔다 (2026-11-15 실제 방송).
+        # 덩어리를 쓴 진입은 다시 꺼내기도 덩어리 안에서만 한다 — 문단 뒤에 멘트를 더 붙이지 않는다
+        if run.block is None and (aired := self._take_callback(run, time.time())) is not None:
+            return {"source": "callback", "callback": aired}
         return None
+
+    def _take_callback(self, run: CornerRun, now: float):
+        """다시 꺼낼 청취자 이야기 — 한 코너에 한 번, 방송 전체로는 callback_gap_sec에 한 번."""
+        if run.called_back or now - self._last_callback_at < self.chat_rules.callback_gap_sec:
+            return None
+        aired = self.callbacks.take(now)
+        if aired is not None:
+            run.called_back = True
+            self._last_callback_at = now
+        return aired
 
     def _use_point(self, point: dict, material: Material) -> None:
         material.extra["material"] = point["source"]
@@ -1001,7 +1020,7 @@ class Scheduler:
 
     def _quote_ready(self, chat_mode, step_kind: str, with_feature: bool = False) -> bool:
         """지금 이 단계에 채팅을 인용할 수 있다 — 풀에 채팅이 있고 계약·참여 강도·인용 간격이 허용한다."""
-        return (bool(len(self.pool)) and chat_mode in QUOTABLE and STEP_KINDS[step_kind].quotable
+        return (bool(self.pool.quotable()) and chat_mode in QUOTABLE and STEP_KINDS[step_kind].quotable
                 and self._quote_limit(with_feature) > 0
                 and time.time() - self._last_quote_at >= self.intensity.quote_gap_sec)
 
@@ -1016,7 +1035,7 @@ class Scheduler:
         now = time.time()
         topic_words = anchor.keywords | keywords(material.topic)
         selection = self.selector.select(
-            self.pool.items, limit=limit, arrivals=self.pool.recent_arrivals(now),
+            self.pool.quotable(), limit=limit, arrivals=self.pool.recent_arrivals(now),
             last_requester=self._last_requester, topic_words=topic_words)
         self.telemetry.log_selection(selection, anchor.id)
         material.extra["selection"] = selection
@@ -1027,6 +1046,24 @@ class Scheduler:
         for req in selection.picked:
             self.pool.remove(req)
         return selection.picked
+
+    def _mood_ready(self, chat_mode, step_kind: str, with_feature: bool = False) -> bool:
+        """지금 이 단계에 반응 분위기를 전할 수 있다 — 반응이 와 있고 코너 계약·참여 강도·간격이 허용한다.
+
+        주 소재(사연·신청곡)가 있는 멘트에는 붙이지 않는다 — 그 멘트는 그 청취자의 것이다.
+        """
+        return (bool(self.pool.reactions()) and chat_mode in QUOTABLE and STEP_KINDS[step_kind].quotable
+                and not with_feature and self.intensity.quote_limit > 0
+                and time.time() - self._last_mood_at >= self.chat_rules.mood_gap_sec)
+
+    def _take_mood(self, chat_mode, step_kind: str, material: Material) -> None:
+        """와 있는 반응을 모두 이 멘트에 싣는다 — 한 건씩 인용하지 않고 분위기로 전한다 (CORNER_DESIGN 5.1.3절)."""
+        if not self._mood_ready(chat_mode, step_kind, bool(material.feature_ref)):
+            return
+        self._last_mood_at = time.time()
+        material.mood = self.pool.reactions()
+        for req in material.mood:
+            self.pool.remove(req)
 
     def _mark_steer(self, material: Material) -> None:
         """고른 채팅이 화제를 바꿀 조건을 채우면 표시한다. 화제는 인용이 대본에 들어간 뒤에 바꾼다."""
@@ -1042,7 +1079,8 @@ class Scheduler:
 
         인용과 같이 넣지 않는다 — 멘트가 길어지면 다른 청취자의 방송 시간을 쓴다.
         """
-        if (not self._aggregate_ack or self._run is None or material.quotes or material.feature_ref
+        if (not self._aggregate_ack or self._run is None or material.quotes or material.mood
+                or material.feature_ref
                 or chat_mode not in QUOTABLE or not STEP_KINDS[step_kind].quotable):
             return
         now = time.time()
@@ -1069,6 +1107,10 @@ class Scheduler:
 
     def _log_aggregate(self, job: GenerationJob, segment_id: str) -> None:
         extra = job.material.extra
+        if job.material.mood:
+            self.telemetry.log_aggregate(
+                segment_id=segment_id, kind="mood", corner_type=job.corner_type, keyword=None,
+                count=len({req.requester_ref for req in job.material.mood}), total=None)
         if trend := extra.get("aggregate"):
             self.telemetry.log_aggregate(
                 segment_id=segment_id, kind="aggregate", corner_type=job.corner_type,
@@ -1083,7 +1125,7 @@ class Scheduler:
         run = self._run
         old_topic = run.thread.topic
         # 바뀐 화제에는 갈래가 없다 — 그 화제로 두 번까지 이야기한다
-        run.thread = Thread(topic=req.body, keywords=sorted(keywords(req.body)), free_points=2)
+        run.thread = Thread(topic=req.body, keywords=sorted(keywords(req.body)), free_points=2, steered=True)
         run.steers += 1
         self._run_anchor = None
         self.telemetry.log_steer(request_id=req.request_id, segment_id=segment_id,
@@ -1333,8 +1375,12 @@ class Scheduler:
                        anchor: Anchor | None = None, job: GenerationJob | None = None) -> None:
         self._unaired[sub.id] = (sub, job, track_ms)
         if anchor is not None:  # 첫 곡 전이나 앵커 없는 접착 문구는 송출 위치를 옮기지 않는다
-            self.timeline.append(sub.id, anchor, sub.duration_ms, time.time(),
-                                 track_ref=sub.music_ref, track_ms=track_ms)
+            track = (job.material.track or {}) if job is not None else {}
+            self.timeline.append(
+                sub.id, anchor, sub.duration_ms, time.time(), track_ref=sub.music_ref, track_ms=track_ms,
+                # 시험용 파이프라인에는 대본을 묻는 길이 없을 수 있다 — 없으면 무엇을 들었는지 모르는 것으로 둔다
+                text=getattr(self.pipeline, "script_of", lambda _id: None)(sub.id),
+                track=" — ".join(v for v in (track.get("title"), track.get("artist")) if v) or None)
         # 곡 소개 멘트 뒤에는 백엔드가 그 곡을 바로 튼다 — 곡 길이만큼 방송이 채워진다
         self._produced_ms += sub.duration_ms + track_ms
         self._submitted += 1
@@ -1373,6 +1419,8 @@ def _reflection_level(req: ListenerRequest, job: GenerationJob) -> int:
     """
     if req is _steering_quote(job) or req.kind in (BOARD_STORY, SONG_REQUEST):
         return 3
+    if any(req is reaction for reaction in job.material.mood):
+        return _MOOD_LEVEL
     return QUOTE_LEVEL
 
 
@@ -1382,5 +1430,5 @@ def _steering_quote(job: GenerationJob) -> ListenerRequest | None:
 
 
 def _inputs(job: GenerationJob) -> list[ListenerRequest]:
-    """이 작업이 쥐고 있는 청취자 입력 — 인용할 채팅과 주 소재(문자·사연·신청곡)."""
-    return [*job.material.quotes, *([job.feature] if job.feature else [])]
+    """이 작업이 쥐고 있는 청취자 입력 — 인용할 채팅, 분위기로 전할 반응, 주 소재(문자·사연·신청곡)."""
+    return [*job.material.quotes, *job.material.mood, *([job.feature] if job.feature else [])]
