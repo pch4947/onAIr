@@ -31,6 +31,7 @@ inputs:
   - {at: "8:50", kind: chat, who: a, body: "이 노래 좋네요", id: song}
   - {at: "9:20", kind: chat, who: b, body: "동생이 올해 수능 봐서 저까지 떨려요", id: sibling}
 expect:
+  # 아래 둘은 자주 빠진다 — 이야기 중에 도착하면 화제 낱말 때문에 반응형이 되어 60초 창에 걸린다 (T-012 남은 것)
   - {type: reflected, input: gimbap, note: 청취자 자신의 이야기는 인용된다}
   - {type: reflected, input: what, note: 되묻는 채팅은 인용하고 답한다}
   - {type: reflected, input: ask, note: DJ에게 묻는 질문은 인용된다}
