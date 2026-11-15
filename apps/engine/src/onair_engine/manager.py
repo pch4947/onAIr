@@ -51,6 +51,7 @@ def config_from_created(station_id: str, created: StationCreated, raw: dict) -> 
         persona_id=p.persona_id,
         voice=p.voice,
         topic=created.topic,
+        music_taste=[str(genre) for genre in p.music_taste],
         first_song=created.first_song.model_dump() if created.first_song else None,
         snapshot=raw,
         experiment=created.experiment.model_dump() if created.experiment else None,
@@ -270,6 +271,8 @@ class EngineManager:
             engine.on_track_queued(payload)
         elif event_type == "track.started":
             engine.on_track_started(payload)
+        elif event_type == "track.suggest_failed":
+            engine.on_track_suggest_failed(payload)
         elif event_type == "state.transition":
             # 재생 시작은 segment.started로만 확정한다. PLAYED에서 길이를 빼 추정하던 것은 지웠다 (#157)
             if payload.get("state") == "PUBLISHED":

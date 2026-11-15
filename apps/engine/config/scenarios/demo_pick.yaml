@@ -1,0 +1,28 @@
+# DJ 선곡 (계약 3.4절 track.suggest, #295).
+# 플레이리스트가 비어 있는 방송이다. 사람이 곡을 넣지 않으면 곡 소개 코너가 빠져 DJ 멘트만 이어진다
+# (2026-11-15 실제 방송: 말이 너무 많아져 멘트의 질이 떨어진다).
+# DJ가 방의 장르와 오늘의 주제에 맞는 곡 후보를 내고, 가짜 백엔드가 그 곡을 찾아 대기열에 넣는다.
+# 곡이 실제로 나가는지, 말과 곡의 비율이 돌아오는지, 곡 소개가 찾은 곡의 이름으로 나가는지를 본다.
+#
+# 선곡을 끈 기준선은 같은 파일에 `--set engine.emit_song_picks=0`을 붙여 돌린다.
+# 곡은 90초로 줄였다 — 16분 방송에서 여러 곡이 나가게 하려는 것이다.
+name: demo_pick
+description: 플레이리스트 없는 방송에서 DJ가 장르와 주제에 맞는 곡을 골라 틀고, 말과 곡의 비율이 돌아오는지 본다.
+station:
+  format: talk
+  corners: [topic_talk]
+  intensity: mid
+  topic: 수능 D-4 화이팅
+  music_taste: [발라드, 인디]
+  broadcast_minutes: 16
+sim:
+  pick_latency_sec: 20
+  pick_song_sec: 90
+tracks: []
+inputs:
+  - {at: "3:00", kind: chat, who: a, body: "저는 수능 날 도시락으로 김밥 싸 갔어요", id: gimbap}
+  - {at: "6:30", kind: chat, who: b, body: "DJ님은 시험 전날 긴장 어떻게 푸세요?", id: ask}
+expect:
+  - {type: min_dj_songs, value: 3, note: DJ가 고른 곡이 세 곡 이상 나간다}
+  - {type: max_fallback, value: 0, note: 대체 멘트 없음}
+  - {type: max_silence_sec, value: 5, note: 긴 무음 없음}

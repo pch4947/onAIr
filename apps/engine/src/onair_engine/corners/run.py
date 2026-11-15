@@ -58,6 +58,17 @@ class TrackSource:
         self._dummy_enabled = dummy
         self._queued: dict | None = None
         self._peeked: dict | None = None  # artist_talk이 미리 본 더미 곡 — 같은 곡을 소개해야 한다
+        # 소개하려고 꺼낸 곡이 아직 재생을 시작하지 않았다 — 백엔드는 곡이 시작될 때 그다음 곡을 알린다 (DJ 선곡, #295)
+        self.taken_at: float | None = None
+
+    @property
+    def has_queued(self) -> bool:
+        """백엔드가 알려 준 다음 곡을 들고 있다."""
+        return self._queued is not None
+
+    def started(self) -> None:
+        """소개한 곡의 재생이 시작됐다 (track.started)."""
+        self.taken_at = None
 
     def queue(self, track: dict) -> None:
         """track.queued — 새 곡이 이전 곡을 대체한다."""
@@ -72,6 +83,8 @@ class TrackSource:
 
     def take(self) -> dict | None:
         track = self.peek()
+        if self._queued is not None:
+            self.taken_at = time.time()
         self._queued = None
         self._peeked = None
         return track
@@ -81,6 +94,7 @@ class TrackSource:
 
         되돌리지 않으면 곡이 시작되지 않아 백엔드도 다음 곡을 보내지 않는다 — 방송 끝까지 음악이 끊긴다.
         """
+        self.taken_at = None
         if self._queued is None:
             self._queued = dict(track)
 

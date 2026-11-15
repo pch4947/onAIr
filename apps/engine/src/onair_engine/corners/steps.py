@@ -20,6 +20,7 @@ from ..prompt_data import (
     DILEMMA,
     HEARD,
     NOW,
+    PICK_WHY,
     REACTIONS,
     SOURCES,
     STORY,
@@ -287,7 +288,9 @@ def _artist_talk(m: Material) -> str:
 def _music_intro(m: Material) -> str:
     assert m.track is not None
     # 곡 제목·아티스트는 외부 텍스트다 (YouTube 메타데이터, F-34)
-    text = "다음 곡을 소개하는 멘트를 2문장 이내로 작성하라."
+    # 문장처럼 읽히는 제목은 말에 녹여 버린다 — "겨울을 걷는다"를 "윤딴딴의 겨울을 걷습니다"로 소개했다 (2026-11-15, #295)
+    text = ("다음 곡을 소개하는 멘트를 2문장 이내로 작성하라. 곡 제목은 적힌 그대로 한 글자도 바꾸지 않고 부른다 — "
+            "제목이 문장처럼 보여도 말끝을 바꾸거나 풀어 말하지 않는다.")
     if nickname := m.track.get("requester_nickname"):
         text += " 청취자의 신청곡임을 닉네임과 함께 소개한다."
         info = track_line(m.track) + "\n신청자: " + nickname
@@ -295,6 +298,12 @@ def _music_intro(m: Material) -> str:
             text += " 신청자가 남긴 한마디도 언급한다."
             info += "\n한마디: " + comment
         return text + "\n" + data_block(TRACK, info)
+    if m.track.get("dj_pick"):  # DJ가 고른 곡 (계약 3.4절 track.suggest, #295)
+        text += " DJ가 이 방송을 위해 직접 고른 곡이다."
+        if why := m.track.get("pick_why"):
+            # 곡 정보는 백엔드가 찾은 실제 곡이고, 까닭은 고를 때 적어 둔 것이다 — 곡이 달라졌을 수 있어 사실로 쓰지 않는다
+            return (text + " 아래 고른 까닭을 참고해 왜 골랐는지 한마디 곁들인다. 까닭에 없는 사실을 지어내지 않는다.\n"
+                    + data_block(TRACK, track_line(m.track)) + "\n" + data_block(PICK_WHY, why))
     return text + "\n" + data_block(TRACK, track_line(m.track))
 
 

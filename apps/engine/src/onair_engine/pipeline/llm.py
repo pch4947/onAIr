@@ -213,7 +213,7 @@ class DummyLlmClient:
 
     async def complete(self, prompt: Prompt, *, max_tokens: int) -> str:
         await self._wait()
-        from ..inputs import dilemmas, story_judge, topic_plan
+        from ..inputs import dilemmas, song_picks, story_judge, topic_plan
         if BLOCK_MARKER in _DATA_RE.sub("", prompt.user):
             m = _PARTS_RE.search(prompt.user)
             lines = _TEMPLATES[BLOCK_STEP][:int(m.group(1)) if m else 3]
@@ -224,6 +224,8 @@ class DummyLlmClient:
             return topic_plan.dummy_plan_json(prompt)
         if dilemmas.MARKER in prompt.user:
             return dilemmas.dummy_dilemmas_json(prompt)
+        if song_picks.MARKER in prompt.user:
+            return song_picks.dummy_picks_json(prompt)
         # 나머지 구조화 출력은 persona 초안이다 — API 키 없이 방 생성 화면을 개발할 수 있게 한다
         from ..personas import dummy_drafts_json  # 순환 import 회피 (personas가 llm을 쓴다)
         return dummy_drafts_json(prompt)

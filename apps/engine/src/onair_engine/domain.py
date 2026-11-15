@@ -117,6 +117,7 @@ class StationConfig:
     persona_id: str | None = None
     voice: str | None = None  # 이 방의 TTS 보이스. None이면 엔진 기본값(pipeline.tts_voice)
     topic: str | None = None  # 오늘의 주제. None이면 엔진이 정한다
+    music_taste: list[str] = field(default_factory=list)  # persona의 선곡 취향(장르) — DJ 선곡의 기준 (#295)
     first_song: dict | None = None  # 계약 3.4절 track — 백엔드가 방송 시작과 함께 튼다
     snapshot: dict | None = None  # 받은 station.created 페이로드 원문 — 계측에 persona 사본으로 남긴다
     experiment: dict | None = None  # 실험용 방의 조건 (ExperimentSpec) — selector, window_sec

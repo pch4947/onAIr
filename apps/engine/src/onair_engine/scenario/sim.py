@@ -150,6 +150,12 @@ class SimBackend:
         self.format_switches: list[dict] = []  # 형식 전환 기록 — 버튼부터 새 형식 첫 멘트의 제출·재생까지
         self.votes: list[dict] = []  # 투표 기록 — 받은 vote.open과 창을 연·닫은 시각, 보낸 결과
         self._vote_tasks: set[asyncio.Task] = set()
+        # DJ 선곡 (#295) — 받은 제안과, 찾아서 대기열에 넣어 둔 곡
+        self.suggests: list[dict] = []
+        self._dj_picks: deque[dict] = deque()  # {"track", "suggest_id", "candidate"}
+        self._queued_pick: dict | None = None  # 다음 곡이 DJ 선곡이면 그 곡
+        self._dj_refs: set[str] = set()
+        self.dj_songs = 0  # 재생을 시작한 DJ 선곡 수
 
     @property
     def engine_done(self) -> bool:
@@ -178,7 +184,7 @@ class SimBackend:
             change["corner"] = sub.corner_type
             change["submit_sec"] = round(self.now() - change["at"], 1)
         if sub.music_ref and sub.music_ref == self._queued_ref:
-            self._queued_ref = self._queued_request = None
+            self._queued_ref = self._queued_request = self._queued_pick = None
             self.queue_next_track()  # 소개할 곡을 엔진이 가져갔다 — 백엔드가 다음 곡을 미리 알린다
         elif sub.music_ref in self._by_ref:
             self._forget_displaced(sub.music_ref)
@@ -194,6 +200,35 @@ class SimBackend:
         elif event_type == "vote.open":  # 기준 세그먼트의 재생이 시작될 때 연다 (계약 10.8절)
             self.votes.append({**payload, "at": round(self.now(), 1), "opened_at": None, "closed_at": None,
                                "counts": None, "discarded": False})
+        elif event_type == "track.suggest":  # DJ가 곡 후보를 냈다 — 찾아서 대기열에 넣는다 (계약 3.4절)
+            record = {**payload, "at": round(self.now(), 1), "result": None, "queued_at": None}
+            self.suggests.append(record)
+            task = asyncio.create_task(self._resolve_pick(record))
+            self._vote_tasks.add(task)
+            task.add_done_callback(self._vote_tasks.discard)
+
+    async def _resolve_pick(self, record: dict) -> None:
+        """제안된 후보를 찾아 대기열에 넣는다. 실제 백엔드처럼 플레이리스트가 있으면 받지 않는다."""
+        if self._playlist:
+            record["result"] = "not_needed"
+            self.engine.on_track_suggest_failed({"suggest_id": record["suggest_id"], "reason": "not_needed"})
+            return
+        await asyncio.sleep(self.sim.pick_latency_sec)
+        if self.engine_done:
+            return
+        candidates = record.get("candidates") or []
+        if not candidates or self.rng.random() < self.sim.pick_miss_rate:
+            record["result"] = "not_found"
+            self.engine.on_track_suggest_failed({"suggest_id": record["suggest_id"], "reason": "not_found"})
+            return
+        first = candidates[0]
+        record["result"], record["queued_at"] = "queued", round(self.now(), 1)
+        self._dj_picks.append({
+            "track": TrackSpec(title=first["title"], artist=first.get("artist") or "알 수 없는 아티스트",
+                               sec=self.sim.pick_song_sec),
+            "suggest_id": record["suggest_id"], "candidate": 0})
+        if self._queued_ref is None:
+            self.queue_next_track()
 
     # ── 곡 ───────────────────────────────────────────────────────────
     def queue_next_track(self, request: dict | None = None) -> None:
@@ -203,17 +238,25 @@ class SimBackend:
         """
         if request is None and self._requests:
             request = self._requests.pop()
+        pick = None
         if request is not None:
             track = request["track"]
             self._put_back_queued()
-        else:
+        elif self._playlist:
             track = self._playlist.popleft()
             self._playlist.append(track)
+        elif self._dj_picks:  # 신청곡 > 플레이리스트 > DJ 선곡
+            pick = self._dj_picks.popleft()
+            track = pick["track"]
+        else:  # 틀 곡이 없다 — 엔진에 알리지 않는다. DJ 선곡이 켜져 있으면 엔진이 곡을 제안한다
+            self._queued_ref = self._queued_request = self._queued_pick = None
+            return
         self._next_ref += 1
         ref = f"sim:{self._next_ref}"
         self._by_ref[ref] = track
         self._queued_ref = ref
         self._queued_request = request
+        self._queued_pick = pick
         if request is not None:
             self._ref_requests[ref] = request
         payload = {"track": {"track_ref": ref, "title": track.title, "artist": track.artist,
@@ -221,6 +264,9 @@ class SimBackend:
         if request is not None:
             payload.update(source="request", request_id=request["request_id"],
                            nickname=request.get("nickname"))
+        elif pick is not None:
+            self._dj_refs.add(ref)
+            payload.update(source="dj", suggest_id=pick["suggest_id"], candidate=pick["candidate"])
         self._payloads[ref] = payload
         self.engine.on_track_queued(payload)
 
@@ -228,7 +274,9 @@ class SimBackend:
         """알려 둔 다음 곡을 다음 차례로 돌린다 — 신청곡은 밀린 신청으로, 플레이리스트 곡은 순서의 맨 앞으로."""
         if self._queued_request is not None:
             self._requests.append(self._queued_request)
-        elif self._queued_ref is not None:
+        elif self._queued_pick is not None:
+            self._dj_picks.appendleft(self._queued_pick)
+        elif self._queued_ref is not None and self._playlist:
             self._playlist.rotate(1)  # queue_next_track이 맨 뒤로 보낸 곡이다
 
     def _forget_displaced(self, ref: str) -> None:
@@ -372,6 +420,8 @@ class SimBackend:
             self.played.append(Played(self._at(), "music", track_sec, sub.id, sub.corner_type,
                                       text=f"{track.title} - {track.artist}"))
             self._current_end = time.time() + track_sec
+            if sub.music_ref in self._dj_refs:
+                self.dj_songs += 1
             if not self.engine_done:
                 self.engine.on_track_started({"track_ref": sub.music_ref,
                                               "started_at": time.time() + self.sim.broadcast_delay_sec})

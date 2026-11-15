@@ -23,6 +23,7 @@ from .inputs.dilemmas import DilemmaPlan
 from .inputs.inbox import MessageInbox
 from .inputs.router import BOARD_STORY
 from .inputs.rules import load_chat_rules
+from .inputs.song_picks import Pick, SongPicker
 from .inputs.stories import StoryPool
 from .inputs.story_judge import StoryJudge
 from .inputs.topic_plan import TopicPlan, angle_count
@@ -74,6 +75,11 @@ class EngineSettings:
     # 켜면 DJ 대 청취자 코너의 투표를 연다 (vote.open, 계약 10.8절, #279). 백엔드가 vote.open을 받고
     # vote.result를 돌려주게 배포된 뒤에 켠다 — 꺼져 있으면 그 코너는 지금처럼 주제 토크로 대체된다
     emit_votes: bool = False
+    # DJ 선곡 (계약 3.4절 track.suggest, #295) — 들고 있는 다음 곡이 없으면 DJ가 곡 후보를 내고 백엔드가 찾아 튼다.
+    # 지금 백엔드는 모르는 이벤트를 격리하므로, 백엔드가 track.suggest를 받게 배포된 뒤에 켠다
+    emit_song_picks: bool = False
+    song_pick_grace_sec: float = 5.0  # 백엔드가 다음 곡을 알려 줄 시점부터 이만큼 기다린 뒤에 제안한다 [예시]
+    song_pick_timeout_sec: float = 90.0  # 제안에 답이 없으면 이만큼 뒤에 다시 제안한다 [예시]
     vote_window_sec: float = 60.0  # 투표 창 길이 — 기준 세그먼트의 재생 시작부터 [예시]
     # 뉴스 피드 읽기를 바꿔 끼운다 (URL → 바이트). 시나리오 실행기와 테스트가 네트워크 없이 돌릴 때 쓴다
     rss_fetch: Callable[[str], bytes] | None = None
@@ -114,6 +120,18 @@ class PersonaChanged(BaseModel):
     """station.persona_changed 페이로드 (계약 3.2절) — persona는 station.created의 것과 같은 구조다."""
 
     persona: Persona
+
+
+_PICK_POLL_SEC = 1.0
+_PICK_RETRY_SEC = 20.0  # 곡을 내지 못했을 때 다시 고르기까지 [예시]
+_PICK_TAKEN_WAIT_SEC = 60.0  # 소개한 곡의 시작 통보를 기다리는 상한 [예시]
+_PICK_NOT_NEEDED_WAIT_SEC = 60.0  # 백엔드가 "틀 곡이 있다"고 답했을 때 [예시]
+_PICK_MAX_FAILURES = 3  # 연달아 이만큼 실패하면 쉰다 [예시]
+_PICK_REST_SEC = 120.0
+
+
+def _song_label(track: dict) -> str:
+    return " — ".join(str(track[k]) for k in ("title", "artist") if track.get(k))
 
 
 def profile_from(persona: Persona) -> StationProfile:
@@ -186,6 +204,16 @@ class StationEngine:
         self.topic_plan = self._make_topic_plan(fmt)
         self.sources.votes.window_sec = settings.vote_window_sec
         self._dilemma_task: asyncio.Task | None = None  # 투표 고민 만들기 — 방송에 한 번
+        # DJ 선곡 — 설정이 꺼져 있으면 고르지 않는다
+        self.song_picker = SongPicker(llm, config.profile, config.music_taste, self.topic,
+                                      violates=safety.check_l2) if settings.emit_song_picks else None
+        self._pick_task: asyncio.Task | None = None
+        self._pending_pick: tuple[str, list[Pick], float] | None = None  # 답을 기다리는 제안 (id, 후보, 보낸 때)
+        self._pick_after = 0.0  # 이 시각 전에는 제안하지 않는다
+        self._pick_failures = 0  # 연달아 실패한 횟수
+        self._played: list[str] = []  # 이번 방송에서 튼 곡 — 다시 고르지 않는다
+        if config.first_song and config.first_song.get("title"):
+            self._played.append(_song_label(config.first_song))
         self._dilemmas_planned = False
         self.glue = GlueBank(tts=tts, audio_root=audio_root, station_id=config.station_id,
                              profile=config.profile, fmt=fmt, safety=safety)
@@ -286,11 +314,14 @@ class StationEngine:
             judge = asyncio.create_task(self.story_judge.run())
             await self.transport.notify_station("station.started", {"topic": self.topic})
             self.telemetry.log_station("station.started", {"topic": self.topic})
+            if self.song_picker is not None:
+                self._pick_after = time.time() + self.settings.song_pick_grace_sec
+                self._pick_task = asyncio.create_task(self._pick_songs())
             await self.scheduler.run(self._stop, max_segments=max_segments)
         finally:
             # 방송 중 형식 전환으로 폴링과 갈래 계획이 바뀌었을 수 있다 — 지금 것을 멈춘다
-            tasks = [t for t in (self._poller, self._plan_task, judge, self._glue_task, self._dilemma_task)
-                     if t is not None]
+            tasks = [t for t in (self._poller, self._plan_task, judge, self._glue_task, self._dilemma_task,
+                                 self._pick_task) if t is not None]
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -321,8 +352,85 @@ class StationEngine:
                 track["requester_nickname"] = nickname[:50]
         if payload.get("source") == "request" and payload.get("request_id"):
             self.scheduler.attach_song_request(track, payload["request_id"])
+        if payload.get("source") == "dj":
+            track["dj_pick"] = True
+        if self.song_picker is not None:
+            self._note_queued(track, payload)
         self.tracks.queue(track)
         self.telemetry.log_track(track)
+
+    def _note_queued(self, track: dict, payload: dict) -> None:
+        """다음 곡이 정해졌다 — 튼 곡으로 적어 두고, DJ가 제안한 곡이면 고른 까닭을 붙인다.
+
+        소개는 track의 실제 곡 정보로 하고, 고른 까닭만 제안에서 가져온다.
+        """
+        self._played.append(_song_label(track))
+        # 백엔드가 다음 곡을 알려 왔다 — 이 곡이 나갈 때까지는 고를 일이 없다
+        self._pick_after = max(self._pick_after, time.time() + self.settings.song_pick_grace_sec)
+        pending = self._pending_pick
+        if payload.get("source") != "dj" or pending is None or payload.get("suggest_id") != pending[0]:
+            return
+        self._pending_pick = None
+        self._pick_failures = 0
+        index = payload.get("candidate")
+        known = isinstance(index, int) and not isinstance(index, bool) and 0 <= index < len(pending[1])
+        if known and pending[1][index].why:
+            track["pick_why"] = pending[1][index].why
+
+    def on_track_suggest_failed(self, payload: dict) -> None:
+        """백엔드가 제안한 곡을 넣지 못했다 (계약 3.4절) — 다른 후보로 다시 제안한다. 연달아 실패하면 쉰다."""
+        suggest_id, reason = payload.get("suggest_id"), str(payload.get("reason") or "unknown")[:40]
+        if self._pending_pick is None or suggest_id != self._pending_pick[0]:
+            return
+        self._pending_pick = None
+        self.telemetry.log_song_pick_failed(suggest_id, reason)
+        now = time.time()
+        if reason == "not_needed":  # 백엔드에 틀 곡이 있다 — 곧 track.queued로 알려 온다
+            self._pick_after = now + _PICK_NOT_NEEDED_WAIT_SEC
+            return
+        self._pick_failures += 1
+        if self._pick_failures >= _PICK_MAX_FAILURES:
+            self._pick_failures = 0
+            self._pick_after = now + _PICK_REST_SEC
+        else:
+            self._pick_after = now + self.settings.song_pick_grace_sec
+
+    def _needs_pick(self, now: float) -> bool:
+        """지금 곡을 골라야 한다 — 들고 있는 다음 곡이 없고, 백엔드가 알려 줄 때를 기다릴 만큼 기다렸다."""
+        if self.tracks.has_queued or now < self._pick_after:
+            return False
+        # 소개한 곡이 시작되면 백엔드가 그다음 곡을 알린다 — 그때까지 기다린다. 시작 통보가 오지 않으면 기다리지 않는다
+        taken = self.tracks.taken_at
+        if taken is not None and now - taken < _PICK_TAKEN_WAIT_SEC:
+            return False
+        if self._pending_pick is not None:
+            if now - self._pending_pick[2] < self.settings.song_pick_timeout_sec:
+                return False
+            self.telemetry.log_song_pick_failed(self._pending_pick[0], "timeout")
+            self._pending_pick = None
+        return True
+
+    async def _pick_songs(self) -> None:
+        """들고 있는 다음 곡이 없으면 DJ가 곡 후보를 내 백엔드에 알린다 (계약 3.4절 track.suggest, #295)."""
+        assert self.song_picker is not None
+        while True:
+            await asyncio.sleep(_PICK_POLL_SEC)
+            if not self._needs_pick(time.time()):
+                continue
+            picks = await self.song_picker.pick(list(self._played))
+            now = time.time()
+            if not picks:  # 제공자 장애이거나 새 곡을 내지 못했다 — 조금 뒤에 다시 고른다
+                self._pick_after = now + _PICK_RETRY_SEC
+                continue
+            if self.tracks.has_queued:  # 고르는 사이 백엔드가 곡을 알려 왔다 — 이번 후보는 다음에 쓴다
+                continue
+            suggest_id = new_id("sg")
+            self._pending_pick = (suggest_id, picks, now)
+            await self.transport.notify_station("track.suggest", {
+                "suggest_id": suggest_id,
+                "candidates": [{"title": pick.title, "artist": pick.artist} for pick in picks],
+            })
+            self.telemetry.log_song_pick(suggest_id, picks)
 
     def on_board_story(self, payload: dict) -> None:
         """게시판 사연 후보 (계약 3.5절). L0를 통과한 것만 풀에 넣는다. 내부 ID는 프롬프트에 넣지 않는다."""
@@ -394,6 +502,8 @@ class StationEngine:
         except ValueError as exc:
             return self._reject_persona("unsafe_persona", str(exc)[:300])
         self._profile, self._tts = profile, tts
+        if self.song_picker is not None:
+            self.song_picker.use_persona(profile, [str(genre) for genre in persona.music_taste])
         self._use_glue(glue)
         self.scheduler.switch_persona(PersonaSwitch(
             profile=profile, tts=tts, persona_id=persona.persona_id, voice=persona.voice,
@@ -517,6 +627,10 @@ class StationEngine:
         track_ref, started_at = payload.get("track_ref"), payload.get("started_at")
         if isinstance(track_ref, str) and isinstance(started_at, (int, float)):
             self.scheduler.on_track_started(track_ref, float(started_at))
+        # 곡이 시작되면 백엔드가 그다음 곡을 알린다 — 그만큼 기다렸다가 없으면 DJ가 고른다
+        self.tracks.started()
+        if self.song_picker is not None:
+            self._pick_after = max(self._pick_after, time.time() + self.settings.song_pick_grace_sec)
 
     def on_segment_started(self, segment_id: object, started_at: object) -> None:
         """세그먼트 재생 시작 (계약 10.6절) — 인용이 들어 있으면 여기서 반영이 확정된다."""
