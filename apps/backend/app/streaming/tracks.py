@@ -12,7 +12,8 @@ if meta.source == 'playlist' then
 end
 local nextid = redis.call('HGET', KEYS[6], 'next')
 -- 첫 곡(first)은 엔진이 station.created로 이미 알고 소개 없이 틀므로 track.queued를 보내지 않는다
-if meta.source ~= 'first' and (not nextid or (meta.source ~= 'playlist' and redis.call('HEXISTS', KEYS[6], 'frozen') == 0)) then
+-- DJ 선곡(dj)은 끼어들지 않는다 — 다음 곡이 비어 있을 때만 다음 곡이 된다 (신청곡 > 플레이리스트·DJ 선곡, 3.4절)
+if meta.source ~= 'first' and (not nextid or (meta.source ~= 'playlist' and meta.source ~= 'dj' and redis.call('HEXISTS', KEYS[6], 'frozen') == 0)) then
  redis.call('HSET', KEYS[6], 'next', ARGV[1])
  redis.call('XADD', KEYS[7], '*', 'type', 'track.queued', 'contract_version', '1',
   'event_id', 'evt_track_' .. ARGV[1], 'station_id', ARGV[6], 'at', ARGV[7], 'payload', ARGV[5])
@@ -41,7 +42,8 @@ for _, id in ipairs(redis.call('LRANGE', KEYS[6], 0, -1)) do
  local terminal = state and cjson.decode(state).state
  if id ~= current and raw and terminal ~= 'PUBLISHED' and terminal ~= 'PLAYED' and terminal ~= 'FAILED' then
   if not chosen then chosen = id end
-  if cjson.decode(raw).source ~= 'playlist' then urgent = id end
+  local source = cjson.decode(raw).source
+  if source ~= 'playlist' and source ~= 'dj' then urgent = id end
  end
 end
 chosen = urgent or chosen

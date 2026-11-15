@@ -80,6 +80,26 @@ def search_candidates(payload, max_seconds):
     return result
 
 
+async def search_youtube(settings, query):
+    """YouTube 검색 — 신청곡 검색과 DJ 선곡(dj_picks.py)이 함께 쓴다. 실패하면 HTTPException(502·503·504)."""
+    if not settings.lavalink_password:
+        raise HTTPException(503, 'Search service unavailable')
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=False, trust_env=False) as client:
+            response = await client.get(settings.lavalink_url + '/v4/loadtracks',
+                headers={'Authorization': settings.lavalink_password},
+                params={'identifier': 'ytsearch:' + query})
+        if response.status_code != 200:
+            raise HTTPException(503, 'Search service unavailable')
+        return search_candidates(response.json(), settings.youtube_max_seconds)
+    except httpx.TimeoutException:
+        raise HTTPException(504, 'Search timed out') from None
+    except httpx.RequestError:
+        raise HTTPException(503, 'Search service unavailable') from None
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(502, 'Invalid search service response') from None
+
+
 @router.get('/{station_id}/tracks/queue')
 async def track_queue(station_id: str, request: Request):
     """Public: the actual upcoming music queue, in playback order.
@@ -131,15 +151,7 @@ async def search_tracks(station_id: str, body: TrackSearchInput, request: Reques
         station = json.loads(raw)
         if station['status'] != 'started':
             raise HTTPException(409, 'Station must be started')
-        if not settings.lavalink_password:
-            raise HTTPException(503, 'Search service unavailable')
-        async with httpx.AsyncClient(timeout=10, follow_redirects=False, trust_env=False) as client:
-            response = await client.get(settings.lavalink_url + '/v4/loadtracks',
-                headers={'Authorization': settings.lavalink_password},
-                params={'identifier': 'ytsearch:' + body.query})
-        if response.status_code != 200:
-            raise HTTPException(503, 'Search service unavailable')
-        return TrackSearchResult(candidates=search_candidates(response.json(), settings.youtube_max_seconds))
+        return TrackSearchResult(candidates=await search_youtube(settings, body.query))
     except (httpx.TimeoutException, TimeoutError):
         raise HTTPException(504, 'Search timed out') from None
     except (httpx.RequestError, RedisError):
@@ -335,7 +347,9 @@ class MusicService:
             manifest.write_text(json.dumps(metadata), encoding='utf-8')
         return audio, metadata
 
-    async def enqueue(self, video_id, owner, retry_key, source='playlist', request_id=None, nickname=None, comment=None):
+    async def enqueue(self, video_id, owner, retry_key, source='playlist', request_id=None, nickname=None, comment=None,
+                      extra=None):
+        """extra는 track.queued에 더 실을 값이다 — DJ 선곡의 suggest_id·candidate (3.4절, #295)."""
         station_raw = await self.redis.get(self.prefix + ':station')
         station = json.loads(station_raw) if station_raw else {}
         generation = station.get('generation', '')
@@ -367,7 +381,7 @@ class MusicService:
             result = dict(segment_id=segment_id, track=track, status='queued',
                           hls_url=f'/hls/{self.settings.station_id}/index.m3u8', source=source, request_id=request_id)
             event_track = {**track, 'title': track['title'][:200], 'artist': track['artist'][:200]}
-            event = {'track': event_track, 'source': source}
+            event = {'track': event_track, 'source': source, **(extra or {})}
             if song_request_id:
                 event['nickname'] = nickname or '익명'
                 event['request_id'] = song_request_id

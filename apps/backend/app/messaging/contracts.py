@@ -98,6 +98,22 @@ class VoteOpen(BaseModel):
     window_sec: Annotated[int, Field(ge=10, le=600)]
 
 
+class PickCandidate(BaseModel):
+    model_config = ConfigDict(strict=True, extra='forbid')
+    title: Annotated[str, Field(min_length=1, max_length=200)]
+    artist: Annotated[str, Field(max_length=200)] = ''
+
+
+class TrackSuggest(BaseModel):
+    """track.suggest (E→B, 3.4절, #295). DJ가 낸 곡 후보 — 앞의 것부터 YouTube에서 찾아 대기열에 넣는다.
+
+    제목·아티스트는 LLM이 낸 문자열이라 없는 곡일 수 있다. 검색어로만 쓴다.
+    """
+    model_config = ConfigDict(strict=True, extra='forbid')
+    suggest_id: Text
+    candidates: Annotated[list[PickCandidate], Field(min_length=1, max_length=5)]
+
+
 def decode(fields: dict, station_id: str):
     required = {"type", "contract_version", "event_id", "station_id", "at", "payload"}
     if not required <= fields.keys() or not all(isinstance(v, str) for v in fields.values()):
@@ -135,6 +151,8 @@ def decode(fields: dict, station_id: str):
         if len(set(result.options)) != len(result.options):
             raise ValueError('duplicate_vote_options')
         return result
+    if fields['type'] == 'track.suggest':
+        return TrackSuggest.model_validate(payload)
     raise ValueError("unsupported_event")
 
 

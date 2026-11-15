@@ -213,7 +213,7 @@ def test_engine_waits_while_the_backend_may_still_announce_a_song(tmp_path):
     engine.on_track_suggest_failed({"suggest_id": "sg_1", "reason": "not_needed"})
     assert not engine._needs_pick(time.time() + 30) and engine._needs_pick(time.time() + 61), \
         "백엔드에 틀 곡이 있다고 했다 — 한동안 제안하지 않는다"
-    engine._pending_pick = ("sg_2", [Pick("곡", "가수")], time.time() - 91)
+    engine._pending_pick = ("sg_2", [Pick("곡", "가수")], time.time() - 301)
     assert engine._needs_pick(time.time() + 61) and engine._pending_pick is None, "답이 없으면 다시 제안한다"
     engine.telemetry.close()
     assert "선곡 실패 · timeout" in _summaries(tmp_path)

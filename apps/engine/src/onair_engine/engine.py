@@ -79,7 +79,9 @@ class EngineSettings:
     # 지금 백엔드는 모르는 이벤트를 격리하므로, 백엔드가 track.suggest를 받게 배포된 뒤에 켠다
     emit_song_picks: bool = False
     song_pick_grace_sec: float = 5.0  # 백엔드가 다음 곡을 알려 줄 시점부터 이만큼 기다린 뒤에 제안한다 [예시]
-    song_pick_timeout_sec: float = 90.0  # 제안에 답이 없으면 이만큼 뒤에 다시 제안한다 [예시]
+    # 제안에 답이 없으면 이만큼 뒤에 다시 제안한다. 백엔드는 검색과 음원 받기에 최대 240초를 쓰고 그 안에
+    # 반드시 답한다(apps/backend/app/dj_picks.py TOTAL_BUDGET_SEC) — 그보다 길어야 같은 자리에 두 번 제안하지 않는다
+    song_pick_timeout_sec: float = 300.0
     vote_window_sec: float = 60.0  # 투표 창 길이 — 기준 세그먼트의 재생 시작부터 [예시]
     # 뉴스 피드 읽기를 바꿔 끼운다 (URL → 바이트). 시나리오 실행기와 테스트가 네트워크 없이 돌릴 때 쓴다
     rss_fetch: Callable[[str], bytes] | None = None

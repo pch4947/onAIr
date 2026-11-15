@@ -9,8 +9,10 @@ import uuid
 
 from redis.exceptions import RedisError, ResponseError
 
-from .contracts import CornerChanged, Segment, StationStarted, StationRejected, VoteOpen, decode, validate_audio
+from .contracts import (CornerChanged, Segment, StationStarted, StationRejected, TrackSuggest, VoteOpen, decode,
+                        validate_audio)
 from ..board_stories import StoryFeed
+from ..dj_picks import start_pick
 from ..first_song import enqueue_first_song
 from ..stations import StationStore
 from ..streaming.tracks import MUSIC_SEGMENT_PREFIX
@@ -177,6 +179,10 @@ class EngineConsumer:
             # Like corner.changed: opened when its segment starts playing (journal.DELIVER).
             await self.redis.hset(self.prefix + ':vote-pending', event.segment_id,
                                   json.dumps(event.model_dump(), ensure_ascii=False))
+        elif isinstance(event, TrackSuggest):
+            # DJ 선곡 (3.4절, #295) — 검색과 음원 받기는 몇 분 걸릴 수 있어 뒤에서 한다
+            if self.state is not None and getattr(self.state, 'music', None):
+                start_pick(self.state, event)
         elif isinstance(event, CornerChanged):
             # The engine schedules ahead of the broadcast; this waits for the segment to start playing.
             await self.redis.hset(self.prefix + ':corner-pending', event.segment_id, json.dumps(
