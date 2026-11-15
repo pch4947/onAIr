@@ -42,7 +42,14 @@ export function SongQueueModal({ queue, playingSegmentId, onClose }: SongQueueMo
                   <div className="flex min-w-0 items-center gap-2.5">
                     <span className="shrink-0 text-xs font-semibold text-text-muted">{index + 1}</span>
                     <div className="flex min-w-0 flex-col">
-                      <p className="truncate text-[13px] text-text">{item.track.title}</p>
+                      <p className="flex min-w-0 items-center gap-1.5">
+                        <span className="truncate text-[13px] text-text">{item.track.title}</span>
+                        {item.source === 'dj' && (
+                          <span className="shrink-0 rounded-xl bg-primary-soft px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                            DJ 선곡
+                          </span>
+                        )}
+                      </p>
                       {item.track.artist && (
                         <p className="truncate text-[11px] text-text-muted">{item.track.artist}</p>
                       )}

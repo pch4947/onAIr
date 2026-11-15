@@ -70,7 +70,8 @@ export interface QueuedTrackInfo {
 export interface QueuedTrack {
   segment_id: string
   track: QueuedTrackInfo
-  source?: 'playlist' | 'request' | 'vote'
+  // dj: 플레이리스트가 비었을 때 DJ가 장르·주제에 맞춰 고른 곡 (#295)
+  source?: 'playlist' | 'request' | 'vote' | 'dj'
   request_id?: string | null
 }
 
