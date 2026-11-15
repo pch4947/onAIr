@@ -200,6 +200,17 @@ onair-engine --tts cartesia --max-segments 15 --demo-request "요즘 잠이 안 
 - **엔진 패널**: `선곡 제안 · 밤편지 — 아이유 외 2곡`, `DJ 선곡 도착 · …`, `선곡 실패 · not_found`.
 - **시나리오**: `config/scenarios/demo_pick.yaml`(플레이리스트 없는 방송). 가짜 백엔드가 제안을 받아 곡을 넣습니다(`sim.pick_latency_sec`, `sim.pick_song_sec`, `sim.pick_miss_rate`). 선곡을 끈 기준선은 `--set engine.emit_song_picks=0`입니다.
 
+### 신청곡 판정 (#301)
+
+청취자가 신청한 곡이 방의 장르와 분위기에 어울리는지 판정합니다. 백엔드가 음원을 받기 전에 엔진 REST로 묻고, 어울리지 않으면 신청 화면에서 바로 알립니다. 계약은 [ENGINE_REDIS_CONTRACT.md](../../docs/ENGINE_REDIS_CONTRACT.md) 6.4절입니다.
+
+- **주소**: `POST /v1/stations/{station_id}/song-requests/check` — `{"title", "artist"}`를 받아 `{"fit", "judged", "reason"}`을 돌려줍니다.
+- **기준** (`inputs/song_fit.py`): persona의 선곡 취향(장르)과 스테이션 컨셉입니다. 곡 정보는 YouTube 영상 제목과 채널 이름이어도 됩니다.
+- **통과가 기본입니다.** 확실히 어울리지 않을 때만 거절합니다. 모르는 곡, 판단이 서지 않는 곡은 통과시키고, 4초 안에 답을 못 내거나 LLM이 실패해도 통과로 답합니다(`judged: false`). 맞는 곡을 거절당하는 쪽이 청취자에게 더 나쁜 경험이기 때문입니다.
+- **확인** (실제 LLM, 곡마다 4번): 방에 맞는 곡 13곡은 52번 모두 통과, 확실히 안 맞는 곡 8곡은 32번 중 31번 거절. 발라드·인디 방에서 밝은 댄스 팝은 거절합니다 — 더 느슨하게 받으려면 `song_fit.py`의 지시를 고칩니다.
+- **엔진 패널**: `신청곡 판정 · Master of Puppets — Metallica · 거절 · …`, `신청곡 판정 · 밤편지 · 통과`.
+- 백엔드가 이 주소를 부르기 전까지는 아무것도 달라지지 않습니다(#301).
+
 ### 뉴스 대본의 주관 표현 규칙 (#286)
 
 뉴스 형식은 DJ의 의견·평가·전망 없이 사실만 전합니다 (CORNER_DESIGN 6.4절). 프롬프트 지시만으로는 결정적으로 지킬 수 없어 출력에 규칙을 겁니다.

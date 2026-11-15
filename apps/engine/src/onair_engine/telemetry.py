@@ -492,6 +492,13 @@ class Telemetry:
                     candidates=[pick.label for pick in picks])
         self._db.commit()
 
+    def log_song_fit(self, title: str, artist: str, result) -> None:
+        """신청곡 판정(계약 6.4절) — 패널에만 남긴다."""
+        label = f"{title} — {artist}" if artist else title
+        verdict = "통과" if result.fit else f"거절 · {result.reason or '어울리지 않음'}"
+        self._event("song_fit", f"신청곡 판정 · {label[:60]} · {verdict}", fit=result.fit, reason=result.reason or None)
+        self._db.commit()
+
     def log_song_pick_failed(self, suggest_id: str | None, reason: str) -> None:
         self._event("song_pick", f"선곡 실패 · {reason}", suggest_id=suggest_id, reason=reason)
         self._db.commit()
