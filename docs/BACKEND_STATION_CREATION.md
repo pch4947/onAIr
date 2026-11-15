@@ -86,7 +86,7 @@ FastAPI 형식 오류는 `detail` 배열로 원래 형태를 유지한다.
 `station.status`는 `preparing / started / rejected / draining / stopping / cleaning / ended`다. `started`는 엔진 준비 완료이며
 실제 청취 완료나 HLS 준비를 뜻하지 않는다. `hls_ready`는 별도 값이고 폴백으로도 true가 될 수 있다.
 엔진이 생성 요청을 소비하지 않았으면 `preparing`에 머문다. 시작한 방송의 종료는 아래 절차로 자동 감지한다.
-기존 `/api/stream/state` 및 `/api/requests`는 설정된 단일 방송을 계속 사용한다.
+요청·상태 경로는 방송별(`/api/stations/{station_id}/stream/state`, `/api/stations/{station_id}/requests`)이다. 방송 ID가 없던 옛 경로는 다중 방송 7단계에서 지웠다([BACKEND_MULTI_STATION.md](BACKEND_MULTI_STATION.md)).
 
 새 방송은 `ended` 확인 후 새로운 `Idempotency-Key`로 생성한다. 기존 키 재시도는 이전 방송을 반환한다.
 기존 수동 로컬 엔진과 API로 생성한 엔진을 같은 station_id로 동시에 실행하지 않는다.
@@ -105,7 +105,7 @@ FastAPI 형식 오류는 `detail` 배열로 원래 형태를 유지한다.
 - 원본 음원, VOD, persona, 요청·세그먼트 이력은 보존한다. 미완료 요청은 `failed`와
   `broadcast_ended` 사유로 종결한다. 이전 다시듣기의 소유권은 새 방송 소유자에게 넘어가지 않는다.
 - 정리 후 `ended`로 표시하고 폴백 송출을 중단한다. 다음 방송은 새 HLS 세션으로 시작한다.
-  공개 `GET /api/stream/state`의 `stationStatus`로 종료 화면을 갱신한다.
+  공개 `GET /api/stations/{station_id}/stream/state`의 `stationStatus`로 종료 화면을 갱신한다.
 - 종료 요청은 반복해도 안전하다. 본문의 `created_at`이 현재 방송과 다르면 409로 거부하여
   오래 열린 화면에서 새 방송을 종료하는 것을 막는다. Redis/파일 오류가 나면 정리 상태를 보존하고 재시도한다.
 - 생성 요청이 아직 처리되지 않았거나 엔진 상태를 확인할 수 없으면 정리가 대기할 수 있다.

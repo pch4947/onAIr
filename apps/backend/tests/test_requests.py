@@ -82,7 +82,7 @@ class RequestIntegrationTests(unittest.TestCase):
     def test_delivery_retry_restart_and_engine_state(self):
         body = {'prompt': '차분한 분위기로 부탁해요', 'kind': 'chat'}
         with ThreadPoolExecutor(max_workers=4) as pool:
-            replies = list(pool.map(lambda _: self.call('/api/requests', body, 'retry-one'), range(4)))
+            replies = list(pool.map(lambda _: self.call(f'/api/stations/{self.station}/requests', body, 'retry-one'), range(4)))
         self.assertTrue(all(status == 202 for status, _ in replies))
         entries = [reply['request'] for _, reply in replies]
         self.assertTrue(all(entry == entries[0] for entry in entries))
@@ -96,14 +96,14 @@ class RequestIntegrationTests(unittest.TestCase):
         self.assertEqual(fields['station_id'], self.station)
         self.assertEqual(json.loads(fields['payload']), dict(request_id=entry['id'], kind='chat',
             body=body['prompt'], requester_ref=self.user_id))
-        self.assertEqual(self.call('/api/requests', {'prompt': '다른 내용'}, 'retry-one')[0], 409)
+        self.assertEqual(self.call(f'/api/stations/{self.station}/requests', {'prompt': '다른 내용'}, 'retry-one')[0], 409)
         self.stop()
         self.start()
-        self.assertEqual(self.call('/api/requests', body, 'retry-one')[1]['request'], entry)
+        self.assertEqual(self.call(f'/api/stations/{self.station}/requests', body, 'retry-one')[1]['request'], entry)
         self.assertEqual(self.redis.xlen(f'engine:{self.station}:in'), 1)
-        self.assertEqual(self.call('/api/requests')[1]['requests'], [entry])
-        self.assertEqual(self.call('/api/requests/' + entry['id'] + '/state')[1]['state'], 'requested')
-        self.assertEqual(self.call('/api/stream/state')[1]['pendingRequestCount'], 1)
+        self.assertEqual(self.call(f'/api/stations/{self.station}/requests')[1]['requests'], [entry])
+        self.assertEqual(self.call(f'/api/stations/{self.station}/requests/' + entry['id'] + '/state')[1]['state'], 'requested')
+        self.assertEqual(self.call(f'/api/stations/{self.station}/stream/state')[1]['pendingRequestCount'], 1)
 
         async def engine_round_trip():
             from onair_engine.domain import StationConfig, StationProfile
@@ -138,33 +138,33 @@ class RequestIntegrationTests(unittest.TestCase):
         asyncio.run(engine_round_trip())
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
-            state = self.call('/api/requests/' + entry['id'] + '/state')[1]['state']
+            state = self.call(f'/api/stations/{self.station}/requests/' + entry['id'] + '/state')[1]['state']
             if state == 'screened':
                 break
             time.sleep(0.1)
         self.assertEqual(state, 'screened')
-        self.assertEqual(self.call('/api/requests')[1]['requests'][0]['status'], state)
+        self.assertEqual(self.call(f'/api/stations/{self.station}/requests')[1]['requests'][0]['status'], state)
         # Consumer state ordering is also covered by test_consumer. Check unified metrics on rejection.
         self.redis.xadd(f'engine:{self.station}:out', dict(type='request.state', contract_version='1',
             station_id=self.station, event_id='evt_rejected', at=str(time.time()),
             payload=json.dumps(dict(request_id=entry['id'], state='rejected'))))
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
-            if self.call('/api/stream/state')[1]['pendingRequestCount'] == 0:
+            if self.call(f'/api/stations/{self.station}/stream/state')[1]['pendingRequestCount'] == 0:
                 break
             time.sleep(0.1)
-        self.assertEqual(self.call('/api/stream/state')[1]['pendingRequestCount'], 0)
-        self.assertEqual(self.call('/api/requests/' + entry['id'] + '/state')[1]['state'], 'rejected')
+        self.assertEqual(self.call(f'/api/stations/{self.station}/stream/state')[1]['pendingRequestCount'], 0)
+        self.assertEqual(self.call(f'/api/stations/{self.station}/requests/' + entry['id'] + '/state')[1]['state'], 'rejected')
 
     def test_message_and_chat_deliver_kind_and_nickname(self):
         # A client cannot choose who it speaks as: both identity fields come from the token.
-        status, reply = self.call('/api/requests', {'prompt': 'x' * 200, 'kind': 'message',
+        status, reply = self.call(f'/api/stations/{self.station}/requests', {'prompt': 'x' * 200, 'kind': 'message',
                                                     'listenerId': 'someone-else', 'listenerName': '다른사람'})
         self.assertEqual(status, 202)
         self.assertEqual(reply['request']['kind'], 'message')
         self.assertEqual((reply['request']['mine'], reply['request']['listenerName']), (True, self.name))
         self.assertEqual(json.loads(self.redis.hget(self.prefix + ':requests', reply['request']['id']))['listenerId'], self.user_id)
-        status, chat = self.call('/api/requests', {'prompt': '안녕하세요', 'kind': 'chat'})
+        status, chat = self.call(f'/api/stations/{self.station}/requests', {'prompt': '안녕하세요', 'kind': 'chat'})
         self.assertEqual(status, 202)
         payloads = [json.loads(fields['payload']) for _, fields in self.redis.xrange(f'engine:{self.station}:in')]
         self.assertEqual(payloads, [
@@ -174,31 +174,31 @@ class RequestIntegrationTests(unittest.TestCase):
     def test_requests_need_a_valid_token(self):
         for token in (None, 'not-a-token'):
             self.token = token
-            self.assertEqual(self.call('/api/requests', {'prompt': '안녕하세요', 'listenerName': self.name})[0], 401)
-            self.assertEqual(self.call('/api/requests')[0], 401)
+            self.assertEqual(self.call(f'/api/stations/{self.station}/requests', {'prompt': '안녕하세요', 'listenerName': self.name})[0], 401)
+            self.assertEqual(self.call(f'/api/stations/{self.station}/requests')[0], 401)
         self.assertEqual(self.redis.xlen(f'engine:{self.station}:in'), 0)
 
     def test_the_list_says_whose_request_it_is_without_exposing_ids(self):
-        anonymous = self.call('/api/requests', {'prompt': '익명으로 보내요'})[1]['request']
+        anonymous = self.call(f'/api/stations/{self.station}/requests', {'prompt': '익명으로 보내요'})[1]['request']
         self.assertIsNone(anonymous['listenerName'])
         mine = self.token
         email, name = self.station + '-b@example.com', 'name_' + uuid.uuid4().hex[:12]
         self.addCleanup(self.redis.hdel, 'backend:usernames', name)
         self.addCleanup(self.redis.hdel, 'backend:users', email)
         self.token = self.call('/api/auth/signup', {'email': email, 'password': 'password-123', 'name': name})[1]['accessToken']
-        listed = self.call('/api/requests')[1]['requests']
+        listed = self.call(f'/api/stations/{self.station}/requests')[1]['requests']
         self.assertEqual([item['mine'] for item in listed], [False])
         self.assertNotIn('listenerId', listed[0])
         self.assertNotIn(self.user_id, json.dumps(listed))
         self.token = mine
-        self.assertEqual([item['mine'] for item in self.call('/api/requests')[1]['requests']], [True])
+        self.assertEqual([item['mine'] for item in self.call(f'/api/stations/{self.station}/requests')[1]['requests']], [True])
 
     def test_validation_and_no_partial_write_on_wrong_key_type(self):
         for body in [{'prompt': '  '}, {'prompt': 'x', 'kind': 'song'}, {'prompt': 'x' * 4001},
                      {'prompt': 'x' * 201, 'kind': 'message'}]:
-            self.assertEqual(self.call('/api/requests', body)[0], 422)
-        self.assertEqual(self.call('/api/requests', {'prompt': 'x'}, 'bad key')[0], 422)
+            self.assertEqual(self.call(f'/api/stations/{self.station}/requests', body)[0], 422)
+        self.assertEqual(self.call(f'/api/stations/{self.station}/requests', {'prompt': 'x'}, 'bad key')[0], 422)
         self.redis.set(f'engine:{self.station}:in', 'wrong-type')
-        self.assertEqual(self.call('/api/requests', {'prompt': 'x'}, 'retry')[0], 503)
+        self.assertEqual(self.call(f'/api/stations/{self.station}/requests', {'prompt': 'x'}, 'retry')[0], 503)
         self.assertFalse(self.redis.exists(self.prefix + ':requests'))
         self.assertFalse(self.redis.exists(self.prefix + ':request-keys'))

@@ -93,7 +93,7 @@ class BroadcastE2ETests(unittest.TestCase):
                             continue
                         checked.add(name)
                         self.assertGreater(len(get(f'/hls/{station}/{name}')), 0)
-                        metadata = json.loads(get('/api/stream/state?fragment=' + name))['stream']['playback']
+                        metadata = json.loads(get(f'/api/stations/{station}/stream/state?fragment=' + name))['stream']['playback']
                         self.assertNotEqual(metadata['status'], 'unavailable')
                         if metadata['segment']:
                             segment_id = metadata['segment']['id']

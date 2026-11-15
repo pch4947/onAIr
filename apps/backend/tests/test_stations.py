@@ -89,16 +89,16 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
             for body in [{}, {'prompt': ''}, {'prompt': 5}, {'prompt': '노래 부탁해요', 'kind': 'mood'},
                          {'prompt': 'x' * 201, 'kind': 'message'}]:
                 with self.subTest(body=body):
-                    self.assertEqual((await client.post('/api/requests', json=body)).status_code, 422)
+                    self.assertEqual((await client.post('/api/stations/st_local_dev/requests', json=body)).status_code, 422)
             default_runtime(app).requests.create.assert_not_awaited()
             sent = {'prompt': '안녕', 'kind': 'message', 'listenerId': 'someone-else'}
-            result = await client.post('/api/requests', json=sent)
+            result = await client.post('/api/stations/st_local_dev/requests', json=sent)
             self.assertEqual(result.status_code, 202)
             self.assertEqual(result.json()['request'], {'id': 'req-1', 'mine': True})
             args, kwargs = default_runtime(app).requests.create.await_args
             self.assertEqual(args[:3], ('안녕', 'user-1', 'message'))
             self.assertIsNone(kwargs['listener_name'])
-            await client.post('/api/requests', json=sent | {'listenerName': '다른사람'})
+            await client.post('/api/stations/st_local_dev/requests', json=sent | {'listenerName': '다른사람'})
             self.assertEqual(default_runtime(app).requests.create.await_args.kwargs['listener_name'], '로그인이름')
     async def test_stream_state_reports_current_corner_only_while_on_air(self):
         app = create_app(Settings('127.0.0.1', 3000))
@@ -111,9 +111,9 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
             return json.dumps(corner if key.endswith(':current-corner') else status)
         app.state.redis = SimpleNamespace(get=get, hget=AsyncMock(return_value=None))  # 투표 없음
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
-            self.assertEqual((await client.get('/api/stream/state')).json()['currentCorner'], corner)
+            self.assertEqual((await client.get('/api/stations/st_local_dev/stream/state')).json()['currentCorner'], corner)
             status = {'status': 'stopping', 'config': {}}
-            self.assertIsNone((await client.get('/api/stream/state')).json()['currentCorner'])
+            self.assertIsNone((await client.get('/api/stations/st_local_dev/stream/state')).json()['currentCorner'])
 
     async def test_stream_state_reports_station_format(self):
         app = create_app(Settings('127.0.0.1', 3000))
@@ -128,7 +128,7 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
             for raw, status, station_format in cases:
                 with self.subTest(station_format=station_format):
                     app.state.redis.get.return_value = raw
-                    result = (await client.get('/api/stream/state')).json()
+                    result = (await client.get('/api/stations/st_local_dev/stream/state')).json()
                     self.assertEqual(result['stationStatus'], status)
                     self.assertEqual(result['stationFormat'], station_format)
 
@@ -146,7 +146,7 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
             for raw, dj_name in cases:
                 with self.subTest(raw=raw):
                     app.state.redis.get.return_value = raw
-                    self.assertEqual((await client.get('/api/stream/state')).json()['djName'], dj_name)
+                    self.assertEqual((await client.get('/api/stations/st_local_dev/stream/state')).json()['djName'], dj_name)
 
     async def test_proxy_timeout_unavailable_and_validation(self):
         upstream = SimpleNamespace(request=AsyncMock())

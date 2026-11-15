@@ -139,14 +139,14 @@ macOS/Linux에서는 가상환경 실행 파일이 `.venv/bin/python`입니다.
 | API | 동작 |
 | --- | --- |
 | GET /health | 서버 생존 확인 |
-| GET /api/stream/state | 방송 상태, 대기 요청 수와 최장 대기시간 |
-| GET /api/requests | 로그인 필수. 요청 목록. 청취자 ID 대신 내 요청 여부(`mine`)를 돌려줌 |
-| POST /api/requests | 로그인 필수. prompt를 받아 202 반환. 청취자는 토큰으로 정하며 응답은 목록과 같은 형식 |
+| GET /api/stations/{station_id}/stream/state | 방송 상태, 대기 요청 수와 최장 대기시간 |
+| GET /api/stations/{station_id}/requests | 로그인 필수. 요청 목록. 청취자 ID 대신 내 요청 여부(`mine`)를 돌려줌 |
+| POST /api/stations/{station_id}/requests | 로그인 필수. prompt를 받아 202 반환. 청취자는 토큰으로 정하며 응답은 목록과 같은 형식 |
 | POST /api/scheduler/tick | 버퍼 기준 정책 판단 및 방송 상태 갱신 |
 
-다중 방송: 위의 `/api/stream/state`, `/api/requests`, `/api/requests/{id}/state`·`/history`, `/api/broadcast/queue`, `/api/broadcast/segments/{id}/state`는 `/api/stations/{station_id}/...` 아래에도 있습니다 (예: `/api/stations/st_ch02/requests`). 응답 형식은 같고, 방송 ID가 없는 경로는 첫 채널(기본 채널)을 씁니다. 없는 채널은 404입니다. 방송 ID 없는 경로는 프론트가 방송별 경로로 옮긴 뒤 지웁니다. `/api/scheduler/tick`은 디버그용이라 기본 채널만 있습니다.
+다중 방송: 요청·상태 경로는 모두 `/api/stations/{station_id}/...` 아래에 있습니다 (예: `/api/stations/st_ch02/requests`). 방송 ID가 없던 옛 경로(`/api/stream/state`, `/api/requests` 등)는 프론트가 방송별 경로로 옮긴 뒤 지웠습니다(#161 7단계). `/api/scheduler/tick`은 디버그용이라 첫 채널만 봅니다.
 
-투표(#279, 계약 10.8절): `GET /api/stations/{station_id}/votes/current`(로그인)는 지금 투표와 내가 고른 선택지(`mine`), `POST /api/stations/{station_id}/votes/{vote_id} {option}`은 한 사람 한 표입니다. 같은 선택지를 다시 보내면 그대로 200, 다른 선택지는 409(`detail.mine`), 열리지 않았거나 닫힌 투표는 409, 없는 선택지는 422입니다. `/api/stream/state`의 `currentVote`도 같은 투표를 싣습니다(표 수는 닫힌 뒤에만). 투표는 기준 멘트가 들리기 시작할 때 열리고 `window_sec` 뒤 닫히며, 그때 엔진에 `vote.result`를 보냅니다.
+투표(#279, 계약 10.8절): `GET /api/stations/{station_id}/votes/current`(로그인)는 지금 투표와 내가 고른 선택지(`mine`), `POST /api/stations/{station_id}/votes/{vote_id} {option}`은 한 사람 한 표입니다. 같은 선택지를 다시 보내면 그대로 200, 다른 선택지는 409(`detail.mine`), 열리지 않았거나 닫힌 투표는 409, 없는 선택지는 422입니다. `/api/stations/{station_id}/stream/state`의 `currentVote`도 같은 투표를 싣습니다(표 수는 닫힌 뒤에만). 투표는 기준 멘트가 들리기 시작할 때 열리고 `window_sec` 뒤 닫히며, 그때 엔진에 `vote.result`를 보냅니다.
 
 다시듣기: `GET /api/replays/mine`은 내가 진행한 방송의 다시듣기를 모든 채널에서 모아 최신순으로 돌려줍니다. `/api/replays/bookmarked`도 모든 채널의 북마크를 북마크한 순서로 합칩니다. 북마크와 삭제(`/api/replays/{session_id}...`)는 세션→채널 색인(`backend:replay-stations`)으로 그 세션의 채널을 찾습니다. 다시듣기 항목에는 `stationId`가 들어 있습니다.
 
@@ -167,10 +167,10 @@ tick은 정책 판단만 수행하며 요청을 소비하거나 오디오를 생
 
 ## 요청 접수와 엔진 전달
 
-`POST /api/requests`는 요청을 Redis에 저장하면서 엔진의 `request.arrived` 이벤트를 발행합니다.
+`POST /api/stations/{station_id}/requests`는 요청을 Redis에 저장하면서 엔진의 `request.arrived` 이벤트를 발행합니다.
 신청곡은 `POST /api/stations/{station_id}/tracks`로 접수합니다. 음원 준비에 성공하면
 서버가 신청곡 기록을 음원 큐와 함께 저장하며, 음원의 송출 상태가 해당 기록에 반영됩니다.
-신청곡을 표시하기 위해 별도의 `/api/requests` 요청을 보내지 않습니다.
+신청곡을 표시하기 위해 별도의 `/api/stations/{station_id}/requests` 요청을 보내지 않습니다.
 본문에 `comment`(60자, 신청곡 전용)를 넣으면 곡 소개에 쓰도록 `track.queued` 앞에 `request.arrived`(`kind: song_request`)를 보냅니다. 없으면 보내지 않습니다.
 `anonymous: true`(신청곡 전용)이면 신청자 닉네임을 기록과 엔진 이벤트에서 빼고, 엔진은 `익명`으로 소개합니다.
 신청곡 상태는 음악 세그먼트의 송출로만 정해집니다. 곡 소개 멘트의 전이와 엔진의 `request.state`는 상태를 바꾸지 않고, 엔진 통보는 이력에 `accepted: false`로 남습니다.
@@ -180,8 +180,8 @@ kind는 story(기본), chat, message입니다. 엔진에는 계약 v2로 보내�
 ```powershell
 $body = @{ prompt = "차분한 분위기로 부탁해요"; kind = "chat" } | ConvertTo-Json
 $key = [guid]::NewGuid().ToString() # 새 요청에만 새 키 생성. 재시도는 이 값을 재사용
-$result = Invoke-RestMethod http://127.0.0.1:3000/api/requests -Method Post -ContentType 'application/json; charset=utf-8' -Headers @{ Authorization = "Bearer $token"; 'Idempotency-Key' = $key } -Body ([Text.Encoding]::UTF8.GetBytes($body))
-Invoke-RestMethod ("http://127.0.0.1:3000/api/requests/" + $result.request.id + "/state")
+$result = Invoke-RestMethod http://127.0.0.1:3000/api/stations/st_local_dev/requests -Method Post -ContentType 'application/json; charset=utf-8' -Headers @{ Authorization = "Bearer $token"; 'Idempotency-Key' = $key } -Body ([Text.Encoding]::UTF8.GetBytes($body))
+Invoke-RestMethod ("http://127.0.0.1:3000/api/stations/st_local_dev/requests/" + $result.request.id + "/state")
 ```
 
 같은 키·같은 입력은 기존 요청을 반환하고 재발행하지 않습니다. 같은 키·다른 입력은 409, 잘못된 입력은 422, Redis 장애는 503입니다.
@@ -265,13 +265,13 @@ request.state는 별도 Redis hash에 보관하며 오래된 pending이 새 상�
 
 확인 API:
 
-- GET /api/broadcast/queue: 저장된 세그먼트 개수와 앞 100개 (재생 가능한 HLS 버퍼를 뜻하지 않음)
-- GET /api/requests/{request_id}/state: 엔진에서 받은 상태, 미수신이면 404
+- GET /api/stations/{station_id}/broadcast/queue: 저장된 세그먼트 개수와 앞 100개 (재생 가능한 HLS 버퍼를 뜻하지 않음)
+- GET /api/stations/{station_id}/requests/{request_id}/state: 엔진에서 받은 상태, 미수신이면 404
 - Redis 장애 시 위 API는 503
 
 파일은 WAV/MP3 확장자·존재·빈 파일 여부와 경로를 검사합니다. 실제 코덱/길이 검증은
 FFmpeg로 디코딩하며, HLS 길이는 실제 인코딩 결과를 사용합니다. 원본 파일은 수정·삭제하지 않습니다.
-request.state 수신은 구현했지만 POST /api/requests의 엔진 발행과 기존 요청 목록 상태 병합은 후속입니다.
+request.state 수신은 구현했지만 POST /api/stations/{station_id}/requests의 엔진 발행과 기존 요청 목록 상태 병합은 후속입니다.
 중복 기록/큐는 자동 만료하지 않습니다. Redis 영속성은 Compose AOF/볼륨 설정에 의존합니다.
 
 ### 통합 테스트
@@ -308,7 +308,7 @@ FFmpeg를 먼저 설치하고 `ffmpeg -version`을 확인합니다. PATH에서 �
 4. apps/frontend: .env.example을 참고해 `VITE_API_BASE_URL=http://127.0.0.1:3000` 설정 후 `npm run dev`
 5. /listen 화면의 방송 재생 버튼을 누릅니다. 초기 버퍼 준비에 약 15초가 필요합니다.
 
-- GET /api/stream/state: HLS 준비 상태와 hlsUrl, 발행기 오류
+- GET /api/stations/{station_id}/stream/state: HLS 준비 상태와 hlsUrl, 발행기 오류
 - GET /hls/st_local_dev/index.m3u8: 라이브 목록 (준비 전 503)
 - GET /hls/st_local_dev/{파일명}.ts: AAC 오디오가 담긴 TS
 - 세그먼트별 음량 정규화 후 약 4초 조각 생성, 최소 24초 목록 유지
@@ -319,14 +319,14 @@ FFmpeg를 먼저 설치하고 `ffmpeg -version`을 확인합니다. PATH에서 �
 
 오디오 재생은 연동되어 있지만, 사연 전송·채팅·청취자 수·요청 상태 UI에는 아직 mock이 남아 있습니다.
 WebSocket은 미연동이므로 화면의 연결 상태는 HLS 재생 여부와 별개입니다.
-POST /api/requests → 엔진 request.arrived 발행은 다음 단계입니다.
+POST /api/stations/{station_id}/requests → 엔진 request.arrived 발행은 다음 단계입니다.
 HLS에 마지막 조각을 발행한 뒤 큐에서 제거하며, 실제 청취 완료(PLAYED)를 의미하지 않습니다.
 모든 세그먼트는 첫 조각 발행 때 서버 방송 시각으로 엔진에 segment.started를 한 번 보냅니다(계약 10.6절). 그 시각이 되기 전에는 전달하지 않고, 복구로 다시 송출해도 처음 시각을 유지합니다.
 게시판 사연은 방송 시작 때와 방송 중 새 글이 올라올 때 `board.story`로 엔진에 전달합니다. 사연토크 형식에서 `story_corner`가 있을 때만, 다중 방송에서는 새 글을 진행 중인 talk 채널 모두에 보내고, 한 채널에서 읽히면 나머지 채널에 `board.story.withdrawn`을 보내 한 번만 읽히게 합니다(이미 제출된 조각은 그대로 나갑니다). 아직 안 읽힌 최근 7일 안의 500자 이하 글을 최신순 30건까지 보내며 주제로 거르지는 않습니다. 이 기능이 처음 시작한 시각(`backend:board:stories-since`, 한 번만 기록)보다 먼저 쓴 글은 작성자가 방송 안내를 보지 못했으므로 보내지 않습니다. `request_ref`가 `story_`로 시작하는 멘트는 요청 상태에 기록하지 않고, `PUBLISHED`에서 읽힘으로 표시하고 작성자에게 알립니다. 방송 중 글을 지우면 `board.story.withdrawn`을 보냅니다.
-엔진의 corner.changed(계약 10.7절)는 기준 세그먼트의 segment.started가 전달될 때 활성화되어 `/api/stream/state`의 `currentCorner`(`corner`, `title`, `contract`)로 나갑니다. 기준 세그먼트가 송출되지 않으면 활성화되지 않고 이전 코너가 유지됩니다. 방송 중(`started`, `draining`)이 아니면 null입니다.
+엔진의 corner.changed(계약 10.7절)는 기준 세그먼트의 segment.started가 전달될 때 활성화되어 `/api/stations/{station_id}/stream/state`의 `currentCorner`(`corner`, `title`, `contract`)로 나갑니다. 기준 세그먼트가 송출되지 않으면 활성화되지 않고 이전 코너가 유지됩니다. 방송 중(`started`, `draining`)이 아니면 null입니다.
 중간 재시작 시 큐 선두 음원이 반복될 수 있습니다. 같은 방송에 백엔드를 중복 실행하면 안 됩니다.
 Redis 조회 장애 중에는 무음을 공급하지만, 큐 제거/오류 기록 중 장애가 나면 발행기가 중단되어
-복구 후 백엔드 재시작이 필요할 수 있습니다. /api/stream/state의 error를 확인합니다.
+복구 후 백엔드 재시작이 필요할 수 있습니다. /api/stations/{station_id}/stream/state의 error를 확인합니다.
 현재 세션에서 퇴출된 TS는 60초 뒤 정리합니다. 이전 실행의 출력과 원본 음원,
 Redis 중복 기록은 자동 만료하지 않아 장기 운영 전 보존 정책이 필요합니다.
 
@@ -448,16 +448,16 @@ $env:ONAIR_REDIS_URL = "redis://127.0.0.1:6379/0"
 | WinError 10048 / Port 18080 is already in use | 해당 포트에 서버가 이미 실행 중. 기존 화면/health를 확인하고 기존 서버를 사용하거나, 해당 서버 터미널에서 Ctrl+C 후 재실행 |
 | edge TTS 의존성 오류 | 최초 패키지 설치 명령의 `engine[redis,tts]`를 같은 가상환경에 설치 |
 | FFmpeg not found | ONAIR_FFMPEG에 설치된 ffmpeg.exe 절대 경로 지정 |
-| 소리가 안 나옴 | 재생 버튼·PC 음소거·엔진 로그와 /api/stream/state의 status, error 확인 |
+| 소리가 안 나옴 | 재생 버튼·PC 음소거·엔진 로그와 /api/stations/{station_id}/stream/state의 status, error 확인 |
 | HLS publisher stopped | 백엔드 오류 로그 확인 후 해당 백엔드만 Ctrl+C로 종료하고 재실행 |
 
-방송 상태 URL: http://127.0.0.1:3000/api/stream/state
+방송 상태 URL: http://127.0.0.1:3000/api/stations/st_local_dev/stream/state
 정상 준비 상태는 `status: ready`, `error: null`입니다. 준비됨 자체가 음성 존재를 뜻하지는 않습니다.
 화면 위 WebSocket 연결 끊김 표시는 현재 HLS 재생 여부와 별개입니다.
 
 ### 재생 metadata API 확인 (백엔드)
 
-- HLS 목록에 있는 TS 파일명으로 `GET /api/stream/state?fragment={TS 파일명}`을 호출합니다. 서버의 최신 인코딩 대상이 아닌 해당 조각의 원본 metadata를 반환합니다.
+- HLS 목록에 있는 TS 파일명으로 `GET /api/stations/{station_id}/stream/state?fragment={TS 파일명}`을 호출합니다. 서버의 최신 인코딩 대상이 아닌 해당 조각의 원본 metadata를 반환합니다.
 - 원본 음원은 `segment`, 빈 큐의 음악은 `fallback`, 무음 설정은 `silence`, 미등록·만료된 조각은 `unavailable` 상태인지 확인합니다.
 - 화면 표시와 재생 위치에 따른 API 호출은 프론트엔드 담당자의 연동 작업으로 남겨 둡니다. 방송 클럭·실제 잔여 버퍼 계산은 백엔드에서 제공합니다.
 - 세부 응답 및 오류는 [방송 처리 및 복구](../../docs/BACKEND_BROADCAST_RUNTIME.md)를 참고합니다. 선택 쿼리의 형식은 Swagger `/docs`에도 반영됩니다.

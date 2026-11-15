@@ -20,7 +20,8 @@ router = APIRouter(prefix="/api")
 
 
 def current_station(request) -> StationRuntime:
-    """경로에 방송 ID가 있으면 그 채널(없으면 404), 없는 기존 경로면 기본 채널."""
+    """경로의 방송 ID로 채널을 찾는다(없으면 404). 방송 ID 없는 옛 경로는 다중 방송 7단계에서 지웠고,
+    경로 밖에서 직접 부르는 경우(테스트, /scheduler/tick)만 기본 채널을 쓴다."""
     station_id = getattr(request, 'path_params', {}).get('station_id')
     return default_runtime(request.app) if station_id is None else station_runtime(request, station_id)
 
@@ -46,7 +47,6 @@ class PresenceInput(BaseModel):
     clientId: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
-@router.get('/requests/{request_id}/history')
 @router.get('/stations/{station_id}/requests/{request_id}/history')
 async def request_history(request_id: str, request: Request,
                           offset: Annotated[int, Query(ge=0)] = 0,
@@ -63,7 +63,6 @@ async def request_history(request_id: str, request: Request,
     return {'request_id': request_id, 'history': [json.loads(entry) for entry in entries]}
 
 
-@router.get('/broadcast/segments/{segment_id}/state')
 @router.get('/stations/{station_id}/broadcast/segments/{segment_id}/state')
 async def segment_state(segment_id: str, request: Request):
     station = current_station(request)
@@ -78,7 +77,6 @@ async def segment_state(segment_id: str, request: Request):
     return json.loads(raw)
 
 
-@router.get("/broadcast/queue")
 @router.get("/stations/{station_id}/broadcast/queue")
 async def broadcast_queue(request: Request):
     """Development visibility: queued source audio, not published/playable HLS."""
@@ -95,7 +93,6 @@ async def broadcast_queue(request: Request):
             "segments": [json.loads(item) for item in items if item]}
 
 
-@router.get("/requests/{request_id}/state")
 @router.get("/stations/{station_id}/requests/{request_id}/state")
 async def engine_request_state(request_id: str, request: Request):
     station = current_station(request)
@@ -217,7 +214,6 @@ async def presence_heartbeat(station_id: str, body: PresenceInput, request: Requ
         raise HTTPException(503, "Redis unavailable") from None
 
 
-@router.get("/stream/state")
 @router.get("/stations/{station_id}/stream/state")
 async def stream_state(request: Request, response: Response,
                        fragment: Annotated[str | None, Query(max_length=128,
@@ -261,7 +257,6 @@ def public_request(entry: dict, user: dict) -> dict:
         "mine": entry["listenerId"] == user["id"]}
 
 
-@router.get("/requests")
 @router.get("/stations/{station_id}/requests")
 async def list_requests(request: Request, user: Annotated[dict, Depends(get_current_user)]):
     station = current_station(request)
@@ -273,7 +268,6 @@ async def list_requests(request: Request, user: Annotated[dict, Depends(get_curr
     return {"requests": [public_request(entry, user) for entry in entries]}
 
 
-@router.post("/requests", status_code=202)
 @router.post("/stations/{station_id}/requests", status_code=202)
 async def create_request(body: ListenerInput, request: Request,
                          user: Annotated[dict, Depends(get_current_user)],
