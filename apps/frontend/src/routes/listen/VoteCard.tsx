@@ -27,16 +27,19 @@ export function VoteCard({ stationId, userId }: { stationId: string; userId?: st
   const remaining = vote ? Math.max(0, Math.ceil(vote.remaining_sec - (now - voteQuery.dataUpdatedAt) / 1000)) : 0
 
   const voteMutation = useMutation({
-    mutationFn: (option: string) => castVote(stationId, vote!.vote_id, option),
+    mutationFn: ({ voteId, option }: { voteId: string; option: string }) => castVote(stationId, voteId, option),
     onSettled: () => cache.invalidateQueries({ queryKey }),
   })
+  // 투표는 한 코너에서 연달아 열린다(#292). 요청 결과는 그 요청을 보낸 투표일 때만 쓴다 — 직전 투표의 선택이 남지 않게
+  const forThisVote = Boolean(vote) && voteMutation.variables?.voteId === vote?.vote_id
   // 이미 투표했는데 다른 선택지를 누르면(409) 처음 고른 것을 보여 준다
-  const conflictMine = voteMutation.error instanceof VoteError ? voteMutation.error.mine : null
-  const mine = vote?.mine ?? voteMutation.data?.mine ?? conflictMine ?? null
+  const conflictMine = forThisVote && voteMutation.error instanceof VoteError ? voteMutation.error.mine : null
+  const mine = vote?.mine ?? (forThisVote ? voteMutation.data?.mine : null) ?? conflictMine ?? null
 
   if (!vote || vote.status !== 'open' || remaining <= 0) return null
 
-  const failed = voteMutation.isError && !conflictMine
+  const pending = forThisVote && voteMutation.isPending
+  const failed = forThisVote && voteMutation.isError && !conflictMine
   return (
     <section aria-label="투표" className="mx-3 mt-3 flex shrink-0 flex-col gap-2 rounded-md bg-primary-soft px-3 py-2.5 text-[11px]">
       <div className="flex items-center justify-between gap-2">
@@ -52,8 +55,8 @@ export function VoteCard({ stationId, userId }: { stationId: string; userId?: st
               key={option}
               type="button"
               aria-pressed={chosen}
-              disabled={Boolean(mine) || voteMutation.isPending}
-              onClick={() => voteMutation.mutate(option)}
+              disabled={Boolean(mine) || pending}
+              onClick={() => voteMutation.mutate({ voteId: vote.vote_id, option })}
               className={`rounded-md border px-3 py-2 text-xs font-semibold ${
                 chosen ? 'border-primary bg-primary text-white' : 'border-border bg-surface text-text disabled:opacity-60'
               }`}

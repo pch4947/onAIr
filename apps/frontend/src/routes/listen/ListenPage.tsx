@@ -458,6 +458,10 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
                       {message.author}
                     </span>
                     <span className="min-w-0 flex-1 wrap-break-word">{message.text}</span>
+                    {/* 채팅은 건수가 많아 배지 없이, 내 채팅이 방송에 나왔을 때만 표시한다 (#292) */}
+                    {message.mine && message.status === 'reflected' && (
+                      <span className="shrink-0 text-[10px] font-semibold text-status-played">방송에 나왔어요</span>
+                    )}
                   </li>
                 ),
               )}
