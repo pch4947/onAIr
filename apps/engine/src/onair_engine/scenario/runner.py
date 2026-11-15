@@ -68,7 +68,12 @@ def _clock(sec: float) -> str:
 # 이름 앞머리로 대상을 가린다: chat.(config/chat_rules.yaml, 앞머리가 없으면 이것), engine.(EngineSettings),
 # sim.(시나리오의 흉내 값), station.(시나리오의 방송 설정). 엔진 설정은 방송 동작을 바꾸는 수치만 연다.
 # contract_version 2는 한 멘트에 입력 여러 건을 싣는다 (#267) — 흉내 백엔드는 두 버전을 모두 받는다
-ENGINE_KEYS = {"target_buffer_sec": float, "max_concurrent_generations": int, "contract_version": int}
+def _flag(value) -> bool:
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+ENGINE_KEYS = {"target_buffer_sec": float, "max_concurrent_generations": int, "contract_version": int,
+               "emit_song_picks": _flag}  # DJ 선곡을 끈 기준선: --set engine.emit_song_picks=0 (#295)
 STATION_KEYS = ("intensity",)
 # 회차의 루프 지연 P95가 이보다 크면 동시 실행이 타이밍 지표를 틀었다고 본다 [초기값] —
 # 2026-11-10 실측(flood, 더미 LLM): 30분 방송 동시 60회의 180~200ms에서는 세그먼트 생성 P95가 그대로였고
@@ -171,6 +176,8 @@ def _settings(args: argparse.Namespace, run_dir: Path) -> EngineSettings:
         tts_cache_dir=ENGINE_ROOT / "var" / "tts_cache" if args.tts == "gemini" else None,
         dummy_tracks=False,  # 곡은 가짜 백엔드가 track.queued로 알린다
         emit_votes=True,  # 가짜 백엔드는 투표를 받는다 — 본 코너에 DJ 대 청취자가 있는 시나리오에서만 쓰인다
+        # 가짜 백엔드는 선곡 제안도 받는다 — 플레이리스트가 있으면 엔진이 다음 곡을 늘 들고 있어 제안하지 않는다
+        emit_song_picks=True,
     )
     apply_llm_args(settings, args)
     return settings
@@ -315,6 +322,7 @@ async def run_one(spec: ScenarioSpec, index: int, run_dir: Path, args: argparse.
     config = StationConfig(station_id=station_id, profile=load_profile(profile_path),
                            broadcast_minutes=args.minutes or st.broadcast_minutes, format=st.format,
                            corners=st.corners, intensity=st.intensity, topic=st.topic,
+                           music_taste=list(st.music_taste),
                            voice=st.voice if args.tts == "gemini" else None)
     backend = SimBackend(sim=spec.sim, tracks=spec.tracks, rng=random.Random(seed * 7919))
     _unsynced_metrics_db(settings.sqlite_path)
@@ -380,6 +388,9 @@ async def run_one(spec: ScenarioSpec, index: int, run_dir: Path, args: argparse.
         "votes": [{k: vote[k] for k in ("vote_id", "question", "options", "window_sec", "at", "opened_at",
                                         "closed_at", "counts", "discarded")} for vote in backend.votes],
         "vote_rounds": engine.sources.votes.rounds, "vote_score": dict(engine.sources.votes.score),
+        "dj_songs": backend.dj_songs,
+        "suggests": [{k: s.get(k) for k in ("suggest_id", "candidates", "at", "result", "queued_at")}
+                     for s in backend.suggests],
         "error": error,
     }
     reflected = _reflections(db, station_id)
@@ -465,6 +476,9 @@ def _check(spec: ScenarioSpec, backend: SimBackend, report: dict,
         elif e.type == "min_vote_rounds":
             value = report["sim"]["vote_rounds"]
             passed, detail = value >= e.value, f"결과까지 공개한 투표 {value}번"
+        elif e.type == "min_dj_songs":
+            value = report["sim"]["dj_songs"]
+            passed, detail = value >= e.value, f"DJ가 고른 곡 {value}곡 재생"
         elif e.type == "max_silence_sec":
             value = report["sim"]["silence_max_sec"]
             passed, detail = value <= e.value, f"최대 무음 {value}초"

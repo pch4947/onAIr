@@ -485,11 +485,23 @@ class Telemetry:
         self._event("callback", f"다시 꺼내기 · \"{_excerpt(aired.body)}\"", kind=aired.kind)
         self._db.commit()
 
+    def log_song_pick(self, suggest_id: str, picks: list) -> None:
+        """DJ 선곡 제안(track.suggest) — 패널에만 남긴다."""
+        more = f" 외 {len(picks) - 1}곡" if len(picks) > 1 else ""
+        self._event("song_pick", f"선곡 제안 · {picks[0].label}{more}", suggest_id=suggest_id,
+                    candidates=[pick.label for pick in picks])
+        self._db.commit()
+
+    def log_song_pick_failed(self, suggest_id: str | None, reason: str) -> None:
+        self._event("song_pick", f"선곡 실패 · {reason}", suggest_id=suggest_id, reason=reason)
+        self._db.commit()
+
     def log_track(self, track: dict) -> None:
         """다음 곡(track.queued) — 패널에만 남긴다. 곡 기록의 원본은 백엔드에 있다."""
         title = " - ".join(str(track[k]) for k in ("title", "artist") if track.get(k))
         requested = bool(track.get("request_id"))
-        self._event("track", f"{'신청곡 도착' if requested else '다음 곡'} · {title}",
+        head = "신청곡 도착" if requested else "DJ 선곡 도착" if track.get("dj_pick") else "다음 곡"
+        self._event("track", f"{head} · {title}",
                     track_ref=track.get("track_ref"), request_id=track.get("request_id"),
                     with_comment=bool(track.get("requester_comment")))
         self._db.commit()

@@ -20,6 +20,7 @@ from ..prompt_data import (
     DILEMMA,
     HEARD,
     NOW,
+    PICK_WHY,
     REACTIONS,
     SOURCES,
     STORY,
@@ -295,6 +296,12 @@ def _music_intro(m: Material) -> str:
             text += " 신청자가 남긴 한마디도 언급한다."
             info += "\n한마디: " + comment
         return text + "\n" + data_block(TRACK, info)
+    if m.track.get("dj_pick"):  # DJ가 고른 곡 (계약 3.4절 track.suggest, #295)
+        text += " DJ가 이 방송을 위해 직접 고른 곡이다."
+        if why := m.track.get("pick_why"):
+            # 곡 정보는 백엔드가 찾은 실제 곡이고, 까닭은 고를 때 적어 둔 것이다 — 곡이 달라졌을 수 있어 사실로 쓰지 않는다
+            return (text + " 아래 고른 까닭을 참고해 왜 골랐는지 한마디 곁들인다. 까닭에 없는 사실을 지어내지 않는다.\n"
+                    + data_block(TRACK, track_line(m.track)) + "\n" + data_block(PICK_WHY, why))
     return text + "\n" + data_block(TRACK, track_line(m.track))
 
 

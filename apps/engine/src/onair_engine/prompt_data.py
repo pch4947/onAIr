@@ -28,6 +28,9 @@ RECENT = "직전 멘트"
 WORN = "이미 여러 번 쓴 표현"  # 방송에서 되풀이된 구절 — DJ 대본에서 뽑은 것이라 데이터로 넣는다 (pipeline/repeats.py)
 EXAMPLES = "말투 예시"  # persona 예시 멘트 — 호스트 입력이므로 데이터로 넣는다 (F-25)
 HOST_NOTE = "호스트 메모"  # 방 생성 폼의 자유 문장 — persona 초안 생성 프롬프트에만 들어간다
+PLAYED = "이미 튼 곡"  # 이번 방송에서 튼 곡 — YouTube 메타데이터라 데이터로 넣는다 (inputs/song_picks.py)
+STATION_CONCEPT = "스테이션 컨셉"  # persona의 컨셉 — 호스트 입력이므로 데이터로 넣는다
+PICK_WHY = "고른 까닭"  # DJ가 그 곡을 고른 까닭 — LLM이 만든 글이라 데이터로 넣는다
 GENRES = "선곡 취향"  # 방 생성 폼의 장르 — 고정 목록이 정해지기 전까지는 자유 문자열이다
 
 # 공통 시스템 프롬프트에 들어간다 (corners/base.py system_prompt)

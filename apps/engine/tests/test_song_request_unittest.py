@@ -13,6 +13,7 @@ class SongRequestTests(unittest.TestCase):
         engine.tracks = Mock()
         engine.telemetry = Mock()
         engine._safety = Mock()
+        engine.song_picker = None
         engine._safety.check_l0.side_effect = lambda text: 'unsafe' if 'https://' in text else None
         track = {'track_ref': 'yt:test', 'title': '곡', 'artist': '가수'}
         engine.on_track_queued({'track': track, 'source': 'request', 'nickname': '청취자'})
