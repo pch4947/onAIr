@@ -288,7 +288,9 @@ def _artist_talk(m: Material) -> str:
 def _music_intro(m: Material) -> str:
     assert m.track is not None
     # 곡 제목·아티스트는 외부 텍스트다 (YouTube 메타데이터, F-34)
-    text = "다음 곡을 소개하는 멘트를 2문장 이내로 작성하라."
+    # 문장처럼 읽히는 제목은 말에 녹여 버린다 — "겨울을 걷는다"를 "윤딴딴의 겨울을 걷습니다"로 소개했다 (2026-11-15, #295)
+    text = ("다음 곡을 소개하는 멘트를 2문장 이내로 작성하라. 곡 제목은 적힌 그대로 한 글자도 바꾸지 않고 부른다 — "
+            "제목이 문장처럼 보여도 말끝을 바꾸거나 풀어 말하지 않는다.")
     if nickname := m.track.get("requester_nickname"):
         text += " 청취자의 신청곡임을 닉네임과 함께 소개한다."
         info = track_line(m.track) + "\n신청자: " + nickname
