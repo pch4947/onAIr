@@ -97,6 +97,8 @@ class StationInput(BaseModel):
     intensity: Literal['low', 'mid', 'high'] = Field(default='mid', description='Ignored by the engine for news')
     first_song_url: str | None = Field(default=None, max_length=2048,
                                        description='YouTube link played without introduction at broadcast start')
+    # 어드민 테스트 화면의 방송 (#306). 홈 목록·내 방송·1인 1방송 제한에서 빠지고 엔진에는 보내지 않는다
+    test: bool = Field(default=False, description='Admin test-page broadcast; hidden from listings')
 
     @field_validator('first_song_url')
     @classmethod
@@ -119,7 +121,7 @@ class StationInput(BaseModel):
         return self.model_dump(include=names)
 
     def legacy_fields(self):
-        return self.model_dump(exclude={'format', 'corners', 'news_sections', 'intensity', 'first_song_url'})
+        return self.model_dump(exclude={'format', 'corners', 'news_sections', 'intensity', 'first_song_url', 'test'})
 
 
 class DraftInput(BaseModel):
@@ -138,6 +140,8 @@ def station_fingerprint(body):
     fields = body.legacy_fields() | body.format_options()
     if body.first_song_url:
         fields['first_song_url'] = body.first_song_url
+    if body.test:
+        fields['test'] = True
     return hashlib.sha256(json.dumps(fields, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
 
 
@@ -162,6 +166,8 @@ class StationStore:
                       retry_key=retry_key, fingerprint=fingerprint, engine_result=None)
         if body.first_song_url:
             record |= dict(first_song_url=body.first_song_url, first_song_status='preparing')
+        if body.test:
+            record['test'] = True
         raw = await self.redis.eval(CREATE, 3, self.key, f'backend:{self.station_id}:personas',
             'engine:control', owner, retry_key, fingerprint, persona.persona_id,
             persona.model_dump_json(), json.dumps(record), 'evt_' + uuid4().hex,
@@ -219,14 +225,21 @@ async def channel_records(request):
     return [(runtime, json.loads(raw) if raw else None) for runtime, raw in zip(runtimes, raws)]
 
 
-def choose_channel(channels, owner, retry_key, fingerprint):
-    """같은 요청을 다시 보냈으면 그 채널, 진행 중 방송이 있으면 409, 아니면 비어 있는 첫 채널."""
+def is_test(record):
+    return bool(record and record.get('test'))
+
+
+def choose_channel(channels, owner, retry_key, fingerprint, test=False):
+    """같은 요청을 다시 보냈으면 그 채널, 진행 중 방송이 있으면 409, 아니면 비어 있는 첫 채널.
+
+    1인 1방송은 실제 방송과 테스트 방송을 따로 센다 (#306) — 어드민은 테스트 방송이 있어도 실제 방송을 연다.
+    """
     for runtime, record in channels:
         if record and (record['owner_id'], record.get('retry_key'), record.get('fingerprint')) == (
                 owner, retry_key, fingerprint):
             return runtime
     for _, record in channels:
-        if record and record['owner_id'] == owner and record['status'] != 'ended':
+        if record and record['owner_id'] == owner and record['status'] != 'ended' and is_test(record) == test:
             raise HTTPException(409, {'message': 'You already have a broadcast in progress',
                                       'station_id': record['station_id']})
     for runtime, record in channels:
@@ -245,12 +258,14 @@ async def create_station(body: StationInput, request: Request, user: Host,
     """
     if body.persona.persona_id is not None:
         raise HTTPException(422, 'Submit a persona draft without persona_id; the backend assigns it')
+    if body.test and user.get('kind') != 'admin':
+        raise HTTPException(403, 'Test broadcasts are admin only')
     try:
         async with asyncio.timeout(3):
             # 채널 고르기부터 기록까지 한 번에 하나. 백엔드 프로세스가 하나라는 전제다
             async with creation_lock(request.app.state):
                 station = choose_channel(await channel_records(request), user['id'], idempotency_key,
-                                         station_fingerprint(body))
+                                         station_fingerprint(body), body.test)
                 if station.lifecycle:
                     async with station.lifecycle.lock:
                         record = await station.stations.create(body, user['id'], idempotency_key)
@@ -276,13 +291,13 @@ def station_card(record, request, user, listeners):
 
 @router.get('/stations')
 async def list_stations(request: Request, response: Response, user: User):
-    """진행 중인 방송 목록 (끝난 방송과 빈 채널은 뺀다)."""
+    """진행 중인 방송 목록 (끝난 방송, 빈 채널, 어드민 테스트 방송은 뺀다)."""
     response.headers['Cache-Control'] = 'no-store'
     now = time.time()
     try:
         async with asyncio.timeout(3):
             live = [(runtime, record) for runtime, record in await channel_records(request)
-                    if record and record['status'] != 'ended']
+                    if record and record['status'] != 'ended' and not is_test(record)]
             counts = await asyncio.gather(*(runtime.presence.count(now) for runtime, _ in live))
     except (RedisError, TimeoutError):
         raise HTTPException(503, 'Redis unavailable') from None
@@ -291,8 +306,8 @@ async def list_stations(request: Request, response: Response, user: User):
 
 
 @router.get('/stations/mine')
-async def my_station(request: Request, response: Response, user: User):
-    """내가 진행 중인 방송. 호스트 화면으로 돌아갈 때 쓴다."""
+async def my_station(request: Request, response: Response, user: User, test: bool = False):
+    """내가 진행 중인 방송. 호스트 화면으로 돌아갈 때 쓴다. test=true면 내 테스트 방송 (테스트 화면용)."""
     response.headers['Cache-Control'] = 'no-store'
     try:
         async with asyncio.timeout(3):
@@ -300,7 +315,8 @@ async def my_station(request: Request, response: Response, user: User):
     except (RedisError, TimeoutError):
         raise HTTPException(503, 'Redis unavailable') from None
     record = next((record for _, record in channels
-                   if record and record['owner_id'] == user['id'] and record['status'] != 'ended'), None)
+                   if record and record['owner_id'] == user['id'] and record['status'] != 'ended'
+                   and is_test(record) == test), None)
     return {'station': public_station(record, request) if record else None}
 
 

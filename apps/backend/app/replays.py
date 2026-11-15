@@ -83,9 +83,19 @@ def public_replay(record: dict, bookmark_count: int, bookmarked: bool) -> dict:
     }
 
 
-async def is_station_owner(request: Request, station, user_id: str) -> bool:
+async def current_record(request: Request, station) -> dict | None:
     raw = await request.app.state.redis.get(station.stations.key)
-    return bool(raw and json.loads(raw)["owner_id"] == user_id)
+    return json.loads(raw) if raw else None
+
+
+async def is_station_owner(request: Request, station, user_id: str) -> bool:
+    record = await current_record(request, station)
+    return bool(record and record["owner_id"] == user_id)
+
+
+def is_test_session(session: dict, record: dict | None) -> bool:
+    """어드민 테스트 방송의 세션 (#306). 끝난 방송은 정리 때 표시가 붙고, 진행 중 세션(ownerId 없음)은 지금 방송을 본다."""
+    return bool(session.get('test') or ('ownerId' not in session and record and record.get('test')))
 
 
 @router.get("/stations/{station_id}/replays")
@@ -94,7 +104,11 @@ async def list_replays(station_id: str, request: Request, current_user: User,
     station = station_runtime(request, station_id)
     try:
         async with asyncio.timeout(3):
-            sessions, total = await station.replay_sessions.list(offset, limit)
+            # 테스트 방송 세션을 빼고 나눠야 쪽 수가 맞는다
+            record = await current_record(request, station)
+            every, _ = await station.replay_sessions.list(0, 2147483647)
+            shown = [s for s in every if not is_test_session(s, record)]
+            sessions, total = shown[offset:offset + limit], len(shown)
             marks = await station.replay_bookmarks.status_many(
                 [s["id"] for s in sessions], current_user["id"])
     except (RedisError, TimeoutError):
@@ -115,9 +129,12 @@ async def replay_station(request: Request, session_id: str):
 
 
 async def owned_sessions(request: Request, station, user_id: str) -> list[dict]:
-    legacy_owner = await is_station_owner(request, station, user_id)
+    """내가 진행한 방송 세션. 어드민 테스트 방송 세션은 다시듣기에 남기지 않는다 (#306)."""
+    record = await current_record(request, station)
+    legacy_owner = bool(record and record["owner_id"] == user_id)
     sessions, _ = await station.replay_sessions.list(0, 2147483647)
-    return [s for s in sessions if s.get('ownerId') == user_id or ('ownerId' not in s and legacy_owner)]
+    return [s for s in sessions if (s.get('ownerId') == user_id or ('ownerId' not in s and legacy_owner))
+            and not is_test_session(s, record)]
 
 
 async def with_marks(pairs, user_id: str) -> list[dict]:

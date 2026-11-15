@@ -450,6 +450,25 @@ class ReplayChannelTests(unittest.IsolatedAsyncioTestCase):
         page = (await self.client.get("/api/replays/mine?offset=1&limit=1")).json()
         self.assertEqual([r["id"] for r in page["replays"]], ["old_a"])
 
+    async def test_test_broadcast_sessions_are_hidden(self):
+        # 어드민 테스트 방송(#306)의 세션은 내 다시듣기와 공개 다시듣기에 남기지 않는다
+        await self.session(self.a, "real", 1000.0)
+        await self.session(self.a, "tested", 2000.0)
+        key = self.a.replay_sessions.prefix + ":replay-sessions"
+        self.redis.hashes[key]["tested"] = json.dumps(json.loads(self.redis.hashes[key]["tested"]) | {"test": True})
+        # 진행 중인 세션(ownerId 없음)은 지금 방송이 테스트면 테스트 세션이다
+        await self.b.replay_sessions.start("live", 3000.0)
+        self.redis.strings["backend:st_b:station"] = json.dumps({"owner_id": "u1", "status": "started", "test": True})
+        mine = (await self.client.get("/api/replays/mine")).json()
+        self.assertEqual(([r["id"] for r in mine["replays"]], mine["total"]), (["real"], 1))
+        public = (await self.client.get("/api/stations/st_a/replays")).json()
+        self.assertEqual(([r["id"] for r in public["replays"]], public["total"]), (["real"], 1))
+        self.assertEqual((await self.client.get("/api/stations/st_b/replays")).json()["total"], 0)
+        # 실제 방송이면 진행 중인 세션도 보인다
+        self.redis.strings["backend:st_b:station"] = json.dumps({"owner_id": "u1", "status": "started"})
+        self.assertEqual([r["id"] for r in (await self.client.get("/api/replays/mine")).json()["replays"]],
+                         ["live", "real"])
+
     async def test_bookmarks_are_kept_by_the_session_channel_and_listed_together(self):
         await self.session(self.a, "sess_a", 1000.0)
         await self.session(self.b, "sess_b", 2000.0)

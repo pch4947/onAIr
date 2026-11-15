@@ -162,6 +162,8 @@ export interface StationInfo {
   corners?: TalkCorner[]
   newsSections?: NewsSection[]
   intensity: Intensity
+  // 어드민 테스트 화면의 방송 (#306) — 홈 목록·내 방송·다시듣기에 남지 않는다
+  test?: boolean
 }
 
 export interface PersonaFieldError {

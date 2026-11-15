@@ -1,7 +1,7 @@
-// 테스트 화면 — 들어오면 바로 테스트 방송을 열고, 방송 화면에 코너 변경·엔진 로그를 붙여 보여준다
-// 다중 방송(#238): 진행 중인 내 방송이 있으면 그 방송, 없으면 새로 만든 방송을 쓴다
+// 테스트 화면 — "테스트 방송 시작하기"로 테스트 방송을 열고, 방송 화면에 코너 변경·엔진 로그를 붙여 보여준다
+// 테스트 방송(#306)은 실제 방송과 따로다: 홈 목록·내 방송·1인 1방송 제한·다시듣기에 섞이지 않는다
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Sidebar } from '@/app/Sidebar'
@@ -24,8 +24,8 @@ export function TestPage() {
   const { data: currentUser } = useCurrentUser()
   const isAdmin = Boolean(currentUser?.isAdmin)
   const myStationQuery = useQuery({
-    queryKey: ['my-station'],
-    queryFn: getMyStation,
+    queryKey: ['my-test-station'],
+    queryFn: () => getMyStation(true),
     enabled: isAdmin,
     refetchInterval: BROADCAST_STATE_POLL_INTERVAL_MS,
   })
@@ -55,9 +55,9 @@ export function TestPage() {
       cache.removeQueries({ queryKey: ['requests', station.station_id] })
       cache.removeQueries({ queryKey: ['test-requests', station.station_id] })
       setStartedId(station.station_id)
-      return cache.invalidateQueries({ queryKey: ['my-station'] })
+      return cache.invalidateQueries({ queryKey: ['my-test-station'] })
     },
-    // 그새 다른 곳에서 내 방송이 열렸으면(409) 그 방송을 쓴다
+    // 그새 다른 창에서 테스트 방송이 열렸으면(409) 그 방송을 쓴다
     onError: (error) => {
       if (error instanceof StationApiError && error.status === 409 && error.stationId) setStartedId(error.stationId)
     },
@@ -69,15 +69,6 @@ export function TestPage() {
     if (busy) reset()
   }, [busy, reset])
 
-  // 들어올 때 한 번만 연다. 콘솔에서 종료한 뒤에는 저절로 다시 열지 않는다
-  const autoStarted = useRef(false)
-  const noStation = myStationQuery.isSuccess && !myStationQuery.data && !startedId
-  useEffect(() => {
-    if (!isAdmin || !noStation || !voice || autoStarted.current) return
-    autoStarted.current = true
-    startMutation.mutate(voice)
-  }, [isAdmin, noStation, voice, startMutation])
-
   // 테스트 화면은 어드민만 쓴다. 메뉴는 숨겼지만 주소로 직접 들어와도 돌려보낸다
   if (currentUser && !currentUser.isAdmin) {
     return <Navigate to="/main" replace />
@@ -85,6 +76,9 @@ export function TestPage() {
 
   const failed = (startMutation.isError && !startedId) || voicesQuery.isError || myStationQuery.isError
   const ended = Boolean(state) && !busy && startMutation.isIdle
+  // 아직 연 테스트 방송이 없다 — 들어오기만 해서는 열지 않고 버튼으로 연다
+  const idle = myStationQuery.isSuccess && !stationId && startMutation.isIdle
+  const loading = myStationQuery.isPending && isAdmin
   if (state && busy) {
     return <ListenPage navActive="test" stationId={state.stationId} testPanel={<TestPanel state={state} />} />
   }
@@ -105,16 +99,18 @@ export function TestPage() {
           <p className={`text-[13px] ${failed ? 'text-danger' : 'text-text-muted'}`}>
             {failed
               ? startMutation.error instanceof StationApiError ? startMutation.error.message : '테스트 방송을 열지 못했어요.'
-              : ended ? '테스트 방송이 끝났어요.'
-                : '테스트 방송을 여는 중…'}
+              : loading ? '불러오는 중…'
+                : ended ? '테스트 방송이 끝났어요.'
+                  : idle ? '테스트 방송은 홈 방송 목록에 나오지 않고, 다시듣기도 남기지 않아요.'
+                    : '테스트 방송을 여는 중…'}
           </p>
-          {voice && (failed || ended) && (
+          {voice && (failed || ended || idle) && (
             <button
               type="button"
               onClick={() => startMutation.mutate(voice)}
               className="rounded-md bg-primary px-5 py-2.5 text-[13px] font-semibold text-white"
             >
-              {failed ? '다시 시도' : '다시 시작하기'}
+              {failed ? '다시 시도' : '테스트 방송 시작하기'}
             </button>
           )}
         </section>

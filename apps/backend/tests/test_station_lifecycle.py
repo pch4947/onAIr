@@ -68,6 +68,16 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         for _ in range(3):
             await self.lifecycle.tick()
 
+    async def test_cleanup_marks_test_broadcast_replays(self):
+        # 어드민 테스트 방송(#306)이 끝나면 그 세션에 테스트 표시를 남겨 다시듣기에서 뺀다
+        prefix = f'backend:{self.sid}'
+        await self.redis.set(self.store.key, json.dumps(self.record | {'test': True}))
+        await self.redis.hset(prefix + ':replay-sessions', 'test-replay', json.dumps({'id': 'test-replay'}))
+        await self.absent()
+        self.assertEqual(await self.status(), 'ended')
+        replay = json.loads(await self.redis.hget(prefix + ':replay-sessions', 'test-replay'))
+        self.assertEqual((replay['ownerId'], replay.get('test')), ('owner', True))
+
     async def test_automatic_cleanup_archives_queue_preserves_vod_and_allows_recreation(self):
         prefix = f'backend:{self.sid}'
         await self.redis.rpush(prefix + ':queue', 'old-segment')
