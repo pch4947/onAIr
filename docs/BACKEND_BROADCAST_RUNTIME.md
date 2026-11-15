@@ -25,10 +25,10 @@ FastAPI → Redis 요청 접수 → 엔진 이벤트 수신 → FFmpeg 인코딩
 
 | 경로 | 의미 |
 | --- | --- |
-| GET /api/requests/{request_id}/state | Redis에 저장된 최신 요청 상태 |
-| GET /api/requests/{request_id}/history?offset=0&limit=100 | 접수·엔진·방송 상태 이력. limit 최대 200, 없는 요청은 빈 목록 |
-| GET /api/broadcast/segments/{segment_id}/state | 세그먼트 방송 상태. 없으면 404 |
-| GET /api/stream/state?fragment={TS 파일명} | 해당 조각의 metadata와 방송 운영 상태 |
+| GET /api/stations/{station_id}/requests/{request_id}/state | Redis에 저장된 최신 요청 상태 |
+| GET /api/stations/{station_id}/requests/{request_id}/history?offset=0&limit=100 | 접수·엔진·방송 상태 이력. limit 최대 200, 없는 요청은 빈 목록 |
+| GET /api/stations/{station_id}/broadcast/segments/{segment_id}/state | 세그먼트 방송 상태. 없으면 404 |
+| GET /api/stations/{station_id}/stream/state?fragment={TS 파일명} | 해당 조각의 metadata와 방송 운영 상태 |
 
 Redis 조회 실패는 요청·세그먼트 API에서 503으로 응답한다. HLS 재생과 상태 조회 가능 여부는 별개다.
 실시간 상태 전달은 조회 방식이며 WebSocket push는 추가하지 않았다.
