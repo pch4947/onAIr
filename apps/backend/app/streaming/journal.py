@@ -101,6 +101,11 @@ class Journal:
         row = self.db.execute('SELECT status FROM jobs WHERE id=?', (segment_id,)).fetchone()
         return row[0] if row else None
 
+    def forget(self, segment_id):
+        """인코딩만 하고 내보내지 않은 조각을 없던 것으로 한다 — 대기열에서 다시 고르거나 버릴 수 있다 (#314)."""
+        with self.db:
+            self.db.execute("DELETE FROM jobs WHERE id=? AND status='MIXING'", (segment_id,))
+
     def transition(self, segment, state, at=None):
         at = time.time() if at is None else at
         with self.db:

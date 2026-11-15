@@ -65,6 +65,12 @@ class HlsPublisher:
         self.queue_available = False
         self.unpublished_seconds = 0.0
         self.active_id = None
+        # 테스트 버튼의 재생 중단 (#314). 요청은 송출 루프가 안전한 지점에서 처리한다
+        self.cut_event = asyncio.Event()
+        self.cut_handled = asyncio.Event()
+        self.cut_result = False
+        self.holds = 0
+        self.preparing = None
         self.last_pressure = None
         self.last_pressure_at = 0.0
         self.redis_error = None
@@ -397,9 +403,71 @@ class HlsPublisher:
                 self.redis_error = 'Broadcast state synchronization failed'
             await asyncio.sleep(0.5)
 
+    @contextlib.asynccontextmanager
+    async def cutting(self):
+        """재생 중인 조각을 다음 HLS 조각 경계에서 끊고, 인코딩해 둔 다음 멘트를 놓아 준다 (#314).
+
+        블록 안에서는 송출기가 다음 조각을 고르지 않는다 — 호출자가 대기열에서 멘트를 버릴 시간이다.
+        재생 중인 조각을 끊었으면 True를 준다. 준비된 곡은 그대로 둔다.
+        """
+        self.holds += 1
+        try:
+            self.cut_result = False
+            if self.task and not self.task.done():
+                self.cut_handled.clear()
+                self.cut_event.set()
+                await self.cut_handled.wait()
+            yield self.cut_result
+        finally:
+            self.holds -= 1
+
+    def drop_chunks(self, chunks):
+        for name, _ in chunks:
+            (self.directory / name).unlink(missing_ok=True)
+
+    async def release_prepared(self):
+        """인코딩했거나 인코딩 중인 다음 멘트를 놓아 준다. 곡은 건드리지 않는다."""
+        task = self.preparation
+        if task is None:
+            return
+        if not task.done():
+            if self.preparing is None or self.preparing.kind == 'music':
+                return
+            task.cancel()
+            await asyncio.wait({task})
+        prepared = None if task.cancelled() else task.result()
+        if prepared and prepared[0]['kind'] == 'music':
+            return
+        if prepared:
+            self.drop_chunks(prepared[1])
+            self.unpublished_seconds = max(0, self.unpublished_seconds - sum(d for _, d in prepared[1]))
+        if self.preparing:
+            self.journal.forget(self.preparing.id)
+            if self.recovery and self.recovery[0]['id'] == self.preparing.id:
+                self.recovery.popleft()
+        self.preparation = self.preparing = self.active_id = None
+
+    async def pace(self):
+        """다음 조각을 낼 시각까지 기다린다. 중단 요청이 오면 바로 깨서 True를 준다."""
+        delay = max(0, self.next_publish - time.monotonic())
+        if delay and not self.cut_event.is_set():
+            with contextlib.suppress(TimeoutError):
+                async with asyncio.timeout(delay):
+                    await self.cut_event.wait()
+        return self.cut_event.is_set()
+
+    async def finish_cut(self, cut):
+        await self.release_prepared()
+        self.cut_result = cut
+        self.cut_event.clear()
+        self.cut_handled.set()
+
     async def prepare_next(self):
         segment = None
         recovered = False
+        if self.holds:
+            return None
+        self.preparing = None
         try:
             if self.recovery:
                 segment = Segment.model_validate(self.recovery[0])
@@ -417,6 +485,7 @@ class HlsPublisher:
                     if recovered:
                         self.recovery.popleft()
                     return None
+            self.preparing = segment
             self.journal.transition(segment.model_dump(), 'MIXING')
             started = time.monotonic()
             source = await asyncio.to_thread(validate_audio, self.settings.audio_dir, segment)
@@ -482,7 +551,10 @@ class HlsPublisher:
                 if self.preparation is None:
                     self.preparation = asyncio.create_task(self.wait_for_next())
                 # Source encoding is independent of paced fallback publishing.
-                await asyncio.sleep(max(0, self.next_publish - time.monotonic()))
+                while await self.pace():
+                    await self.finish_cut(False)  # 조각 사이 — 끊을 것은 없고 준비한 멘트만 놓는다
+                if self.preparation is None:
+                    self.preparation = asyncio.create_task(self.wait_for_next())
                 done, _ = await asyncio.wait({self.preparation}, timeout=0.1 if not self.entries else 0)
                 prepared = None
                 if done:
@@ -501,7 +573,19 @@ class HlsPublisher:
                     self.fallback_active = True
                     chunks = await self.fallback_chunks()
                 for index, (name, duration) in enumerate(chunks):
-                    await asyncio.sleep(max(0, self.next_publish - time.monotonic()))
+                    if await self.pace():
+                        unstarted = segment and index == 0 and segment['kind'] != 'music'
+                        await self.finish_cut(bool(segment and index))
+                        if segment and (index or unstarted):
+                            # 남은 조각은 내보내지 않는다. 나간 데까지는 방송된 것으로 친다
+                            self.drop_chunks(chunks[index:])
+                            self.unpublished_seconds = max(
+                                0, self.unpublished_seconds - sum(d for _, d in chunks[index:]))
+                            if unstarted:  # 한 조각도 나가지 않았다 — 준비만 한 멘트와 같다
+                                self.journal.forget(segment['id'])
+                                segment = self.current = None
+                            break
+                        await self.pace()
                     self.publish(name, duration, index == 0)
                     if index == 0 and segment:
                         started_at = time.time() + self.settings.broadcast_delay_seconds

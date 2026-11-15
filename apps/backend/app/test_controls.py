@@ -1,5 +1,6 @@
 """테스트 화면 전용 — 어드민만. 방송을 끊지 않고 코너·페르소나·형식을 바꾸고, 엔진의 편성 결정과 판단 흐름(이벤트)을 보여준다."""
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -70,8 +71,27 @@ return #ARGV
 """
 
 
+@contextlib.asynccontextmanager
+async def instant_cut(state, station_id):
+    """테스트 방송(#306)이면 재생 중인 멘트·곡을 끊는다 (#314). 실제 방송은 끊지 않는다."""
+    raw = await state.redis.get(f'backend:{station_id}:station')
+    if raw and json.loads(raw).get('test') and hasattr(state.hls, 'cutting'):
+        async with state.hls.cutting():
+            yield
+    else:
+        yield
+
+
 async def discard_and_send(state, station_id, kind, payload):
-    """아직 내보내지 않은 멘트를 버리고 엔진에 알린 뒤 kind 이벤트를 보낸다. 버린 개수를 돌려준다."""
+    """아직 내보내지 않은 멘트를 버리고 엔진에 알린 뒤 kind 이벤트를 보낸다. 버린 개수를 돌려준다.
+
+    테스트 방송이면 재생 중인 조각도 끊고, 인코딩해 둔 다음 멘트까지 버린다.
+    """
+    async with instant_cut(state, station_id):
+        return await discard_queued(state, station_id, kind, payload)
+
+
+async def discard_queued(state, station_id, kind, payload):
     prefix = f'backend:{station_id}'
     async with state.redis.pipeline(transaction=True) as pipe:
         pipe.lrange(prefix + ':queue', 0, -1)
