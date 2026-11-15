@@ -185,6 +185,26 @@ class PlayoutV2Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sorted(await self.redis.hkeys(READ_KEY)), [STORY_PREFIX + 'one', STORY_PREFIX + 'two'])
 
 
+    async def test_playout_never_overwrites_a_finished_v2_request(self):
+        """#291: 엔진이 방송 중에 v2로 바뀌어 v1 세그먼트가 이미 반영된 요청을 가리켜도 덮지 않는다."""
+        for request_id, state in (('req_done', 'reflected'), ('req_gone', 'cancelled')):
+            await self.redis.hset(self.prefix + ':request-states', request_id,
+                                  json.dumps(dict(request_id=request_id, state=state)))
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Journal(Path(directory) / 'broadcast.sqlite', self.station)
+            try:
+                journal.transition(dict(id='seg_v1', kind='speech', corner_type='topic_talk', request_ref='req_done'),
+                                   'PUBLISHED')
+                journal.transition(dict(id='seg_bad', kind='speech', corner_type='topic_talk', request_ref='req_gone'),
+                                   'FAILED')
+                await journal.flush(self.redis)
+            finally:
+                journal.close()
+        for request_id, state in (('req_done', 'reflected'), ('req_gone', 'cancelled')):
+            self.assertEqual(json.loads(await self.redis.hget(self.prefix + ':request-states', request_id))['state'],
+                             state)
+
+
 @unittest.skipUnless(os.environ.get('ONAIR_INTEGRATION_TEST') == '1', 'Requires Redis')
 class ArrivedV2Tests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

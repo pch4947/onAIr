@@ -40,15 +40,20 @@ for i=2,#KEYS do
   redis.call('RENAME', KEYS[i], ARGV[3] .. KEYS[i])
  end
 end
+-- 이미 끝난 요청은 그대로 둔다. v1 played·failed·rejected·expired, v2 reflected·not_on_air·cancelled (#291)
+local terminal = {played=1, failed=1, rejected=1, expired=1, reflected=1, not_on_air=1, cancelled=1}
+-- v2에서 아직 선택되지 못했거나 반영 전이던 입력은 방송 종료로 expired다 (계약 10.4절). v1 상태는 지금처럼 failed
+local unselected = {pooled=1, inboxed=1, collected=1, held=1, selected=1}
 for i=1,#requests,2 do
  local id = requests[i]
  local previous = redis.call('HGET', ARGV[4] .. ':request-states', id)
  local state = previous and cjson.decode(previous).state or 'requested'
- if state ~= 'played' and state ~= 'failed' and state ~= 'rejected' and state ~= 'expired' then
+ if not terminal[state] then
+  local ended = unselected[state] and 'expired' or 'failed'
   redis.call('HSET', ARGV[4] .. ':request-states', id,
-   cjson.encode({request_id=id, state='failed'}))
+   cjson.encode({request_id=id, state=ended}))
   redis.call('RPUSH', ARGV[4] .. ':request-history:' .. id,
-   cjson.encode({state='failed', previous=state, source='backend', reason='broadcast_ended',
+   cjson.encode({state=ended, previous=state, source='backend', reason='broadcast_ended',
     accepted=true, at=tonumber(ARGV[5])}))
  end
 end

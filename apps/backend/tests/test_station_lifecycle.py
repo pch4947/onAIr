@@ -100,6 +100,30 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(created['status'], 'preparing')
         self.assertNotEqual(created['generation'], self.record['generation'])
 
+    async def test_cleanup_keeps_v2_terminal_states_and_expires_unselected_inputs(self):
+        """#291: 방송이 끝나도 reflected·not_on_air·cancelled는 그대로, v2에서 남은 입력은 expired."""
+        prefix = f'backend:{self.sid}'
+        store = RequestStore(self.redis, self.sid)
+        states = ['reflected', 'not_on_air', 'cancelled', 'pooled', 'inboxed', 'selected', 'queued', None]
+        ids = {}
+        for state in states:
+            entry = await store.create(f'요청 {state}', 'user', 'chat')
+            ids[state] = entry['id']
+            if state:
+                await self.redis.hset(prefix + ':request-states', entry['id'],
+                                      json.dumps(dict(request_id=entry['id'], state=state)))
+        await self.absent()
+        self.assertEqual(await self.status(), 'ended')
+        ended = {state: (await store.get(request_id))['status'] for state, request_id in ids.items()}
+        self.assertEqual(ended, {'reflected': 'reflected', 'not_on_air': 'not_on_air', 'cancelled': 'cancelled',
+                                 'pooled': 'expired', 'inboxed': 'expired', 'selected': 'expired',
+                                 'queued': 'failed', None: 'failed'})  # v1 상태는 지금처럼 failed
+        history = [json.loads(h) for h in await self.redis.lrange(prefix + ':request-history:' + ids['pooled'], 0, -1)]
+        self.assertEqual((history[-1]['state'], history[-1]['previous'], history[-1]['reason']),
+                         ('expired', 'pooled', 'broadcast_ended'))
+        kept = await self.redis.lrange(prefix + ':request-history:' + ids['reflected'], 0, -1)
+        self.assertFalse(any(json.loads(h).get('reason') == 'broadcast_ended' for h in kept))
+
     async def test_network_errors_never_mean_ended(self):
         self.http.get.side_effect = httpx.ConnectError('offline')
         for _ in range(4):

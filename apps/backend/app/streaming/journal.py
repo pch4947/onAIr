@@ -22,7 +22,8 @@ if event.type == 'state.transition' then
   if ARGV[3] ~= '' then
     local old = redis.call('HGET', KEYS[5], ARGV[3])
     local oldstate = old and cjson.decode(old).state or 'generated'
-    if oldstate ~= 'rejected' and oldstate ~= 'expired' and oldstate ~= 'failed' and oldstate ~= 'played' then
+    -- 끝난 요청(v2 reflected·not_on_air·cancelled 포함)은 송출 상태로 덮지 않는다 (#291)
+    if not ({rejected=1, expired=1, failed=1, played=1, reflected=1, not_on_air=1, cancelled=1})[oldstate] then
       local state = string.lower(p.state)
       local updated = cjson.encode({request_id=ARGV[3], state=state})
       redis.call('HSET', KEYS[5], ARGV[3], updated)
@@ -40,7 +41,7 @@ elseif event.type == 'encoding.failed' then
   if ARGV[3] ~= '' then
     local old = redis.call('HGET', KEYS[5], ARGV[3])
     local state = old and cjson.decode(old).state or ''
-    if state ~= 'played' and state ~= 'rejected' and state ~= 'expired' then
+    if not ({played=1, rejected=1, expired=1, reflected=1, not_on_air=1, cancelled=1})[state] then
       redis.call('HSET', KEYS[5], ARGV[3], cjson.encode({request_id=ARGV[3], state='failed'}))
       redis.call('RPUSH', KEYS[6], cjson.encode({state='failed', at=event.at, source='broadcast', accepted=true}))
     end
