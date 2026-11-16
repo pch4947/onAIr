@@ -23,6 +23,7 @@ from .inputs.dilemmas import DilemmaPlan
 from .inputs.inbox import MessageInbox
 from .inputs.router import BOARD_STORY
 from .inputs.rules import load_chat_rules
+from .inputs.song_fit import SongFitJudge
 from .inputs.song_picks import Pick, SongPicker
 from .inputs.stories import StoryPool
 from .inputs.story_judge import StoryJudge
@@ -78,6 +79,7 @@ class EngineSettings:
     # DJ 선곡 (계약 3.4절 track.suggest, #295) — 들고 있는 다음 곡이 없으면 DJ가 곡 후보를 내고 백엔드가 찾아 튼다.
     # 지금 백엔드는 모르는 이벤트를 격리하므로, 백엔드가 track.suggest를 받게 배포된 뒤에 켠다
     emit_song_picks: bool = False
+    song_fit_timeout_sec: float = 4.0  # 신청곡 판정(REST)을 기다리는 상한 — 넘으면 통과로 답한다 [예시]
     song_pick_grace_sec: float = 5.0  # 백엔드가 다음 곡을 알려 줄 시점부터 이만큼 기다린 뒤에 제안한다 [예시]
     # 제안에 답이 없으면 이만큼 뒤에 다시 제안한다. 백엔드는 검색과 음원 받기에 최대 240초를 쓰고 그 안에
     # 반드시 답한다(apps/backend/app/dj_picks.py TOTAL_BUDGET_SEC) — 그보다 길어야 같은 자리에 두 번 제안하지 않는다
@@ -209,6 +211,9 @@ class StationEngine:
         # DJ 선곡 — 설정이 꺼져 있으면 고르지 않는다
         self.song_picker = SongPicker(llm, config.profile, config.music_taste, self.topic,
                                       violates=safety.check_l2) if settings.emit_song_picks else None
+        # 신청곡이 방의 장르·분위기에 어울리는지 — 백엔드가 음원을 받기 전에 REST로 묻는다 (계약 6.4절)
+        self.song_fit = SongFitJudge(llm, config.profile, config.music_taste, self.topic,
+                                     violates=safety.check_l0, telemetry=self.telemetry)
         self._pick_task: asyncio.Task | None = None
         self._pending_pick: tuple[str, list[Pick], float] | None = None  # 답을 기다리는 제안 (id, 후보, 보낸 때)
         self._pick_after = 0.0  # 이 시각 전에는 제안하지 않는다
@@ -504,8 +509,10 @@ class StationEngine:
         except ValueError as exc:
             return self._reject_persona("unsafe_persona", str(exc)[:300])
         self._profile, self._tts = profile, tts
+        genres = [str(genre) for genre in persona.music_taste]
+        self.song_fit.use_persona(profile, genres)
         if self.song_picker is not None:
-            self.song_picker.use_persona(profile, [str(genre) for genre in persona.music_taste])
+            self.song_picker.use_persona(profile, genres)
         self._use_glue(glue)
         self.scheduler.switch_persona(PersonaSwitch(
             profile=profile, tts=tts, persona_id=persona.persona_id, voice=persona.voice,

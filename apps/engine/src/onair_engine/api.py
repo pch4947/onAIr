@@ -35,6 +35,12 @@ class DraftsRequest(BaseModel):
     count: int = Field(default=3, ge=1, le=5)
 
 
+class SongCheckRequest(BaseModel):
+    """신청곡 판정 요청 (계약 6.4절) — 곡 정보는 YouTube 영상 제목과 채널 이름이다."""
+    title: str = Field(min_length=1, max_length=200)
+    artist: str = Field(default="", max_length=200)
+
+
 class CheckRequest(BaseModel):
     persona: dict  # 스키마 검증은 직접 해서 계약 형식({"errors": [{"field", "reason"}]})으로 돌려준다
 
@@ -138,6 +144,24 @@ def create_app(manager: EngineManager, drafter: PersonaDrafter, settings: Engine
         """엔진 패널용 이벤트 — 코너, 입력 라우팅, 채팅 선별, 생성 단계, 송출 (계약 6.1절)."""
         rows = await asyncio.to_thread(read_events, settings.sqlite_path, station_id, after, limit)
         return {"events": rows, "next": rows[-1]["id"] if len(rows) == limit else None}
+
+    @app.post("/v1/stations/{station_id}/song-requests/check", dependencies=v1)
+    async def song_request_check(station_id: str, body: SongCheckRequest):
+        """신청곡이 이 방의 장르·분위기에 어울리는지 (계약 6.4절). 백엔드가 음원을 받기 전에 묻는다.
+
+        확실히 어울리지 않을 때만 fit이 false다. 판정하지 못했으면(시간 초과, 제공자 장애, 모르는 곡)
+        fit은 true이고 judged가 false다 — 신청을 막지 않는다.
+        """
+        engine = manager.stations.get(station_id)
+        if engine is None:
+            raise HTTPException(404, "station not running")
+        try:
+            async with asyncio.timeout(settings.song_fit_timeout_sec):
+                result = await engine.song_fit.judge(body.title, body.artist)
+        except TimeoutError:
+            logger.warning("SONG_FIT_TIMEOUT %s", station_id)
+            return {"fit": True, "judged": False, "reason": None}
+        return result.payload()
 
     @app.post("/v1/personas/drafts", dependencies=v1)
     async def drafts(body: DraftsRequest):
