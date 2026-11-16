@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from redis.exceptions import RedisError
 
 from .messaging.contracts import Segment, validate_audio
+from .song_fit import song_fits
 from .station_runtime import station_runtime
 from .stations import User
 from .streaming.tracks import MUSIC_SEGMENT_PREFIX, REGISTER, now_playing
@@ -423,6 +424,7 @@ class MusicService:
 
 @router.post('/{station_id}/tracks', status_code=202, responses={
     401: {'description': 'Login required'}, 409: {'description': 'Station or retry-key conflict'},
+    422: {'description': 'Invalid link, or detail.code "song_not_fit": the song does not fit the station'},
     429: {'description': 'Download busy'}, 502: {'description': 'Audio preparation failed'},
     503: {'description': 'HLS, Redis or media tools unavailable'}, 504: {'description': 'Preparation timed out'}})
 async def enqueue_track(station_id: str, body: TrackInput, request: Request, user: User,
@@ -442,6 +444,13 @@ async def enqueue_track(station_id: str, body: TrackInput, request: Request, use
             raise HTTPException(409, 'Station must be started')
         if body.source == 'playlist' and body.request_id is None:
             return await runtime.music.enqueue(youtube_id(body.url), user['id'], idempotency_key)
+        # 청취자 신청곡은 음원을 받기 전에 방의 장르·분위기에 어울리는지 엔진에 묻는다 (계약 6.4절, #301).
+        # 호스트의 플레이리스트와 투표 결과 곡은 묻지 않는다. 프론트는 상태 코드가 아니라 code로 가린다
+        if body.source == 'request' and not await song_fits(
+                getattr(request.app.state, 'engine_http', None), station_id, youtube_id(body.url),
+                fetch_oembed_title):
+            raise HTTPException(422, {'code': 'song_not_fit',
+                                      'message': 'This song does not fit the station'})
         nickname = None if body.anonymous else user.get('name')
         return await runtime.music.enqueue(youtube_id(body.url), user['id'], idempotency_key,
                                           body.source, body.request_id, nickname, body.comment)

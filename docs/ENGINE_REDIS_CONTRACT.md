@@ -450,7 +450,7 @@ POST /v1/stations/{station_id}/song-requests/check
 - 기준은 persona의 선곡 취향(장르)과 스테이션 컨셉이다. 오늘의 화제와 어울리는지는 보지 않는다. 가사나 내용이 방송에 부적절한지도 보지 않는다(장르·분위기만 본다).
 - 같은 곡을 다시 물으면 같은 답을 준다(방송 안에서). 방송 중에 DJ가 바뀌면(3.2절 `station.persona_changed`) 새 DJ의 선곡 취향으로 판정한다.
 - 플레이리스트 등록(`source: "playlist"`)은 묻지 않는다 — 호스트가 넣는 곡이다.
-- **구현 상태** — 엔진은 구현했다(`inputs/song_fit.py`). 백엔드가 신청곡 등록에서 이 주소를 부르고 프론트가 거절 문구를 띄우는 것은 #301에 남아 있다. 백엔드가 부르기 전까지 방송은 지금과 같다.
+- **구현 상태** — 엔진은 구현했다(`inputs/song_fit.py`). 백엔드도 구현했다(`app/song_fit.py`, #301): 신청곡 등록(`POST /api/stations/{id}/tracks`, `source: "request"`)에서 음원을 받기 전에 YouTube oEmbed로 영상 제목·채널 이름을 얻어 이 주소를 부른다. `judged: true`이고 `fit: false`일 때만 422 `{"detail": {"code": "song_not_fit"}}`로 거절하고 대기열에 넣지 않는다. 제목을 못 얻었거나 엔진이 5초 안에 답하지 않으면(전체 상한 9초) 통과시킨다. 엔진의 `reason`은 응답에 싣지 않는다. 프론트는 `detail.code`로 가려 고정 문구를 띄운다(#317).
 
 ## 7. 노션 "백엔드→엔진" 표 매핑
 
