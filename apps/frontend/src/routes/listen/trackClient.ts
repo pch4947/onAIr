@@ -38,6 +38,22 @@ const errors: Record<number, string> = {
   504: '처리 시간이 초과됐어요. 같은 링크로 다시 시도해주세요.',
 }
 
+// 신청곡 판정(#301): 엔진이 방의 장르·분위기와 확실히 맞지 않는다고 본 곡. 엔진이 쓴 사유(reason)는 화면에 쓰지 않는다
+export const SONG_NOT_FIT_MESSAGE = '이 방의 분위기와 맞지 않는 곡이에요. 다른 곡을 신청해 주세요.'
+
+export class SongNotFitError extends Error {
+  constructor() {
+    super(SONG_NOT_FIT_MESSAGE)
+    this.name = 'SongNotFitError'
+  }
+}
+
+// 상태 코드가 아니라 detail.code로 가린다 — 422는 링크 형식 오류에도 쓰인다
+async function rejectedAsNotFit(response: Response): Promise<boolean> {
+  const body = await response.json().catch(() => null) as { detail?: { code?: unknown } } | null
+  return body?.detail?.code === 'song_not_fit'
+}
+
 export function createTrackClient(base: string, getToken: () => string | null) {
   async function call(path: string, options: RequestInit = {}) {
     const token = getToken()
@@ -49,7 +65,10 @@ export function createTrackClient(base: string, getToken: () => string | null) {
         signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(260000),
       })
     } catch { throw new Error('연결이 끊겼거나 시간이 초과됐어요. 같은 링크로 다시 시도해주세요.') }
-    if (!response.ok) throw new Error(errors[response.status] ?? '음악 등록에 실패했어요. 다시 시도해주세요.')
+    if (!response.ok) {
+      if (await rejectedAsNotFit(response)) throw new SongNotFitError()
+      throw new Error(errors[response.status] ?? '음악 등록에 실패했어요. 다시 시도해주세요.')
+    }
     return response.json()
   }
   return {
