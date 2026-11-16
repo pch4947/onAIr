@@ -18,8 +18,31 @@ from app.music import ENQUEUE
 from app.streaming.hls import HlsPublisher
 from app.music import run_process
 from app.streaming.journal import Journal
+from app.streaming.tracks import now_playing
 from app.test_controls import discard_and_send
 from test_broadcast_runtime import segment
+
+
+class NowPlayingTests(unittest.IsolatedAsyncioTestCase):
+    def redis(self, plan, submissions):
+        return SimpleNamespace(hmget=AsyncMock(side_effect=lambda key, fields: [plan.get(f) for f in fields]),
+                               hget=AsyncMock(side_effect=lambda key, field: submissions.get(field)))
+
+    async def test_only_while_the_song_is_heard(self):
+        song = {'segment_id': 'music_a', 'source': 'dj', 'track': {'title': '밤편지', 'duration_ms': 200000}}
+        redis = self.redis({'playing': 'music_a', 'playing_at': '1000.5'}, {'music_a': json.dumps(song)})
+        self.assertEqual(await now_playing(redis, 'p', 1100), {**song, 'started_at': 1000.5})
+        self.assertIsNone(await now_playing(redis, 'p', 1000.5 + 200))  # 곡이 끝났다
+
+    async def test_unknown_or_incomplete_is_none(self):
+        song = json.dumps({'segment_id': 'music_a', 'track': {'title': 'x', 'duration_ms': 1000}})
+        cases = [({}, {}),  # 아직 곡이 시작되지 않았다
+                 ({'playing': 'music_a'}, {'music_a': song}),  # 시각이 없던 예전 기록
+                 ({'playing': 'music_a', 'playing_at': '1'}, {}),  # 대기열 기록이 없다
+                 ({'playing': 'music_a', 'playing_at': '1'}, {'music_a': json.dumps({'segment_id': 'music_a'})})]
+        for plan, submissions in cases:
+            with self.subTest(plan=plan, submissions=submissions):
+                self.assertIsNone(await now_playing(self.redis(plan, submissions), 'p', 1.5))
 
 
 class TrackClockTests(unittest.IsolatedAsyncioTestCase):
@@ -202,10 +225,14 @@ class TrackRedisTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             journal = Journal(Path(directory) / 'clock.sqlite', self.station, repeat_playlist=True)
             try:
-                journal.track_started(first, time.time() - 1)
+                started_at = time.time() - 1
+                journal.track_started(first, started_at)
                 await journal.flush(self.redis)
                 journal.track_started(first, time.time() - 1)
                 await journal.flush(self.redis)
+                # 청취자가 듣기 시작한 시각을 남긴다 — 두 번째 시작 알림은 무시되므로 첫 시각 그대로다
+                self.assertAlmostEqual(float(await self.redis.hget(self.prefix + ':track-plan', 'playing_at')),
+                                       started_at, places=2)
                 events = await self.events()
                 self.assertEqual([e['type'] for e in events], ['track.queued', 'track.started', 'track.queued'])
                 self.assertEqual(json.loads(events[-1]['payload'])['track']['track_ref'], 'yt:two')

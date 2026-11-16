@@ -154,7 +154,7 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
     trackThumbnailUrl: item.trackThumbnailUrl,
   }))
   const musicQueue = musicQueueQuery.data?.queue ?? []
-  const playingSegmentId = musicQueueQuery.data?.playingSegmentId ?? null
+  const nowPlaying = musicQueueQuery.data?.nowPlaying ?? null
 
   const chatListRef = useRef<HTMLUListElement>(null)
 
@@ -642,7 +642,7 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
       {isQueueOpen && (
         <SongQueueModal
           queue={musicQueue}
-          playingSegmentId={playingSegmentId}
+          nowPlaying={nowPlaying}
           onClose={() => setIsQueueOpen(false)}
         />
       )}

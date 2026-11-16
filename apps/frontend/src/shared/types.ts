@@ -75,9 +75,15 @@ export interface QueuedTrack {
   request_id?: string | null
 }
 
+export interface NowPlayingTrack extends QueuedTrack {
+  started_at: number
+}
+
 export interface MusicQueueResponse {
   queue: QueuedTrack[]
   playingSegmentId: string | null
+  // 청취자가 지금 듣고 있는 곡. 송출되며 queue에서는 이미 빠졌고, 곡이 끝나면 null (#295)
+  nowPlaying?: NowPlayingTrack | null
 }
 
 export interface SubmitRequestResponse {

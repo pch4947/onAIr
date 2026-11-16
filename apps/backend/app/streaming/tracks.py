@@ -1,4 +1,5 @@
 """Atomic track announcements and durable server-clock start delivery."""
+import json
 
 # A song request shares its ID with its music segment; only that audio settles its state.
 MUSIC_SEGMENT_PREFIX = 'music_'
@@ -34,6 +35,8 @@ local current = event.segment_id
 if redis.call('HGET', KEYS[4], 'next') == current then redis.call('HDEL', KEYS[4], 'next') end
 if redis.call('HGET', KEYS[4], 'frozen') == current then redis.call('HDEL', KEYS[4], 'frozen') end
 redis.call('HSET', KEYS[4], 'playing', current)
+-- 청취자가 듣기 시작한 서버 시각. playing은 다음 곡이 시작될 때까지 남으므로 곡이 끝났는지는 이것과 길이로 안다
+redis.call('HSET', KEYS[4], 'playing_at', tostring(event.at))
 local chosen = nil
 local urgent = nil
 for _, id in ipairs(redis.call('LRANGE', KEYS[6], 0, -1)) do
@@ -72,6 +75,19 @@ end
 redis.call('HSET', KEYS[1], ARGV[1], '1')
 return 1
 """
+
+
+async def now_playing(redis, prefix, now):
+    """청취자가 지금 듣고 있는 곡의 대기열 항목(+ started_at). 곡이 끝났거나 모르면 None."""
+    playing, started_at = await redis.hmget(prefix + ':track-plan', ['playing', 'playing_at'])
+    if not playing or not started_at:
+        return None
+    raw = await redis.hget(prefix + ':music-submissions', playing)
+    item = json.loads(raw) if raw else None
+    duration_ms = ((item or {}).get('track') or {}).get('duration_ms')
+    if not duration_ms or now >= float(started_at) + duration_ms / 1000:
+        return None
+    return {**item, 'started_at': float(started_at)}
 
 
 async def deliver_start(redis, station, event_id, body, repeat_playlist):

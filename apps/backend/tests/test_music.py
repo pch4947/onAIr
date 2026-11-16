@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 import wave
@@ -225,17 +226,29 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         app = create_app(Settings('127.0.0.1', 3000))
         music1 = {'segment_id': 'music_a', 'track': {'title': '곡 A', 'artist': 'X', 'duration_ms': 1000}}
         music2 = {'segment_id': 'music_b', 'track': {'title': '곡 B', 'artist': 'Y', 'duration_ms': 2000}}
-        submissions = {'music_a': json.dumps(music1), 'music_b': json.dumps(music2)}
+        # 지금 들리는 곡은 송출되면서 대기열에서 이미 빠졌다
+        heard = {'segment_id': 'music_dj', 'source': 'dj', 'track': {'title': '밤편지', 'artist': '아이유', 'duration_ms': 200000}}
+        submissions = {'music_a': json.dumps(music1), 'music_b': json.dumps(music2), 'music_dj': json.dumps(heard)}
+        plan = {'playing': 'music_dj', 'playing_at': str(time.time() - 10)}
+
+        def hmget(key, fields):
+            return [(plan if key.endswith(':track-plan') else submissions).get(f) for f in fields]
+
+        def hget(key, field):
+            return (plan if key.endswith(':track-plan') else submissions).get(field)
+
         app.state.redis = SimpleNamespace(
             lrange=AsyncMock(return_value=['speech_1', 'music_a', 'speech_2', 'music_b']),
-            hmget=AsyncMock(side_effect=lambda key, ids: [submissions.get(i) for i in ids]),
-            hget=AsyncMock(return_value='music_a'))
+            hmget=AsyncMock(side_effect=hmget), hget=AsyncMock(side_effect=hget))
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
             res = await client.get('/api/stations/st_local_dev/tracks/queue')
             self.assertEqual(res.status_code, 200)
             body = res.json()
             self.assertEqual([item['segment_id'] for item in body['queue']], ['music_a', 'music_b'])
-            self.assertEqual(body['playingSegmentId'], 'music_a')
+            self.assertEqual(body['playingSegmentId'], 'music_dj')
+            self.assertEqual((body['nowPlaying']['segment_id'], body['nowPlaying']['source']), ('music_dj', 'dj'))
+            plan['playing_at'] = str(time.time() - 300)  # 곡이 끝났다
+            self.assertIsNone((await client.get('/api/stations/st_local_dev/tracks/queue')).json()['nowPlaying'])
 
     async def test_queue_unknown_station_is_404(self):
         app = create_app(Settings('127.0.0.1', 3000))
