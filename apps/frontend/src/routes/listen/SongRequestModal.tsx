@@ -4,7 +4,9 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { getAccessToken } from '@/shared/authToken'
 import { randomId } from '@/shared/randomId'
-import { createTrackClient, normalizeYoutubeLink, youtubeThumbnailFromRef } from './trackClient'
+import {
+  createTrackClient, normalizeYoutubeLink, SONG_NOT_FIT_MESSAGE, SongNotFitError, youtubeThumbnailFromRef,
+} from './trackClient'
 import type { TrackCandidate } from './trackClient'
 
 const client = createTrackClient(import.meta.env.VITE_API_BASE_URL ?? '', getAccessToken)
@@ -43,6 +45,10 @@ export function SongRequestModal({ onClose, stationId, onSubmitted }: SongReques
   const searchAbort = useRef<AbortController | null>(null)
   const searchVersion = useRef(0)
   const directLink = normalizeYoutubeLink(link)
+  // 엔진은 같은 곡에 같은 판정을 주므로, 거절된 곡은 다시 보내지 않고 다른 곡을 고르게 한다
+  const [notFitUrls, setNotFitUrls] = useState<ReadonlySet<string>>(() => new Set())
+  const currentUrl = directLink ?? selected?.url ?? null
+  const currentNotFit = currentUrl !== null && notFitUrls.has(currentUrl)
   useEffect(() => () => { searchAbort.current?.abort() }, [])
   const retry = useRef<EnqueueAttempt | null>(null)
   const submitting = useRef(false)
@@ -84,6 +90,7 @@ export function SongRequestModal({ onClose, stationId, onSubmitted }: SongReques
     if (submitting.current || submitSongRequestMutation.isSuccess || !station.data || !stationId) return
     if (!directLink && !selected) { await handleSearch(); return }
     const url = directLink ?? selected!.url
+    if (notFitUrls.has(url)) return
     const trimmedComment = comment.trim()
     setValidation('')
     // 같은 Idempotency-Key로 다시 보내면 서버는 처음 접수한 내용을 돌려주므로, 내용이 바뀌면 키도 새로 만든다.
@@ -101,7 +108,10 @@ export function SongRequestModal({ onClose, stationId, onSubmitted }: SongReques
         artist: result.track.artist,
         thumbnailUrl: youtubeThumbnailFromRef(result.track.track_ref),
       })
-    } catch { /* Display mutation error below. */ }
+    } catch (error) {
+      // 그 밖의 오류는 아래 mutation 오류로 보여 준다
+      if (error instanceof SongNotFitError) setNotFitUrls((prev) => new Set(prev).add(url))
+    }
     finally { submitting.current = false }
   }
 
@@ -155,6 +165,7 @@ export function SongRequestModal({ onClose, stationId, onSubmitted }: SongReques
               <span className="min-w-0 flex-1">
                 <span className="line-clamp-2 text-[13px] font-medium">{item.title}</span>
                 <span className="block text-xs text-text-muted">{item.channel} · {Math.floor(item.duration_ms / 60000)}:{String(Math.floor(item.duration_ms / 1000) % 60).padStart(2, '0')}</span>
+                {notFitUrls.has(item.url) && <span className="block text-[11px] text-danger">이 방과 어울리지 않는 곡</span>}
               </span>
               <input type="radio" name="track-candidate" aria-label={item.title}
                 checked={selected?.video_id === item.video_id} onChange={() => { setSelected(item); submitSongRequestMutation.reset() }} />
@@ -192,7 +203,10 @@ export function SongRequestModal({ onClose, stationId, onSubmitted }: SongReques
         {station.error && <p role="alert" className="text-xs text-danger">{station.error.message}</p>}
         {validation && <p role="alert" className="text-xs text-danger">{validation}</p>}
         {submitSongRequestMutation.isPending && <p role="status" className="text-xs">음원을 다운로드하고 준비하고 있어요. 최대 4분 정도 걸릴 수 있어요.</p>}
-        {submitSongRequestMutation.error && <p role="alert" className="text-xs text-danger">{submitSongRequestMutation.error.message}</p>}
+        {/* 사연을 고쳐도(mutation 초기화) 같은 곡이 선택돼 있는 동안은 안내를 남긴다 */}
+        {currentNotFit
+          ? <p role="alert" className="text-xs text-danger">{SONG_NOT_FIT_MESSAGE}</p>
+          : submitSongRequestMutation.error && <p role="alert" className="text-xs text-danger">{submitSongRequestMutation.error.message}</p>}
         {submitSongRequestMutation.isSuccess && <p role="status" className="text-sm text-text">
           {submitSongRequestMutation.data.track.title} — 방송 대기열에 추가됐어요. 앞선 오디오 재생 후 들을 수 있어요.
         </p>}
@@ -208,10 +222,11 @@ export function SongRequestModal({ onClose, stationId, onSubmitted }: SongReques
           </button>
           {!submitSongRequestMutation.isSuccess && <button
             type="submit"
-            disabled={submitSongRequestMutation.isPending || !station.data || (!directLink && !selected)}
+            disabled={submitSongRequestMutation.isPending || !station.data || (!directLink && !selected) || currentNotFit}
             className="rounded-md bg-primary px-5 py-2.5 text-[13px] font-semibold text-white disabled:opacity-60"
           >
-            {submitSongRequestMutation.isPending ? '음원 준비 중...' : submitSongRequestMutation.isError ? '다시 시도' : selected ? '선택한 곡 대기열에 추가' : '대기열에 추가'}
+            {submitSongRequestMutation.isPending ? '음원 준비 중...' : currentNotFit ? '다른 곡을 골라주세요'
+              : submitSongRequestMutation.isError ? '다시 시도' : selected ? '선택한 곡 대기열에 추가' : '대기열에 추가'}
           </button>}
         </footer>
       </form>
