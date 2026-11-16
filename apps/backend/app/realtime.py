@@ -23,6 +23,7 @@ from redis.exceptions import RedisError
 from .api import public_request
 from .auth import JWT_ALGORITHM
 from .station_runtime import ensure_runtimes
+from .streaming.tracks import now_playing
 from .votes import close_due, current_vote
 
 log = logging.getLogger(__name__)
@@ -119,6 +120,8 @@ class StationHub:
                 pipe.hget(prefix + ':track-plan', 'playing')
                 record, corner, queue_ids, playing = await pipe.execute()
             submissions = await redis.hmget(prefix + ':music-submissions', queue_ids) if queue_ids else []
+            # 곡이 끝나는 순간에도 값이 바뀌어야 화면이 "지금 재생 중"을 내린다
+            current_song = await now_playing(redis, prefix, now)
             vote = await current_vote(redis, sid, now)
             viewers = await station.presence.count(now)
         record = json.loads(record) if record else {}
@@ -131,7 +134,8 @@ class StationHub:
                           corner, vote_key, viewers,
                           getattr(hls, 'ready', None), getattr(hls, 'session', None),
                           getattr(hls, 'error', None) or getattr(hls, 'redis_error', None)),
-            'queue': (tuple(raw for raw in submissions if raw), playing),
+            'queue': (tuple(raw for raw in submissions if raw), playing,
+                      current_song['segment_id'] if current_song else None),
             'vote': vote_key,
         }
 

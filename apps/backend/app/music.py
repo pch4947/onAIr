@@ -22,7 +22,7 @@ from redis.exceptions import RedisError
 from .messaging.contracts import Segment, validate_audio
 from .station_runtime import station_runtime
 from .stations import User
-from .streaming.tracks import MUSIC_SEGMENT_PREFIX, REGISTER
+from .streaming.tracks import MUSIC_SEGMENT_PREFIX, REGISTER, now_playing
 
 router = APIRouter(prefix='/api/stations')
 logger = logging.getLogger(__name__)
@@ -107,19 +107,22 @@ async def track_queue(station_id: str, request: Request):
     Reads the shared playback queue (speech + music segment ids) and keeps only the
     ids that are music submissions, preserving order. Already-played entries are gone
     from the shared queue by the time the HLS publisher consumes them, so this is
-    naturally "what's left to play," not full history.
+    naturally "what's left to play," not full history. The song listeners hear right now has
+    already left that queue, so it comes separately as nowPlaying (None once it ends).
     """
     station_runtime(request, station_id)
     prefix = f'backend:{station_id}'
+    redis = request.app.state.redis
     try:
         async with asyncio.timeout(3):
-            ids = await request.app.state.redis.lrange(prefix + ':queue', 0, 199)
-            submissions = await request.app.state.redis.hmget(prefix + ':music-submissions', ids) if ids else []
-            playing = await request.app.state.redis.hget(prefix + ':track-plan', 'playing')
+            ids = await redis.lrange(prefix + ':queue', 0, 199)
+            submissions = await redis.hmget(prefix + ':music-submissions', ids) if ids else []
+            playing = await redis.hget(prefix + ':track-plan', 'playing')
+            current = await now_playing(redis, prefix, time.time())
     except (RedisError, TimeoutError):
         raise HTTPException(503, 'Redis unavailable') from None
     queue = [json.loads(raw) for raw in submissions if raw]
-    return {'queue': queue, 'playingSegmentId': playing}
+    return {'queue': queue, 'playingSegmentId': playing, 'nowPlaying': current}
 
 
 @router.get('/{station_id}/tracks/access')

@@ -339,3 +339,15 @@ class SnapshotTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second['requests']['r1']['status'], 'selected')
         self.assertNotEqual(second['broadcast'], first['broadcast'])
         self.assertEqual(second['queue'], first['queue'])
+
+    async def test_queue_changes_when_the_heard_song_starts_and_ends(self):
+        song = {'segment_id': 'music_a', 'source': 'dj', 'track': {'title': '밤편지', 'duration_ms': 200000}}
+        await self.redis.hset(self.prefix + ':music-submissions', 'music_a', json.dumps(song))
+        before = await self.hub.snapshot()
+        await self.redis.hset(self.prefix + ':track-plan', mapping={'playing': 'music_a', 'playing_at': str(time.time())})
+        playing = await self.hub.snapshot()
+        self.assertNotEqual(playing['queue'], before['queue'])
+        # 다음 곡이 시작되기 전이라 playing은 그대로지만 곡은 끝났다 — 화면이 "지금 재생 중"을 내려야 한다
+        await self.redis.hset(self.prefix + ':track-plan', 'playing_at', str(time.time() - 300))
+        ended = await self.hub.snapshot()
+        self.assertNotEqual(ended['queue'], playing['queue'])
