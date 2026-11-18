@@ -568,7 +568,7 @@ def make_judge_llm(spec: JudgeSpec, model: str | None = None):
     model = model or spec.model
     if spec.llm == "gemini":
         # 생각하는 모델이다 — 생각 토큰도 출력 한도에 들어가므로 한도와 기다리는 시간을 넉넉히 둔다
-        return GeminiLlmClient(model or "gemini-4-carbon", temperature=0.2, timeout=240.0, thinking_budget=None)
+        return GeminiLlmClient(model or "gemini-4-carbon", temperature=0.2, timeout=480.0, thinking_budget=None)
     return make_llm(spec.llm, model=model)
 
 
