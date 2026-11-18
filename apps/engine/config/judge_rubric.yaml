@@ -1,0 +1,382 @@
+# 심사 기준 — 방송 하나의 대본과 채팅 기록을 채점한다 (eval/judge.py, #320).
+#
+# 기준 9개와 비중은 2026-11-19에 정했다. 세부 항목은 36개다.
+# - 항목마다 "문제 있음/없음"과 근거를 남긴다. 1~5점 척도는 쓰지 않는다 — LLM 점수는 가운데로 몰린다.
+# - 기준 점수는 문제없는 항목의 비율이고, 총점은 기준 점수를 비중으로 더한 것이다.
+# - by: judge는 심사 AI가, rule·number는 코드가 잰다 (eval/judge_rules.py). 코드로 잴 수 있는 것은 심사 AI에 맡기지 않는다.
+# - unit: 무엇을 하나씩 보는가 — ment(대본이 있는 멘트), chat(청취자 글), listener(청취자), broadcast(방송 전체).
+# - allow / allow_rate: 이만큼까지는 문제로 치지 않는다. allow_rate는 unit 수에 대한 비율이다. 둘 다 있으면 큰 쪽.
+# - reference: true면 참고용이다 — 결과에 적지만 점수에는 넣지 않는다. 심사 AI가 믿을 만하게 잡지 못한 항목이다.
+#
+# 점수는 절대 점수가 아니다. 같은 기준으로 잰 전후 비교에만 쓴다.
+
+judge:
+  llm: gemini  # DJ와 다른 회사 모델을 쓴다 — 같은 모델은 자기 글에 후하다
+  model: gemini-4-carbon
+  # 백만 토큰당 달러 — 비용 어림에만 쓴다. 2026-11-19 확인. gemini-4-carbon은 2026-12-01부터 4 / 20이다
+  price_in: 2.0
+  price_out: 10.0
+
+criteria:
+  - key: I
+    name: 방송 흐름 맥락 유지
+    weight: 15
+    items:
+      - key: I1
+        name: 이어 말하기
+        by: judge
+        unit: ment
+        allow: 1
+        problem: >-
+          바로 앞 멘트와 이어지지 않는다. 앞 멘트에서 던진 질문이나 예고를 버리고 다른 이야기를 한다,
+          앞 멘트를 듣지 못한 사람처럼 같은 소개를 다시 한다, 앞 멘트의 끝과 이 멘트의 처음이 서로 다른 이야기다.
+        not_problem: >-
+          이음말을 두고 화제를 바꾸는 것, 청취자 글을 받으려고 잠깐 말머리를 돌리는 것, 곡이 끝난 뒤의 첫 멘트(I2에서 본다).
+      - key: I2
+        name: 곡 너머 잇기
+        by: judge
+        unit: ment
+        allow: 0
+        problem: >-
+          곡이 끝난 뒤의 첫 멘트가 곡 전의 방송과 이어지지 않는다. 곡 전에 "곡 듣고 와서 이야기하겠다"고 예고한 것을
+          지키지 않는다, 방금 나간 곡이 아닌 다른 곡을 들었다고 말한다, 곡 전에 하던 이야기를 처음 꺼내는 것처럼 다시 시작한다.
+        not_problem: 곡을 짧게 받고 새 화제로 넘어가는 것.
+      - key: I3
+        name: 앞뒤 일치
+        by: judge
+        unit: broadcast
+        allow: 0
+        problem: >-
+          앞에서 한 말과 뒤에서 한 말이 서로 어긋난다. DJ가 자기에 대해 한 말이 바뀐다, 이미 한 일을 처음 하는 것처럼 말한다,
+          앞에서 소개한 순서나 계획과 다르게 진행하면서 아무 말이 없다. 어긋나는 두 멘트를 모두 근거에 적는다.
+        not_problem: 같은 이야기를 다른 말로 다시 하는 것(D3에서 본다), 방송 시각과 맞지 않는 시간 표현(F1에서 본다).
+      - key: I4
+        name: 다시 꺼내기
+        by: judge
+        unit: ment
+        allow: 0
+        problem: >-
+          앞서 나온 청취자 글이나 지나간 화제를 다시 꺼내는 말이 어색하다. 맥락 설명 없이 불쑥 꺼내 무슨 이야기인지 알 수 없다,
+          그 자리에서만 뜻이 통하던 한마디(되묻는 말, 짧은 맞장구)를 한참 뒤에 다시 인용한다, 같은 글을 거듭 꺼낸다.
+        not_problem: 엔딩에서 오늘 나온 이야기를 한 번 돌아보는 것, 맥락을 붙여 자연스럽게 다시 꺼내는 것.
+      - key: I5
+        name: 다시 시작
+        by: rule
+        check: restart
+        unit: ment
+        allow: 0
+
+  - key: B
+    name: 청취자 소통 및 공감력
+    weight: 15
+    items:
+      - key: B1
+        name: 반응의 대상
+        by: judge
+        unit: chat
+        allow: 0
+        problem: >-
+          청취자 글을 받으면서 그 글이 무엇에 대한 말인지를 틀리게 전한다. 앞 이야기에 대한 반응을 다른 이야기나 곡에 대한
+          반응으로 소개한다, 곡에 대한 말을 이야기에 대한 말로 받는다. 청취자 글에 "쓸 때 듣던 것"이 적혀 있으면 그것을 기준으로 본다.
+        not_problem: 무엇에 대한 반응인지 말하지 않고 받는 것, 글의 뜻이 분명해 대상을 밝힐 필요가 없는 것.
+      - key: B2
+        name: 질문에 답함
+        by: judge
+        unit: chat
+        allow: 0
+        problem: >-
+          청취자가 DJ에게 한 질문을 제대로 받지 않는다. 질문을 읽고도 답하지 않고 넘어간다, 질문과 다른 것에 답한다,
+          방송이 3분 넘게 남았을 때 들어온 질문을 끝까지 받지 않는다.
+        not_problem: >-
+          방송이 끝나기 직전에 들어온 질문, 도배하거나 부적절한 글의 질문, 혼잣말에 가까운 물음,
+          같은 청취자가 잇달아 한 질문 가운데 하나에 답한 경우의 나머지.
+      - key: B3
+        name: 지어낸 말
+        by: judge
+        unit: chat
+        allow: 0
+        problem: >-
+          청취자가 하지 않은 말을 했다고 전한다. 글에 없는 내용을 덧붙이거나 뜻을 바꿔 인용한다,
+          그런 글이 없는데 여러 사람이 공감했다거나 반응이 많다고 말한다.
+        not_problem: 뜻을 바꾸지 않고 줄이거나 다듬어 전하는 것, 실제로 비슷한 글이 여럿 있을 때 묶어 전하는 것.
+      - key: B4
+        name: 불만 대응
+        by: judge
+        unit: chat
+        allow: 0
+        problem: >-
+          불만이나 항의에 잘못 대응한다. 방어하거나 비꼰다, 같은 불만이 거듭 올라오는데 끝까지 아무 반응이 없다,
+          거친 불만 문장을 그대로 읽어 방송 분위기를 해친다. 불만 글이 하나도 없으면 해당 없음이다.
+        not_problem: 한 번 올라온 가벼운 불평을 받지 않고 넘어가는 것, 불만을 부드럽게 받아넘기는 것.
+      - key: B5
+        name: 농담 받기
+        by: judge
+        unit: chat
+        allow: 0
+        problem: >-
+          농담이나 장난을 잘못 받는다. 누가 봐도 농담인 글을 진지한 사연처럼 받는다, 놀리는 말에 끌려가 방송이 흐트러진다,
+          지어낸 사실(방금 DJ가 무엇을 약속했다 등)을 그대로 믿고 따른다. 농담이나 장난 글이 하나도 없으면 해당 없음이다.
+        not_problem: 농담을 받지 않고 넘어가는 것, 가볍게 웃고 넘기는 것.
+      - key: B6
+        name: 받아들여진 느낌
+        by: judge
+        call: listeners
+        unit: listener
+        allow: 0
+        allow_rate: 0.34
+        problem: >-
+          이 청취자가 방송에서 무시당했다고 느낄 만하다. 방송 내용에 맞는 글을 세 번 넘게 보냈는데 한 번도 받지 않았다,
+          DJ가 받기는 했지만 내 글의 뜻과 상관없는 말을 했다, 사연 문자를 보냈는데 읽히지 않았고 받았다는 말도 없었다.
+        not_problem: >-
+          글을 한두 번만 보낸 청취자가 불리지 않은 것, 도배·부적절한 글·방송과 상관없는 글을 받지 않은 것,
+          방송이 끝나기 직전에 보낸 글.
+      - key: B7
+        name: 되풀이 인용
+        by: number
+        check: repeated_quote
+        unit: chat
+        allow: 0
+      - key: B8
+        name: 한 사람 쏠림
+        by: number
+        check: one_listener
+        unit: broadcast
+        allow: 0
+
+  - key: C
+    name: 방송 진행의 완성도
+    weight: 15
+    items:
+      - key: C1
+        name: 코너 구성
+        by: judge
+        unit: broadcast
+        allow: 0
+        problem: >-
+          라디오 방송의 틀이 갖춰지지 않았다. 오프닝에 인사나 오늘 방송 소개가 없다, 엔딩에 마무리 인사가 없다,
+          끝인사를 한 뒤에 새 이야기를 다시 시작한다, 한다고 예고한 코너를 하지 않는다. 기록이 방송 중간에서 끝났다고
+          적혀 있으면 엔딩이 없는 것은 문제가 아니다.
+        not_problem: 코너 수가 적은 것, 코너 길이가 서로 다른 것.
+      - key: C2
+        name: 곡과의 연결
+        by: judge
+        unit: ment
+        allow: 0
+        problem: >-
+          곡을 내보내는 말이 곡과 맞지 않는다. 소개한 곡과 실제로 나간 곡이 다르다, 곡 소개가 하던 이야기를 설명 없이
+          끊는다, 곡에 대해 사실처럼 한 말(가수, 분위기, 가사)이 곡 정보와 어긋난다.
+        not_problem: 곡 소개가 짧은 것, 소개 없이 바로 이어지는 곡, 가짜 곡 제목만 보고는 알 수 없는 것.
+      - key: C3
+        name: 코너 전환
+        by: judge
+        unit: ment
+        allow: 1
+        problem: >-
+          코너나 화제가 바뀌는 자리가 매끄럽지 않다. 이음말 없이 갑자기 다른 이야기가 시작된다, 전환하는 말이
+          앞뒤 어느 쪽과도 어울리지 않는다, 같은 전환 문구를 방송 내내 되풀이한다.
+        not_problem: 짧은 이음말("이어서", "그럼")로 넘어가는 것, 대본 없는 고정 문구.
+      - key: C4
+        name: 끊김
+        by: number
+        check: breaks
+        unit: broadcast
+        allow: 0
+
+  - key: D
+    name: 콘텐츠 전달력
+    weight: 15
+    items:
+      - key: D1
+        name: 내용
+        by: judge
+        unit: ment
+        allow: 0
+        allow_rate: 0.1
+        problem: >-
+          알맹이가 없다. 구체적인 사실·장면·생각·제안 없이 분위기를 꾸미는 말만 이어진다. 그 멘트를 빼도 방송에서
+          빠지는 내용이 없다.
+        not_problem: 인사, 곡 소개, 안내, 청취자 글을 받는 짧은 말, 코너를 여닫는 말.
+      - key: D2
+        name: 명확성
+        by: judge
+        unit: ment
+        allow: 1
+        problem: >-
+          무슨 말인지 알기 어렵다. "그것", "그 이야기"가 가리키는 것이 방송에 없다, 문장 앞뒤의 논리가 맞지 않는다,
+          문장이 끝맺지 않고 끊긴다, 비유가 지나쳐 뜻이 전해지지 않는다.
+        not_problem: 말이 짧은 것, 청취자가 방금 들은 것을 가리키는 지시어, 화제가 갑자기 바뀌는 것(C3에서 본다).
+      - key: D3
+        name: 되풀이
+        by: number
+        check: repeated_phrase
+        also_judge: true
+        unit: broadcast
+        allow: 1
+        problem: >-
+          같은 내용을 말만 바꿔 되풀이한다. 같은 장면, 같은 조언, 같은 질문이 세 번 넘게 나온다. 되풀이된 멘트들을 근거에 적는다.
+        not_problem: 주제 낱말이 여러 번 나오는 것, DJ의 입버릇, 엔딩에서 한 번 돌아보는 것.
+      - key: D4
+        name: 사실성
+        by: judge
+        unit: ment
+        allow: 0
+        problem: >-
+          사실과 다른 정보를 말한다. 틀린 상식·역사·수치, 지어낸 출처나 통계, 곡과 가수에 대해 확인할 수 없는 것을
+          단정하는 말(가짜 곡을 신곡이나 유명한 곡이라고 하는 것 포함).
+        not_problem: DJ의 취향이나 감상, 누구나 아는 일반적인 말, 청취자 글을 그대로 전한 것.
+
+  - key: A
+    name: 구어체의 자연스러움
+    weight: 8
+    items:
+      - key: A1
+        name: 글말투
+        by: judge
+        unit: ment
+        allow: 0
+        allow_rate: 0.05
+        problem: >-
+          소리 내어 읽으면 어색한 글말이다. 문어체 어미와 표현("~하였다", "~하는 바입니다", "~에 관하여"),
+          번역투("~하는 시간을 가지겠습니다", "~함에 있어"), 한자어 명사를 늘어놓은 말, 보고서나 안내문 같은 문장.
+        not_problem: 차분한 존댓말, 라디오에서 흔히 쓰는 인사와 진행 말.
+      - key: A2
+        name: 호흡
+        by: rule
+        check: long_sentence
+        also_judge: true
+        unit: ment
+        allow: 0
+        allow_rate: 0.05
+        problem: >-
+          한 호흡에 읽기 어렵다. 한 문장에 절이 여럿 이어져 어디서 쉬어야 할지 알 수 없다, 꾸미는 말이 길게 앞에 붙어
+          주어와 서술어가 멀다.
+        not_problem: 쉼표로 나뉘어 끊어 읽기 쉬운 문장, 짧은 문장이 여럿 이어지는 것.
+      - key: A3
+        name: 상투구
+        by: judge
+        unit: ment
+        allow: 0
+        allow_rate: 0.05
+        problem: >-
+          기계가 쓴 글에 흔한 빈말이다. 뜻 없이 감성만 얹는 말("작은 위로가 되길", "소중한 시간", "마음 한켠"),
+          무엇이든 "~하는 시간이 되었으면 좋겠습니다"로 맺는 말, 같은 틀의 수사를 멘트마다 붙이는 것.
+        not_problem: DJ 설정에 적힌 입버릇, 한 번 쓴 따뜻한 말.
+
+  - key: E
+    name: DJ 페르소나 및 개성
+    weight: 8
+    items:
+      - key: E1
+        name: 말투 유지
+        by: rule
+        check: speech_level
+        unit: ment
+        allow: 1
+      - key: E2
+        name: 개성
+        by: judge
+        call: blind
+        unit: broadcast
+        allow: 0
+      - key: E3
+        name: 금지 사항
+        by: judge
+        unit: ment
+        allow: 0
+        problem: >-
+          DJ 설정의 금지 사항을 어긴다. 금지 목록의 항목마다 대본을 확인하고, 어긴 멘트와 어긴 금지 항목을 근거에 적는다.
+        not_problem: 금지 목록에 없는 것, 청취자 글을 전하면서 나온 말.
+
+  - key: F
+    name: 시간대·주제·청취자 적합성
+    weight: 8
+    items:
+      - key: F1
+        name: 시간대
+        by: judge
+        unit: ment
+        allow: 0
+        problem: >-
+          방송 시각과 맞지 않는 말을 한다. 그 시각에 맞지 않는 인사(새벽에 "좋은 아침", 낮에 "늦은 밤"),
+          그 시각에 하지 않을 일을 지금 하는 것처럼 말한다(새벽에 "저녁을 이어가요", "퇴근길").
+        not_problem: >-
+          시각을 말하지 않는 것, 하루를 돌아보는 말, 청취자 글에 나온 시간 표현을 전한 것,
+          자정부터 동트기 전까지를 "밤"이라고 하는 것(잠들지 않은 사람에게 새벽 네 시는 아직 밤이다).
+      - key: F2
+        name: 주제와 청취자
+        by: judge
+        unit: ment
+        allow: 0
+        problem: >-
+          오늘의 주제나 방송 컨셉에서 벗어난다. 주제와 상관없는 이야기를 청취자 글 없이 스스로 꺼내 이어간다,
+          방송 컨셉이 겨냥한 청취자에게 맞지 않는 내용이나 말씨다.
+        not_problem: 청취자 글을 받느라 잠깐 벗어난 것, 주제에서 자연스럽게 넓어진 이야기, 곡 소개.
+      - key: F3
+        name: 선곡
+        by: judge
+        unit: broadcast
+        allow: 0
+        problem: >-
+          곡이 방송 컨셉·시간대·선곡 취향과 어울리지 않는다. 곡 목록이 시뮬레이션용 가짜 곡이라 제목만으로 판단할 수
+          없으면 해당 없음이다.
+        not_problem: 취향 안에서 분위기가 조금 다른 곡, 청취자가 신청한 곡.
+
+  - key: G
+    name: 언어적 정확성
+    weight: 8
+    items:
+      - key: G1
+        name: 문법
+        by: judge
+        call: language
+        unit: ment
+        allow: 1
+        problem: >-
+          문법이나 맞춤법이 틀렸다. 주어와 서술어가 맞지 않는 문장, 틀린 조사, 틀린 맞춤법("됬", "몇일", "할께요"),
+          없는 낱말. 청취자 글을 인용한 부분은 보지 않는다.
+        not_problem: 입말에서 흔한 줄임과 생략, 문장을 명사로 끝내는 것, 띄어쓰기.
+      - key: G2
+        name: 높임법
+        by: judge
+        call: language
+        unit: ment
+        allow: 0
+        problem: >-
+          높임이 틀렸다. 사물을 높인다("곡이 나오셨습니다", "채팅이 도착하셨어요"), 자기를 높인다,
+          청취자를 낮춰 부른다, 한 문장 안에서 높임이 어긋난다.
+        not_problem: 반말로 설정된 DJ의 반말, 해요체와 합쇼체를 섞어 쓰는 것.
+      - key: G3
+        name: 이름과 제목
+        by: rule
+        check: song_title
+        unit: ment
+        allow: 0
+
+  - key: H
+    name: TTS 구현 적합성
+    weight: 8
+    items:
+      - key: H1
+        name: 읽을 수 없는 문자
+        by: rule
+        check: unreadable
+        unit: ment
+        allow: 0
+      - key: H2
+        name: 읽기 어려운 표기
+        by: judge
+        call: language
+        unit: ment
+        allow: 0
+        problem: >-
+          음성 합성이 어떻게 읽을지 알 수 없는 표기다. 읽는 법이 여럿인 숫자와 단위("3~4개", "D-4", "24/7", "5kg"),
+          영문 약어와 기호("vs", "&"), 괄호 속 설명, "제목 — 가수"처럼 글로 적는 표기.
+        not_problem: >-
+          한글로 풀어 쓴 숫자, 곡 제목과 가수 이름에 들어 있는 영문, 쉼표와 마침표,
+          ㅋㅋ·ㅠㅠ 같은 자모(합성 직전에 소리 나는 글자로 바뀐다).
+      - key: H3
+        name: 길이
+        by: number
+        check: long_ment
+        unit: ment
+        allow: 0

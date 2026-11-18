@@ -354,6 +354,7 @@ class GeminiLlmClient:
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.thinking_budget = thinking_budget
+        self.usage = {"in": 0, "out": 0}  # 쓴 토큰 — 생각 토큰은 출력으로 센다 (비용 어림: eval/judge.py)
         self._endpoint = endpoint.format(model=model)
         self._timeout = timeout
 
@@ -378,6 +379,9 @@ class GeminiLlmClient:
         data = await asyncio.to_thread(
             _post_json, self._endpoint, body, {"x-goog-api-key": self._api_key},
             self._timeout, "gemini")
+        used = data.get("usageMetadata") or {}
+        self.usage["in"] += used.get("promptTokenCount") or 0
+        self.usage["out"] += (used.get("candidatesTokenCount") or 0) + (used.get("thoughtsTokenCount") or 0)
         # 입력이 제공자 안전 필터에 막히면 후보가 없다 — L1 REJECT와 같게 다룬다
         if (data.get("promptFeedback") or {}).get("blockReason"):
             return _Reply("", truncated=False, refused=True)
