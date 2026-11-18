@@ -381,8 +381,12 @@ class Judge:
         self.failures += 1
         raise LlmError(f"심사 AI가 답하지 못했다: {last!r}"[:300])
 
-    async def judge(self, b: Broadcast, only: set[str] | None = None) -> dict:
-        """방송 하나를 채점한다. only가 있으면 그 기준·항목만 심사 AI에게 묻는다(코드로 재는 항목은 늘 잰다)."""
+    async def judge(self, b: Broadcast, only: set[str] | None = None, previous: dict | None = None) -> dict:
+        """방송 하나를 채점한다. only가 있으면 그 기준·항목만 심사 AI에게 묻는다(코드로 재는 항목은 늘 잰다).
+
+        previous(앞선 채점 결과)를 주면 이번에 묻지 않은 항목은 그때의 답을 그대로 쓴다 — 기준표의 한 항목만
+        고쳤을 때 전부 다시 묻지 않으려는 것이다.
+        """
         items = {item.key: _blank(item, b) for _, item in self.rubric.pairs()}
         for _, item in self.rubric.pairs():
             if item.by != "judge":
@@ -391,10 +395,17 @@ class Judge:
         asked = {item.key for group in calls.values() for item in group}
         await asyncio.gather(*(self._run_call(b, name, group, items) for name, group in calls.items()))
         for _, item in self.rubric.pairs():
+            old = (previous or {}).get("items", {}).get(item.key)
+            if item.asks_judge and item.key not in asked and old and old.get("asked"):
+                items[item.key] = {**old, "allowed": items[item.key]["allowed"], "reference": item.reference}
+                continue
             slot = items[item.key]
             slot["asked"] = item.key in asked or not item.asks_judge
             slot["passed"] = (None if slot["na"] or slot["error"] or not slot["asked"]
                               else len(slot["findings"]) <= slot["allowed"])
+        for slot in items.values():
+            if slot["asked"] and not slot["na"] and not slot["error"]:
+                slot["passed"] = len(slot["findings"]) <= slot["allowed"]
         return {"scenario": b.scenario, "run": b.run, "path": str(b.path), "judged_at": time.time(),
                 "ments": len(b.scripted), "chats": len(b.chats), "listeners": len(b.listeners),
                 "items": items, **score(self.rubric, items)}
@@ -590,9 +601,10 @@ async def run(args: argparse.Namespace) -> int:
     gate = asyncio.Semaphore(args.broadcasts)
 
     async def one(path: Path, n: int) -> dict:
-        async with gate:
-            result = await judge.judge(load_broadcast(path), only)
         name = f"{args.name}.json" if args.repeat == 1 else f"{args.name}-{n}.json"
+        previous = json.loads((path / name).read_text(encoding="utf-8")) if args.update and (path / name).exists() else None
+        async with gate:
+            result = await judge.judge(load_broadcast(path), only, previous)
         (path / name).write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
         print(f"끝 · {result['scenario']} {result['run']}회" + (f" ({n})" if args.repeat > 1 else "")
               + f" · 총점 {_pct(result['total'])}")
@@ -625,6 +637,8 @@ def cli(argv: list[str] | None = None) -> int:
     parser.add_argument("--broadcasts", type=int, default=3, help="동시에 채점하는 방송 수")
     parser.add_argument("--name", default="judge", help="결과 파일 이름 (기본 judge → judge.json, judge.md)")
     parser.add_argument("--summary", type=Path, default=None, help="요약을 쓸 파일 (기본: 첫 폴더의 <name>.md)")
+    parser.add_argument("--update", action="store_true",
+                        help="--only와 함께: 이미 있는 <name>.json에서 이번에 묻지 않은 항목의 답을 그대로 쓴다")
     parser.add_argument("--collect", action="store_true", help="채점하지 않고, 이미 있는 <name>.json을 모아 요약만 다시 쓴다")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--yes", action="store_true", help="비용 확인을 묻지 않는다")

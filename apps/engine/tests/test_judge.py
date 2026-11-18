@@ -163,8 +163,12 @@ def test_clean_record_passes_every_code_check(tmp_path):
 
 
 def test_restart_flags_a_greeting_outside_the_opening(tmp_path):
-    played = [*PLAYED[:6], _speech(41, "안녕하세요, 심야 스터디 라디오의 새벽입니다."), *PLAYED[6:]]
-    assert [f.at for f in _check(tmp_path, "restart", played)] == ["M6"]
+    played = [*PLAYED[:6], _speech(41, "안녕하세요, 심야 스터디 라디오의 새벽입니다."),
+              _speech(42, "서두르지 않아도 되는 새벽입니다."), _speech(43, "심야 스터디 라디오, 새벽입니다."),
+              _chat(43.5, "r9", "x", "새벽님 안녕하세요! 호빵 좋아해요"),
+              _speech(44, "문자입니다. 새벽님 안녕하세요! 호빵 좋아해요.", reflected=["r9"]), *PLAYED[6:]]
+    assert [f.at for f in _check(tmp_path, "restart", played)] == ["M6", "M8"], \
+        "'새벽'은 낱말이기도 하다. 청취자 글을 읽으며 나온 인사는 세지 않는다"
 
 
 def test_repeated_quote_and_one_listener(tmp_path):
@@ -303,6 +307,11 @@ def test_only_asks_the_named_criteria_and_reference_items_stay_out_of_the_score(
     data = RUBRIC.model_dump()
     for item in data["criteria"][-2]["items"]:
         item["reference"] = item["key"] == "G1"
+    full = asyncio.run(J.Judge(RUBRIC, FakeLlm({"I4": {"findings": [{"at": "M9", "quote": "배고프다고 하신 분", "why": "z"}]}})).judge(b))
+    merged = asyncio.run(J.Judge(RUBRIC, llm).judge(b, {"G", "H"}, previous=full))
+    assert merged["items"]["I4"]["passed"] is False and merged["items"]["G1"]["passed"] is False, "묻지 않은 항목은 앞선 답을 쓴다"
+    assert merged["criteria"]["I"]["score"] == 4 / 5 and merged["criteria"]["G"]["score"] == pytest.approx(2 / 3)
+    assert len(llm.prompts) == 2
     soft = asyncio.run(J.Judge(J.Rubric.model_validate(data), llm).judge(b, {"G", "H"}))
     assert soft["items"]["G1"]["passed"] is False and soft["criteria"]["G"] == {**soft["criteria"]["G"], "score": 1.0, "applicable": 2}
 

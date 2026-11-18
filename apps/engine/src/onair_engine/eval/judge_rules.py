@@ -200,15 +200,20 @@ def _squash(text: str) -> str:
 
 
 def restart(b: Broadcast, **_) -> list[Finding]:
-    """I5 다시 시작 — 오프닝이 아닌데 방송을 새로 여는 인사를 한다."""
+    """I5 다시 시작 — 오프닝이 아닌데 방송을 새로 여는 인사를 한다.
+
+    DJ 이름이 흔한 낱말일 수 있어("서두르지 않아도 되는 새벽입니다") 이름은 "…의 새벽입니다", "…, 새벽입니다" 꼴만 본다.
+    청취자 글을 읽으면서 나온 인사("새벽님 안녕하세요!")는 DJ의 인사가 아니다.
+    """
     name = re.escape(b.persona.get("dj_name") or "\0")
-    pattern = re.compile(rf"안녕하(세요|십니까)|(방송|라디오)[^.!?]{{0,14}}시작(합니다|할게요|해요|하겠습니다)|{name}(입니다|이에요|예요)")
+    pattern = re.compile(rf"안녕하(세요|십니까)|(방송|라디오)[^.!?]{{0,14}}시작(합니다|할게요|해요|하겠습니다)"
+                         rf"|(의|,)\s*{name}(입니다|이에요|예요)")
     out = []
     for m in b.scripted:
         if m.corner_type == "opening":
             continue
         hit = pattern.search(m.script)
-        if hit:
+        if hit and not any(hit.group() in b.chat(cid).body for cid in m.takes):
             out.append(Finding(m.id, "오프닝이 아닌 자리에서 방송을 새로 시작하는 인사를 한다", hit.group()))
     return out
 
