@@ -124,6 +124,7 @@ class SimBackend:
     tracks: list[TrackSpec]
     rng: random.Random
     engine: object = None  # StationEngine — 엔진을 만든 뒤 넣는다
+    audience: object = None  # 가상 청취자들(listeners.Audience) — 있으면 재생을 시작할 때마다 알린다
     played: list[Played] = field(default_factory=list)
     states: list[tuple[float, str, str]] = field(default_factory=list)
     stations: list[tuple[float, str, dict]] = field(default_factory=list)
@@ -398,6 +399,9 @@ class SimBackend:
         self.played.append(Played(self._at(), "speech", sec, sub.id, sub.corner_type, script,
                                   audio_ref=sub.audio_ref))
         self._current_end = time.time() + sec
+        if self.audience is not None:
+            refs = sub.input_refs or ([sub.request_ref] if sub.request_ref else [])
+            self.audience.on_play("speech", script, sec, tuple(refs))
         for record in (*self.skips, *self.persona_switches, *self.format_switches):
             if record["segment_id"] == sub.id:
                 record["play_sec"] = round(self.now() - record["at"], 1)
@@ -422,6 +426,8 @@ class SimBackend:
             self._current_end = time.time() + track_sec
             if sub.music_ref in self._dj_refs:
                 self.dj_songs += 1
+            if self.audience is not None:
+                self.audience.on_play("song", f"{track.title} - {track.artist}", track_sec)
             if not self.engine_done:
                 self.engine.on_track_started({"track_ref": sub.music_ref,
                                               "started_at": time.time() + self.sim.broadcast_delay_sec})

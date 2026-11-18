@@ -1,0 +1,27 @@
+# 가상 청취자 평가 시나리오 — 청취자 8명
+# 청취자는 방송에 나간 멘트를 듣고 성격에 따라 채팅을 친다 (config/listeners.yaml, scenario/listeners.py).
+# 청취자 수와 유형만 다르고 방송 설정은 aud_* 시나리오가 모두 같다 — 상황끼리 견줄 수 있게 하려는 것이다.
+# 곡은 2분으로 줄였다 — 20분 방송에서 DJ의 말을 더 많이 보려는 것이다.
+name: aud_8
+description: 기본 유형 7종을 고르게(활발한 소통형만 2명). 여러 사람을 고르게 받는지 본다.
+station:
+  format: talk
+  corners: [topic_talk]
+  intensity: mid
+  topic: 겨울 간식
+  broadcast_minutes: 20
+tracks:
+  - {title: 첫눈 오는 밤, artist: 가상의 가수, sec: 120}
+  - {title: 새벽 버스, artist: 모의 밴드, sec: 120}
+  - {title: 따뜻한 차 한 잔, artist: 시뮬레이션 트리오, sec: 120}
+listeners:
+  - {persona: active, count: 2}
+  - {persona: own_story, count: 1}
+  - {persona: daily, count: 1}
+  - {persona: question, count: 1}
+  - {persona: music, count: 1}
+  - {persona: quiet, count: 1}
+  - {persona: participant, count: 1}
+expect:
+  - {type: max_fallback, value: 0, note: 대체 멘트 없음}
+  - {type: max_silence_sec, value: 5, note: 긴 무음 없음}

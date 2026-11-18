@@ -39,11 +39,13 @@ from ..domain import StationConfig
 from ..engine import EngineSettings, StationEngine
 from ..inputs.rules import ChatRules
 from ..main import add_llm_args, apply_llm_args, load_env, load_profile
+from ..pipeline.llm import make_llm
 from ..pipeline.tts import DEFAULT_GEMINI_VOICE
 from ..report import render, station_report
 from ..sources.rss import load_news_feeds
 from ..telemetry import _read
 from . import compare, review
+from .listeners import Audience, LlmWriter, Outgoing, SampleWriter, load_roster
 from .metrics import METRICS, aggregate
 from .sim import LoopLag, Played, SimBackend, SimTts, tune_dummy_llm
 from .spec import (
@@ -251,6 +253,42 @@ async def _inject(spec: ScenarioSpec, backend: SimBackend, engine: StationEngine
 
 
 _KINDS = {"chat": "채팅", "message": "문자", "song_request": "신청곡"}
+
+
+def _listener_writer(spec: ScenarioSpec, args: argparse.Namespace, seed: int):
+    """가상 청취자의 글을 쓰는 것 — DJ가 더미면 청취자도 더미다(무료 점검). 아니면 sim.listener_llm."""
+    if getattr(args, "llm", None) == "dummy" or spec.sim.listener_llm == "dummy":
+        return SampleWriter(seed)
+    return LlmWriter(make_llm(spec.sim.listener_llm, model=spec.sim.listener_model))
+
+
+def _listener_sender(spec: ScenarioSpec, backend: SimBackend, engine: StationEngine):
+    """가상 청취자의 글을 엔진에 넣는다 — 시나리오 입력(_inject)과 같은 경로다."""
+    count = 0
+
+    async def send(out: Outgoing) -> str | None:
+        nonlocal count
+        if backend.engine_done:
+            return None
+        count += 1
+        who = out.listener
+        rid = f"aud_{who.id}_{count}"
+        label = f"{who.id}·{who.persona.name}"
+        if out.kind == "song_request":
+            backend.played.append(Played(backend.now(), "input", 0, text=(
+                f"신청곡 {rid} ({label}, {who.nickname}): {out.title} - {out.artist} / {out.body}")))
+            await engine.submit_request("song_request", out.body, who.id, request_id=rid, nickname=who.nickname)
+            backend.queue_next_track({"track": TrackSpec(title=out.title, artist=out.artist,
+                                                         sec=spec.sim.pick_song_sec),
+                                      "request_id": rid, "nickname": who.nickname})
+            return rid
+        nickname = who.nickname if out.kind == "message" else None
+        name = f"{label}, {nickname}" if nickname else label
+        backend.played.append(Played(backend.now(), "input", 0, text=f"{_KINDS[out.kind]} {rid} ({name}): {out.body}"))
+        await engine.submit_request(out.kind, out.body, who.id, request_id=rid, nickname=nickname)
+        return rid
+
+    return send
 _FORMATS = {"talk": "토크", "music": "음악", "news": "뉴스"}
 
 
@@ -337,6 +375,14 @@ async def run_one(spec: ScenarioSpec, index: int, run_dir: Path, args: argparse.
         engine.scheduler.pipeline.tts._inner = sim_tts  # 파이프라인과 접착 문구가 같은 CachedTts를 쓴다
         engine.tts_factory = lambda voice: sim_tts  # 페르소나 전환으로 보이스가 바뀌어도 흉내 TTS를 쓴다
     backend.queue_next_track()  # 백엔드는 방송 전에 첫 소개 곡을 정해 둔다
+    audience = writer = None
+    if spec.listeners:
+        writer = _listener_writer(spec, args, seed)
+        audience = backend.audience = Audience(
+            load_roster(ENGINE_ROOT / "config" / "listeners.yaml"),
+            [(item.persona, item.count) for item in spec.listeners], writer=writer, seed=seed,
+            station={"DJ 이름": config.profile.dj_name, "방송 컨셉": config.profile.concept, "오늘의 주제": engine.topic},
+            delay_sec=spec.sim.broadcast_delay_sec, send=_listener_sender(spec, backend, engine))
 
     finished = backend.finished
     started = time.time()
@@ -354,6 +400,8 @@ async def run_one(spec: ScenarioSpec, index: int, run_dir: Path, args: argparse.
              asyncio.create_task(lag.watch(finished))]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     error = next((repr(r) for r in results if isinstance(r, BaseException)), None)
+    if audience is not None:
+        await audience.close()
 
     db = settings.sqlite_path
     report = station_report(db, station_id) if db.exists() else {}
@@ -388,6 +436,9 @@ async def run_one(spec: ScenarioSpec, index: int, run_dir: Path, args: argparse.
         "votes": [{k: vote[k] for k in ("vote_id", "question", "options", "window_sec", "at", "opened_at",
                                         "closed_at", "counts", "discarded")} for vote in backend.votes],
         "vote_rounds": engine.sources.votes.rounds, "vote_score": dict(engine.sources.votes.score),
+        # 가상 청취자 — 청취자마다 보낸 글과 DJ가 방송에서 받은 글
+        "audience": audience.summary() if audience is not None else [],
+        "listener_llm_calls": getattr(writer, "calls", 0), "listener_llm_failures": getattr(writer, "failures", 0),
         "dj_songs": backend.dj_songs,
         "suggests": [{k: s.get(k) for k in ("suggest_id", "candidates", "at", "result", "queued_at")}
                      for s in backend.suggests],

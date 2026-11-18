@@ -55,6 +55,9 @@ class SimSpec(_Spec):
     pick_latency_sec: float = Field(default=20.0, ge=0)  # 제안을 받고 곡을 찾아 대기열에 넣기까지 [임시] — 실측 전
     pick_song_sec: float = Field(default=200.0, gt=0)  # 찾은 곡의 길이
     pick_miss_rate: float = Field(default=0.0, ge=0, le=1)  # 후보를 못 찾을 확률 (track.suggest_failed not_found)
+    # 가상 청취자의 글을 쓰는 LLM. DJ와 다른 모델을 써야 DJ와 같은 말버릇으로 쓰지 않는다. --llm dummy면 이것도 더미다
+    listener_llm: Literal["gemini", "openai", "claude", "dummy"] = "gemini"
+    listener_model: str | None = "gemini-3.8-flash"
     seed: int = 1  # 회차마다 seed + 회차 번호
 
 
@@ -190,6 +193,13 @@ class ExpectSpec(_Spec):
         return self
 
 
+class ListenerSpec(_Spec):
+    """가상 청취자 — 방송을 듣고 성격에 따라 채팅을 치는 AI 청취자 (config/listeners.yaml의 유형)."""
+
+    persona: str
+    count: int = Field(default=1, ge=1, le=30)
+
+
 class ScenarioSpec(_Spec):
     name: str
     description: str = ""
@@ -202,6 +212,8 @@ class ScenarioSpec(_Spec):
     inputs: list[InputSpec] = Field(default_factory=list)
     controls: list[ControlSpec] = Field(default_factory=list)
     chatter: ChatterSpec | None = None
+    # 가상 청취자 — inputs·chatter와 달리 방송에 나간 멘트를 듣고 반응한다 (scenario/listeners.py)
+    listeners: list[ListenerSpec] = Field(default_factory=list)
     expect: list[ExpectSpec] = Field(default_factory=list)
 
     @model_validator(mode="after")
