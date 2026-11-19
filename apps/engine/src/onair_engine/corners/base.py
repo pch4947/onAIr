@@ -39,7 +39,10 @@ def system_prompt(profile: StationProfile, *, plain: bool = False) -> str:
     코너와 무관하게 같은 문자열이 나온다. plain(주관 금지 코너)이면 입버릇을 빼고 PLAIN_RULES를 붙인다.
     """
     # 첫 문장 형식은 더미 LLM의 슬롯 추출(_PROFILE_RE)이 의존한다
+    # 이름을 한 번 더 따로 적는다 — "DJ 새벽다."만 있으면 이름을 '새벽다'로 읽을 때가 있다. 프롬프트에 '새벽'이
+    # 시간대 낱말로도 나오자(steps.DAYTIME_RULE) 오프닝 40번 가운데 5번이 "새벽다입니다"였고, 이 문장을 넣자 0번이 됐다 (T-016)
     parts = [f"당신은 라디오 스테이션 [{profile.concept}]의 DJ {profile.dj_name}다.",
+             f"DJ의 이름은 '{profile.dj_name}'이다.",
              f"말투는 {profile.tone}."]
     if plain:
         parts.append(PLAIN_RULES)

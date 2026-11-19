@@ -7,6 +7,7 @@
 # 수치는 모두 [임시값]이다 — 실제 채팅 로그 없이 정했다.
 #   speech_rate  멘트 하나를 들었을 때 반응할 확률
 #   song_rate    곡 하나를 들었을 때 반응할 확률
+#   answer_rate  DJ가 청취자에게 물은 멘트를 들었을 때 반응할 확률. 적지 않으면 speech_rate의 2.5배 (1을 넘지 않는다)
 #   actions      반응할 때 무엇을 보낼지의 비중 (chat | message | song_request)
 #   stale        이만큼 앞의 멘트까지만 들은 것으로 친다 — 늦게 들어왔거나 딴짓하다 돌아온 사람
 #   resend_rate  방금 보낸 글을 한 번 더 보낼 확률

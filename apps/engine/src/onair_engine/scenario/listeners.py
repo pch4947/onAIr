@@ -34,6 +34,8 @@ MAX_HEARD = 6  # 프롬프트에 넣는 최근에 들은 것의 수
 MAX_MINE = 5
 MAX_BODY_CHARS = 120
 ACTIONS = ("chat", "message", "song_request")
+# 묻는 말을 들으면 평소보다 답하기 쉽다 [임시값] — 실제 채팅 로그 없이 정했다
+ANSWER_BOOST = 2.5
 
 _SYSTEM = ("너는 인터넷 라디오 방송을 듣고 있는 청취자다. 채팅창에 올릴 글만 출력한다. 설명, 따옴표, 머리말을 붙이지 않는다.\n"
            + DATA_RULES)
@@ -47,6 +49,8 @@ class Persona(BaseModel):
     about: str
     speech_rate: float = Field(ge=0, le=1)
     song_rate: float = Field(default=0.0, ge=0, le=1)
+    # DJ가 청취자에게 물은 멘트를 들었을 때 반응할 확률. 없으면 speech_rate의 ANSWER_BOOST배(1을 넘지 않는다)
+    answer_rate: float | None = Field(default=None, ge=0, le=1)
     actions: dict[Literal["chat", "message", "song_request"], float] = Field(default_factory=lambda: {"chat": 1.0})
     stale: int = Field(default=0, ge=0)
     resend_rate: float = Field(default=0.0, ge=0, le=1)
@@ -103,13 +107,21 @@ class Listener:
     sent: list[Sent] = field(default_factory=list)
     busy: bool = False  # 글을 쓰는 중 — 그동안 들은 것에는 반응하지 않는다
 
-    def wants_to_react(self, kind: str) -> bool:
+    def wants_to_react(self, kind: str, text: str = "") -> bool:
         rate = self.persona.song_rate if kind == "song" else self.persona.speech_rate
+        if asks_listeners(kind, text):
+            answer = self.persona.answer_rate
+            rate = answer if answer is not None else min(1.0, rate * ANSWER_BOOST)
         return not self.busy and self.rng.random() < rate
 
     def pick_action(self) -> str:
         kinds, weights = zip(*self.persona.actions.items(), strict=True)
         return self.rng.choices(kinds, weights=weights)[0]
+
+
+def asks_listeners(kind: str, text: str) -> bool:
+    """DJ가 청취자에게 물은 멘트 — 물음표가 있는 말이다. 청취자의 질문을 옮긴 멘트("~냐고 물어보신 분")에는 물음표가 없다."""
+    return kind == "speech" and ("?" in text or "？" in text)
 
 
 def known_heard(listener: Listener) -> list[Heard]:
@@ -131,6 +143,8 @@ def build_prompt(listener: Listener, station: dict, action: str) -> Prompt:
         "- 내가 보낸 글에 DJ가 답하지 않았으면 다시 조를 수 있다.",
         f"- 이 청취자라도 지금은 쓸 말이 없으면 {PASS}라고만 쓴다.",
     ]
+    if known and asks_listeners(known[-1].kind, known[-1].text):
+        lines.append("- 방금 DJ가 청취자들에게 물었다. 이 청취자라면 그 물음에 뭐라고 답할지를 쓴다(성격은 그대로다).")
     if persona.samples:
         lines.append("- 이런 식의 글을 쓰는 사람이다(그대로 베끼지 않는다): " + " / ".join(persona.samples))
     if action == "message":
@@ -234,7 +248,7 @@ class Audience:
         for listener in self.listeners:
             listener.heard.append(Heard(kind, text))
             del listener.heard[:-40]
-            if listener.wants_to_react(kind):
+            if listener.wants_to_react(kind, text):
                 listener.busy = True
                 # 곡은 듣는 중에, 멘트는 절반쯤 듣고부터 반응한다
                 wait = duration_sec * (listener.rng.uniform(0.1, 0.6) if kind == "song"

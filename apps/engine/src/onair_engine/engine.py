@@ -19,6 +19,7 @@ from .corners.run import MaterialSources, TrackSource
 from .domain import ListenerRequest, RequestState, StationConfig, StationProfile, new_id, wire_state
 from .format import Clock, load_format
 from .glue import GlueBank
+from .inputs.chat_tone import ChatToneJudge
 from .inputs.classify import keywords
 from .inputs.dilemmas import DilemmaPlan
 from .inputs.inbox import MessageInbox
@@ -250,6 +251,8 @@ class StationEngine:
             emit_corner_changed=settings.emit_corner_changed, topic_plan=self.topic_plan,
             contract_version=settings.contract_version,
             emit_corner_format=settings.emit_corner_format,
+            tone_judge=(ChatToneJudge(llm, self.topic, telemetry=self.telemetry)
+                        if chat_rules.tone_judge else None),
         )
         self._contract_version = settings.contract_version
         # 방송 중 전환(#260, #261)이 받아들인 형식과 DJ — 편성 루프가 바꾸기 전이어도 다음 전환은 이 값을 쓴다.

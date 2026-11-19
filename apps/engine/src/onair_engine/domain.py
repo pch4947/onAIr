@@ -139,6 +139,11 @@ class ListenerRequest:
     anchor_seq: int | None = None
     heard: str | None = None  # 그때 나가던 멘트의 대본(또는 곡) — 반응이 무엇에 대한 것인지 프롬프트에 알린다
     back_ref: bool = False  # 방금 들은 말을 가리키거나 되묻는다 — 인용할 때 그때 나가던 말을 함께 넣는다
+    tone: str | None = None  # 채팅 성격 (TONE_*) — 판정하지 않았으면 None이고 보통 채팅으로 다룬다
+
+
+# 채팅 성격 (inputs/chat_tone.py) — 불만은 받지 않고 농담은 농담으로 받는다. PENDING은 판정을 기다리는 중이다
+TONE_PLAIN, TONE_JOKE, TONE_COMPLAINT, TONE_PENDING = "plain", "joke", "complaint", "pending"
 
 
 @dataclass

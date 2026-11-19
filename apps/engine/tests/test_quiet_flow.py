@@ -92,9 +92,9 @@ def test_quiet_broadcast_writes_each_break_in_one_call(tmp_path):
     # 둘째 진입: 곡만 사이에 있었다 — 돌아왔다는 문구 없이 방금 곡을 받아 하던 갈래를 잇는다
     glue = [s.audio_ref.rsplit("/", 1)[1].rsplit("_", 1)[0] for s in transport.segments if _glue(s)]
     assert glue.count("topic_talk_call") == 1 and "topic_talk_resume" not in glue
-    assert "질문을 하나 던진다" in blocks[0] and PREV_TRACK not in blocks[0]
+    assert PREV_TRACK not in blocks[0]
     assert PREV_TRACK in blocks[1] and ANGLE_CONTINUE_RULE in blocks[1]
-    assert NO_QUESTION_RULE in blocks[1], "답이 없는 방송에서 곡마다 묻지 않는다"
+    assert NO_QUESTION_RULE in blocks[0] and NO_QUESTION_RULE in blocks[1], "질문은 곡 앞에서만 던진다 (7.7.2절)"
     # 갈래 하나(말할 거리 넷)를 두 번에 걸쳐 쓴다
     assert "- 떠오르는 장면 하나\n- 흔히 겪는 일 하나\n- 둘 중 하나 고르기" in blocks[0]
     assert "- 마무리하는 생각 하나" in blocks[1] and "떠오르는 장면" not in blocks[1]
@@ -179,24 +179,19 @@ def test_chat_that_arrives_during_a_block_follows_it(tmp_path):
     asyncio.run(scenario())
 
 
-def test_quiet_broadcast_asks_listeners_only_now_and_then(tmp_path):
+def test_openers_never_ask_listeners(tmp_path):
+    """화제를 꺼내면서 묻지 않는다 — 질문은 곡 앞에서 던지고 곡 뒤에 받는다 (test_listener_talk)."""
     engine, _ = _engine(tmp_path, block=True, corners=["topic_talk"])
     scheduler = engine.scheduler
     _run(scheduler)
-    first, second = Material(), Material()
-    scheduler._open_thread(first)
-    scheduler._open_thread(second)
-    assert first.extra["question"] is True and "no_question" not in first.extra, "처음에는 참여를 권한다"
-    assert second.extra["question"] is False and second.extra["no_question"] is True
-    scheduler._last_question_at -= scheduler.chat_rules.question_gap_sec
-    again = Material()
-    scheduler._open_thread(again)
-    assert again.extra["question"] is True, "간격이 지나면 다시 묻는다"
-    # 채팅이 오가면 예전처럼 꺼낼 때마다 묻는다
+    quiet = Material()
+    scheduler._open_thread(quiet)
     scheduler.enqueue_request(_chat("저는 호빵파예요"))
     active = Material()
     scheduler._open_thread(active)
-    assert active.extra["question"] is True and "no_question" not in active.extra
+    for material in (quiet, active):
+        assert material.extra["no_question"] is True and "question" not in material.extra
+        assert NO_QUESTION_RULE in build_prompt("talk_open", material, PROFILE).user
 
 
 # ── 파이프라인 ─────────────────────────────────────────────────────────

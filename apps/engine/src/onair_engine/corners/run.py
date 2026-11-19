@@ -225,6 +225,7 @@ class CornerRun:
         self.steers = 0  # 코너당 화제 전환 횟수 (참여 강도 steer_limit)
         self.aggregated = False  # 집계 언급은 코너당 1회 (CORNER_DESIGN 9.2절)
         self.called_back = False  # 청취자 이야기 다시 꺼내기도 코너당 1회 (CORNER_DESIGN 7.7절)
+        self.asked: str | None = None  # 이 코너가 받는, 곡 전에 던진 질문 — 뒤에 온 답도 질문과 함께 받는다 (7.7.2절)
         self._sources = sources
         self._intensity = intensity
         self._done_in_step = 0

@@ -245,7 +245,8 @@ def test_clean_broadcast_scores_full_marks_and_asks_ten_calls(tmp_path):
     llm = FakeLlm()
     result = _judge(tmp_path, llm)
     assert result["total"] == 1.0 and len(llm.prompts) == 10 and all(s["passed"] for s in result["items"].values())
-    assert result["criteria"]["B"] == {"name": "청취자 소통 및 공감력", "weight": 15, "score": 1.0, "passed": 8, "applicable": 8}
+    # 질문에 답함(B2)은 참고용이라 점수에 들어가지 않는다 (2026-11-19 결정)
+    assert result["criteria"]["B"] == {"name": "청취자 소통 및 공감력", "weight": 15, "score": 1.0, "passed": 7, "applicable": 7}
     b_prompt = next(p for p in llm.prompts if "[B1]" in p)
     assert "[B6]" not in b_prompt and "청취자별 보낸 글" not in b_prompt and "새벽" in b_prompt
     assert "청취자별 보낸 글" in next(p for p in llm.prompts if "[B6]" in p)
@@ -259,6 +260,7 @@ def test_score_is_the_share_of_problem_free_items_weighted_by_criterion(tmp_path
         "I4": {"findings": [{"at": "M9", "quote": "배고프다고 하신 분", "why": "맥락 없이 다시 꺼냈다"}]},
         "I1": {"findings": [{"at": "M8", "quote": "곡 잘 들으셨나요", "why": "앞과 이어지지 않는다"}]},  # 하나는 봐준다
         "B4": {"na": True, "findings": []}, "B5": {"na": True},
+        "B1": {"findings": [{"at": "C3", "quote": "", "why": "다른 이야기에 대한 반응으로 전했다"}]},
         "B2": {"findings": [{"at": "C3", "quote": "", "why": "받지 않았다"}]},
         "F3": {"na": True},
     })
@@ -266,9 +268,10 @@ def test_score_is_the_share_of_problem_free_items_weighted_by_criterion(tmp_path
     items, criteria = result["items"], result["criteria"]
     assert items["I4"]["passed"] is False and items["I1"]["passed"] is True and items["I1"]["allowed"] == 1
     assert items["B4"]["passed"] is None and items["B4"]["na"]
-    assert criteria["I"]["score"] == 4 / 5 and criteria["B"] == {**criteria["B"], "passed": 5, "applicable": 6}
+    assert items["B2"]["reference"] and items["B2"]["passed"] is False, "참고용 항목은 세기만 한다"
+    assert criteria["I"]["score"] == 4 / 5 and criteria["B"] == {**criteria["B"], "passed": 4, "applicable": 5}
     assert criteria["F"]["applicable"] == 2 and criteria["F"]["score"] == 1.0
-    expected = (15 * 0.8 + 15 * 5 / 6 + 15 + 15 + 8 * 5) / 100
+    expected = (15 * 0.8 + 15 * 4 / 5 + 15 + 15 + 8 * 5) / 100
     assert result["total"] == pytest.approx(expected)
 
 
@@ -280,6 +283,18 @@ def test_code_findings_and_judge_findings_merge_on_the_same_item(tmp_path):
     result = _judge(tmp_path, llm, played=played)
     assert [f["at"] for f in result["items"]["A2"]["findings"]] == ["M5", "M4"], "같은 멘트는 한 번만 센다"
     assert result["items"]["A2"]["passed"] is False and result["criteria"]["A"]["score"] == pytest.approx(2 / 3)
+
+
+def test_long_sentence_read_from_a_listener_message_is_not_the_djs(tmp_path):
+    """문자를 낭독한 문장은 DJ가 쓴 문장이 아니다 — 세면 문자를 많이 읽은 방송일수록 호흡 문제가 는다 (T-016)."""
+    message = ("새벽님 저는 추운 날 집 들어갈 때 트럭에서 파는 김 모락모락 나는 군밤 한 봉지 사서 까먹는 게 그렇게 좋더라고요 "
+               "껍질 까느라 손가락 끝은 시커멓게 되는데 달달하고 따뜻해서 방에서 이불 덮고 혼자 다 먹어요")
+    own = "어제 저녁에 집에 돌아오는 길에 골목 어귀에서 우연히 마주친 오래된 가게의 간판을 한참 바라보다가 문득 어린 시절에 할머니 손을 잡고 걷던 시장 골목이 떠올랐어요."
+    played = [*PLAYED[:6], _chat(40, "r9", "x", message),
+              _speech(41, f"귤러버 님의 문자입니다. {message}. 군밤 향이 여기까지 나는 것 같네요.", reflected=["r9"]),
+              _speech(42, own), *PLAYED[6:]]
+    found = _check(tmp_path, "long_sentence", played)
+    assert len(found) == 1 and found[0].quote.startswith("어제 저녁에"), "낭독한 문자는 빼고 DJ의 긴 문장만 센다"
 
 
 def test_wrong_blind_pick_is_a_personality_problem(tmp_path):
