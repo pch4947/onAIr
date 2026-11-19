@@ -5,23 +5,24 @@
 """
 import asyncio
 import json
+import time
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+import jwt
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from redis.exceptions import RedisError
 
-from .auth import get_current_user, public_user, reject_reserved_name
+from .auth import JWT_ALGORITHM, get_current_user, public_user, reject_reserved_name
 from .board_stories import POSTS_KEY
 from .notifications import NotificationStore
 from .station_runtime import ensure_runtimes
 from .stations import channel_records
-from .users import NameAlreadyExists, UserChanged, hash_password, verify_password
+from .users import WITHDRAWN_NAME, NameAlreadyExists, UserChanged, hash_password, verify_password
 
 router = APIRouter(prefix='/api/account')
 User = Annotated[dict, Depends(get_current_user)]
 
-WITHDRAWN_NAME = '탈퇴한 사용자'
 COMMENTS_PATTERN = 'backend:board:comments:*'
 # 읽은 값 그대로일 때만 바꾼다 — 그사이 다른 요청이 고친 항목은 다음 바퀴에서 다시 읽는다
 REPLACE_HASH = "if redis.call('HGET', KEYS[1], ARGV[1]) ~= ARGV[2] then return 0 end " \
@@ -119,13 +120,19 @@ async def change_name(body: NameInput, request: Request, user: User):
 
 
 @router.post('/password', status_code=204)
-async def change_password(body: PasswordInput, request: Request, user: User):
+async def change_password(body: PasswordInput, request: Request, user: User,
+                          authorization: Annotated[str | None, Header()] = None):
+    """바꾸면 그 전에 발급된 토큰은 모두 버린다(다른 기기는 다시 로그인). 이 요청에 쓴 토큰만 그대로 쓸 수 있다 (#344)."""
     require_member(user)
     check_password(user, body.currentPassword)
     new_hash = hash_password(body.newPassword)
+    # get_current_user가 방금 검증한 토큰이다
+    kept = jwt.decode((authorization or '').removeprefix('Bearer ').strip(),
+                      request.app.state.settings.jwt_secret, algorithms=[JWT_ALGORITHM]).get('iat')
     try:
         async with asyncio.timeout(3):
-            await request.app.state.users.update(user['email'], lambda u: dict(u, passwordHash=new_hash))
+            await request.app.state.users.update(user['email'], lambda u: dict(
+                u, passwordHash=new_hash, passwordChangedAt=time.time(), keptTokenIat=kept))
     except UserChanged:
         raise HTTPException(409, 'Account changed; retry') from None
     except (RedisError, TimeoutError):
