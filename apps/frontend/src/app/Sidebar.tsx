@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { getNotifications, markNotificationRead } from '@/shared/api'
 import { getNotificationPath } from '@/shared/notificationLink'
 import { useCurrentUser } from '@/shared/useCurrentUser'
-import { BoardIcon, FlaskIcon, HomeIcon, UserIcon } from '@/app/icons'
+import { BoardIcon, ChevronRightIcon, FlaskIcon, HomeIcon, UserIcon } from '@/app/icons'
 import type { NotificationItem } from '@/shared/types'
 import type { ComponentType } from 'react'
 
@@ -124,17 +124,19 @@ export function Sidebar({ active, hideMobileNav = false }: SidebarProps) {
         <button
           type="button"
           onClick={() => navigate('/mypage')}
-          className="flex items-center gap-2 text-left"
+          aria-label={`${name} · 마이페이지로 이동`}
+          className="group flex items-center gap-2 rounded-lg px-1 py-1 text-left hover:bg-white/10"
         >
           <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary-strong text-xs font-semibold text-white">
             {name.charAt(0) || '?'}
           </div>
-          <p className="truncate text-sm font-semibold text-white">{name}</p>
+          <p className="min-w-0 flex-1 truncate text-sm font-semibold text-white">{name}</p>
           {unreadCount > 0 && (
             <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-white text-[10px] font-bold leading-none text-primary">
               {unreadCount > 99 ? '99+' : unreadCount}
             </span>
           )}
+          <ChevronRightIcon className="size-4 shrink-0 text-nav-inactive group-hover:text-white" />
         </button>
 
         <nav className="flex flex-col gap-1">
