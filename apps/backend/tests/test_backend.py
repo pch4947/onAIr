@@ -97,7 +97,7 @@ class BackendTests(unittest.TestCase):
                           "/api/auth/signup", "/api/auth/login", "/api/auth/me",
                           "/api/auth/guest", "/api/auth/admin", "/api/auth/logout",
                           "/api/account", "/api/account/name", "/api/account/password",
-                          "/api/account/preferences", "/api/account/sent",
+                          "/api/account/preferences",
                           "/api/stations/{station_id}/corner-skip", "/api/stations/{station_id}/persona",
                           "/api/stations/{station_id}/format",
                           "/api/stations/{station_id}/decisions", "/api/stations/{station_id}/events",

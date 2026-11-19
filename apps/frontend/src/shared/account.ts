@@ -1,6 +1,6 @@
 // 계정 설정 API (#325) — 일반 회원 계정만 쓴다. 게스트·어드민은 서버가 403으로 막는다
 import { getAccessToken } from '@/shared/authToken'
-import type { AuthUser, RequestRecord } from '@/shared/types'
+import type { AuthUser } from '@/shared/types'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
 
@@ -42,15 +42,4 @@ export async function updatePreferences(defaultAnonymous: boolean): Promise<Auth
 
 export function deleteAccount(password: string): Promise<void> {
   return call('DELETE', '', { password })
-}
-
-export type SentItem =
-  | {
-      type: 'request'; id: string; stationId: string; kind: RequestRecord['kind']; prompt: string; status: string
-      anonymous: boolean; trackTitle: string | null; trackArtist: string | null; createdAt: string
-    }
-  | { type: 'vote'; id: string; stationId: string; question: string | null; choice: string; status: string | null; at: number }
-
-export function getSentItems(offset: number, limit: number): Promise<{ items: SentItem[]; total: number }> {
-  return call('GET', `/sent?offset=${offset}&limit=${limit}`)
 }

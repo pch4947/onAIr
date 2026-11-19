@@ -1,25 +1,22 @@
-"""계정 설정 (#325): 닉네임·비밀번호 변경, 기본 익명, 내가 보낸 것, 탈퇴. 일반 회원 계정만 쓴다.
+"""계정 설정 (#325): 닉네임·비밀번호 변경, 기본 익명, 탈퇴. 일반 회원 계정만 쓴다.
 
 닉네임은 게시글·댓글·요청 기록에 복사돼 있어 바꾸면 그 이름도 함께 바꾼다(방송에 이미 나간 내용은 그대로).
 탈퇴하면 그 이름을 '탈퇴한 사용자'로 바꿔 남기고, 진행 중인 내 방송이 있으면 탈퇴를 막는다.
 """
 import asyncio
-from datetime import datetime
 import json
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from redis.exceptions import RedisError
 
 from .auth import get_current_user, public_user, reject_reserved_name
 from .board_stories import POSTS_KEY
 from .notifications import NotificationStore
-from .requests import RequestStore
 from .station_runtime import ensure_runtimes
 from .stations import channel_records
 from .users import NameAlreadyExists, UserChanged, hash_password, verify_password
-from .votes import vote_key
 
 router = APIRouter(prefix='/api/account')
 User = Annotated[dict, Depends(get_current_user)]
@@ -32,7 +29,6 @@ REPLACE_HASH = "if redis.call('HGET', KEYS[1], ARGV[1]) ~= ARGV[2] then return 0
 REPLACE_LIST = "if redis.call('LINDEX', KEYS[1], tonumber(ARGV[1])) ~= ARGV[2] then return 0 end " \
                "redis.call('LSET', KEYS[1], tonumber(ARGV[1]), ARGV[3]) return 1"
 REWRITE_PASSES = 3
-SENT_PAGE_LIMIT = 50
 
 
 class NameInput(BaseModel):
@@ -149,52 +145,6 @@ async def change_preferences(body: PreferencesInput, request: Request, user: Use
     except (RedisError, TimeoutError):
         raise HTTPException(503, 'Redis unavailable') from None
     return {'user': public_user(updated)}
-
-
-async def sent_items(request, user_id):
-    redis = request.app.state.redis
-    items = []
-    for runtime in ensure_runtimes(request.app.state).values():
-        sid = runtime.station_id
-        async with redis.pipeline(transaction=True) as pipe:
-            pipe.hgetall(f'backend:{sid}:requests')
-            pipe.hgetall(f'backend:{sid}:request-states')
-            pipe.hgetall(vote_key(sid, 'votes'))
-            requests, states, votes = await pipe.execute()
-        for key, raw in requests.items():
-            entry = RequestStore.merge(raw, states.get(key))
-            if entry.get('listenerId') != user_id:
-                continue
-            items.append({'type': 'request', 'id': entry['id'], 'stationId': sid, 'kind': entry['kind'],
-                          'prompt': entry['prompt'], 'status': entry['status'], 'anonymous': not entry.get('listenerName'),
-                          'trackTitle': entry.get('trackTitle'), 'trackArtist': entry.get('trackArtist'),
-                          'createdAt': entry['createdAt']})
-        # 투표는 "투표ID:사용자ID" → 고른 것. 내 표만 찾는다
-        async for field, choice in redis.hscan_iter(vote_key(sid, 'vote-ballots'), match=f'*:{user_id}'):
-            vote_id = field.rsplit(':', 1)[0]
-            vote = json.loads(votes[vote_id]) if vote_id in votes else None
-            if vote is None:
-                continue
-            items.append({'type': 'vote', 'id': vote_id, 'stationId': sid, 'question': vote.get('question'),
-                          'choice': choice, 'status': vote.get('status'), 'at': float(vote.get('opens_at') or 0)})
-    return items
-
-
-def sort_key(item):
-    return item['at'] if item['type'] == 'vote' else datetime.fromisoformat(item['createdAt']).timestamp()
-
-
-@router.get('/sent')
-async def list_sent(request: Request, user: User, offset: Annotated[int, Query(ge=0)] = 0,
-                    limit: Annotated[int, Query(ge=1, le=SENT_PAGE_LIMIT)] = 20):
-    """내가 보낸 채팅·사연·신청곡과 투표, 최근 것부터. 지난 방송 것도 포함한다."""
-    try:
-        async with asyncio.timeout(5):
-            items = await sent_items(request, user['id'])
-    except (RedisError, TimeoutError):
-        raise HTTPException(503, 'Redis unavailable') from None
-    items.sort(key=sort_key, reverse=True)
-    return {'items': items[offset:offset + limit], 'total': len(items)}
 
 
 @router.delete('', status_code=204)

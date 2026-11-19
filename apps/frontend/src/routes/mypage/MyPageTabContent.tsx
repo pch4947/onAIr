@@ -1,7 +1,6 @@
 import { BoardPostCollection } from '@/routes/mypage/BoardPostCollection'
 import { NotificationCollection } from '@/routes/mypage/NotificationCollection'
 import { ReplayCollection } from '@/routes/mypage/ReplayCollection'
-import { SentCollection } from '@/routes/mypage/SentCollection'
 import { getBookmarkedReplays, getLikedBoardPosts, getMyBoardPosts, getMyReplays } from '@/shared/api'
 import type { MyPageTab } from '@/routes/mypage/mock'
 
@@ -17,8 +16,6 @@ export function MyPageTabContent({ tab }: { tab: MyPageTab }) {
           emptyText="아직 작성한 글이 없어요"
         />
       )
-    case 'mySent':
-      return <SentCollection />
     case 'likedPosts':
       return (
         <BoardPostCollection

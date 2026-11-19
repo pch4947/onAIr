@@ -1,4 +1,4 @@
-"""계정 설정(#325): 닉네임·비밀번호 변경, 기본 익명, 내가 보낸 것, 탈퇴 — 실제 Redis로 확인한다."""
+"""계정 설정(#325): 닉네임·비밀번호 변경, 기본 익명, 탈퇴 — 실제 Redis로 확인한다."""
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import json
@@ -155,28 +155,6 @@ class AccountApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.post('/api/account/preferences', json={'defaultAnonymous': 'yes'},
                                                   headers=self.auth(self.me))).status_code, 422)
 
-    async def test_sent_lists_only_my_requests_and_votes_newest_first(self):
-        await self.seed_content()
-        votes = {'v_old': time.time() - 100, 'v_new': time.time() - 1}
-        for vote_id, opens in votes.items():
-            await self.redis.hset(f'backend:{self.sid}:votes', vote_id, json.dumps({
-                'vote_id': vote_id, 'question': vote_id + '?', 'options': ['A', 'B'], 'status': 'closed',
-                'opens_at': opens, 'closes_at': opens + 60}))
-        await self.redis.hset(f'backend:{self.sid}:vote-ballots', mapping={
-            f'v_old:{self.me["id"]}': 'A', f'v_new:{self.me["id"]}': 'B', f'v_new:{self.other["id"]}': 'A'})
-        res = await self.client.get('/api/account/sent', headers=self.auth(self.me))
-        self.assertEqual(res.status_code, 200)
-        body = res.json()
-        self.assertEqual(body['total'], 5)
-        self.assertEqual([item['id'] for item in body['items']], ['v_new', 'r_song', 'r_anon', 'r_named', 'v_old'])
-        named = next(item for item in body['items'] if item['id'] == 'r_named')
-        self.assertEqual((named['status'], named['anonymous']), ('reflected', False))
-        self.assertTrue(next(item for item in body['items'] if item['id'] == 'r_anon')['anonymous'])
-        self.assertEqual(next(item for item in body['items'] if item['id'] == 'v_new')['choice'], 'B')
-        self.assertNotIn(self.other['id'], json.dumps(body))
-        page = (await self.client.get('/api/account/sent?offset=1&limit=2', headers=self.auth(self.me))).json()
-        self.assertEqual([item['id'] for item in page['items']], ['r_song', 'r_anon'])
-
     async def test_delete_blocks_live_broadcast_then_leaves_withdrawn_name(self):
         mine_post, other_post = await self.seed_content()
         await self.client.post(f'/api/board/posts/{other_post}/like', headers=self.auth(self.me))
@@ -223,4 +201,3 @@ class AccountApiTests(unittest.IsolatedAsyncioTestCase):
                 with self.subTest(who=who['user']['name'], path=path):
                     res = await self.client.request(method, path, json=body, headers=headers)
                     self.assertEqual(res.status_code, 403)
-        self.assertEqual((await self.client.get('/api/account/sent')).status_code, 401)
