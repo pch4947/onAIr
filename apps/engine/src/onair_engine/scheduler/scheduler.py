@@ -1095,7 +1095,9 @@ class Scheduler:
             self.telemetry.log_question("dropped", asked.text)
             return
         material.extra["asked"] = asked.text
-        material.extra["asked_at"] = asked.at
+        # 질문이 청취자에게 들리기 시작한 때부터 온 글이 답이다. 질문을 만든 때부터 세면, 질문이 나가기 전에(만들고
+        # 20초쯤 뒤에 나간다) 온 글이 답으로 소개된다 (본 실행 20261119-164247: 반응의 대상 문제 12건 중 5건)
+        material.extra["asked_at"] = max(asked.at, self.timeline.started_at(asked.segment_id) or 0.0)
         if self._run is not None:
             self._run.asked = asked.text
         self.telemetry.log_question("answered", asked.text)

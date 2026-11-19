@@ -79,6 +79,11 @@ class OnAirTimeline:
             return "\n".join(lines) or None
         return said[-1] if said else None
 
+    def started_at(self, segment_id: str) -> float | None:
+        """그 세그먼트가 청취자에게 들리기 시작한 시각. 백엔드가 확인해 준 값만 — 아직이면 None."""
+        entry = self._by_segment.get(segment_id)
+        return entry.start if entry is not None and entry.synced else None
+
     def anchor_of(self, segment_id: str) -> Anchor | None:
         entry = self._by_segment.get(segment_id)
         return entry.anchor if entry else None

@@ -442,6 +442,23 @@ def test_song_intro_is_told_what_was_already_asked(tmp_path):
     assert job.material.extra["asked_before"] == [f"질문 {i}?" for i in range(2, 7)]
 
 
+def test_answers_are_counted_from_when_the_question_was_heard(tmp_path):
+    """질문은 만든 뒤 20초쯤 지나서 나간다 — 그 사이에 온 글은 답이 아니다."""
+    scheduler, _ = _asking(tmp_path)
+    made = time.time() - 150
+    anchor = scheduler.timeline.new_anchor("track:1", "track", [])
+    scheduler.timeline.append("seg_q", anchor, 10_000, made, track_ref="yt:abc", track_ms=120_000)
+    scheduler._asked = Asked("seg_q", QUESTION, made, anchor.id, "topic_talk")
+    early = Material()
+    scheduler._attach_asked(early)
+    assert early.extra["asked_at"] == made, "재생 시작을 아직 모르면 만든 때부터 센다"
+    scheduler.timeline.sync_started("seg_q", made + 32)  # 청취자에게 들리기 시작한 시각
+    scheduler._asked = Asked("seg_q", QUESTION, made, anchor.id, "topic_talk")
+    heard = Material()
+    scheduler._attach_asked(heard)
+    assert heard.extra["asked_at"] == made + 32
+
+
 def test_old_or_unaired_question_is_dropped(tmp_path):
     scheduler, _ = _asking(tmp_path)
     scheduler._asked = Asked("seg_q", QUESTION, time.time() - scheduler.chat_rules.question_open_sec - 1)
