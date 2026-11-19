@@ -1,5 +1,6 @@
 // 설정 (#324) — 이 기기·브라우저에 저장되는 화면 설정. 고른 값은 "저장"을 눌러야 적용된다
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState } from 'react'
+import { Row, Section, Toggle } from '@/routes/settings/parts'
 import {
   DEFAULT_SETTINGS, updateSettings, useSettings, type ChatFontSize, type DisplaySettings,
 } from '@/shared/settings'
@@ -13,47 +14,6 @@ const FONT_OPTIONS: { value: ChatFontSize; label: string }[] = [
 
 const sameSettings = (a: DisplaySettings, b: DisplaySettings) =>
   (Object.keys(a) as (keyof DisplaySettings)[]).every((key) => a[key] === b[key])
-
-function Section({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section className="flex flex-col gap-1">
-      <h2 className="text-xs font-semibold text-text-muted">{title}</h2>
-      <div className="flex flex-col divide-y divide-border rounded-md border border-border bg-surface">{children}</div>
-    </section>
-  )
-}
-
-// wide: 슬라이더처럼 폭이 필요한 조작은 좁은 화면에서 설명 아래로 내려 전체 폭을 쓴다
-function Row({ label, description, wide = false, children }: {
-  label: string; description?: string; wide?: boolean; children: ReactNode
-}) {
-  return (
-    <div className={`flex justify-between gap-4 px-4 py-3.5 ${wide ? 'flex-col gap-3 sm:flex-row sm:items-center' : 'items-center'}`}>
-      <div className="flex min-w-0 flex-col gap-0.5">
-        <span className="text-sm font-medium text-text">{label}</span>
-        {description && <span className="text-xs text-text-muted">{description}</span>}
-      </div>
-      <div className="shrink-0">{children}</div>
-    </div>
-  )
-}
-
-function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (next: boolean) => void }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      onClick={() => onChange(!checked)}
-      className={`relative h-6 w-11 rounded-full transition-colors ${checked ? 'bg-primary' : 'bg-field-border'}`}
-    >
-      <span
-        className={`absolute top-0.5 size-5 rounded-full bg-white shadow transition-[left] ${checked ? 'left-5.5' : 'left-0.5'}`}
-      />
-    </button>
-  )
-}
 
 export function SettingsPanel() {
   const saved = useSettings()

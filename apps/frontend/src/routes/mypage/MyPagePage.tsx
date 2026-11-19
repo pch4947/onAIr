@@ -6,7 +6,7 @@ import { Sidebar } from '@/app/Sidebar'
 import { AlertIcon, HistoryIcon, BoardIcon, FlaskIcon, SettingsIcon } from '@/app/icons'
 import { HeartIcon } from '@/routes/board/LikeButton'
 import { MyPageTabContent } from '@/routes/mypage/MyPageTabContent'
-import { ReplaySaveIcon } from '@/routes/listen/icons'
+import { ReplaySaveIcon, SendIcon } from '@/routes/listen/icons'
 import { useLogout } from '@/shared/useLogout'
 import { useCurrentUser } from '@/shared/useCurrentUser'
 import { MYPAGE_TABS } from '@/routes/mypage/mock'
@@ -16,6 +16,7 @@ import type { ComponentType } from 'react'
 const TAB_ICONS: Record<MyPageTab, ComponentType<{ className?: string }>> = {
   notifications: AlertIcon,
   myPosts: BoardIcon,
+  mySent: SendIcon,
   likedPosts: HeartIcon,
   myBroadcastReplays: HistoryIcon,
   savedReplays: ReplaySaveIcon,

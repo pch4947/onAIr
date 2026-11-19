@@ -1,4 +1,4 @@
-export type MyPageTab = 'notifications' | 'myPosts' | 'likedPosts' | 'myBroadcastReplays' | 'savedReplays'
+export type MyPageTab = 'notifications' | 'myPosts' | 'mySent' | 'likedPosts' | 'myBroadcastReplays' | 'savedReplays'
 
 export interface MyPageTabConfig {
   id: MyPageTab
@@ -16,6 +16,11 @@ export const MYPAGE_TABS: MyPageTabConfig[] = [
     id: 'myPosts',
     label: '내가 쓴 글',
     subtitle: '내가 게시판에 남긴 글을 모아볼 수 있어요',
+  },
+  {
+    id: 'mySent',
+    label: '내가 보낸 것',
+    subtitle: '방송에 보낸 채팅·사연·신청곡과 투표를 처리 상태와 함께 볼 수 있어요',
   },
   {
     id: 'likedPosts',

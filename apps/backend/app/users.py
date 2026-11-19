@@ -36,8 +36,44 @@ return 1
 """
 
 
+# 계정 기록은 읽은 그대로일 때만 바꾼다. 닉네임을 바꾸면 예약도 옮긴다 — 만료된 게스트가 쥔 이름은 비어 있는 것으로 본다.
+# ARGV: email, 읽은 기록, 새 기록, 새 닉네임(바꾸지 않으면 ''), 이전 닉네임, 지금 시각
+UPDATE = """
+if redis.call('HGET', KEYS[1], ARGV[1]) ~= ARGV[2] then return 'changed' end
+if ARGV[4] ~= '' and ARGV[4] ~= ARGV[5] then
+  local holder = redis.call('HGET', KEYS[2], ARGV[4])
+  if holder and holder ~= ARGV[1] then
+    local other = redis.call('HGET', KEYS[1], holder)
+    if other then
+      local user = cjson.decode(other)
+      if user.kind ~= 'guest' or (user.expiresAt or 0) > tonumber(ARGV[6]) then return 'name' end
+      redis.call('HDEL', KEYS[1], holder)
+    end
+  end
+  if redis.call('HGET', KEYS[2], ARGV[5]) == ARGV[1] then redis.call('HDEL', KEYS[2], ARGV[5]) end
+  redis.call('HSET', KEYS[2], ARGV[4], ARGV[1])
+end
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
+return 'ok'
+"""
+
+
+# 읽은 그대로일 때만 계정과 닉네임 예약을 함께 지운다.
+DELETE = """
+if redis.call('HGET', KEYS[1], ARGV[1]) ~= ARGV[2] then return 0 end
+redis.call('HDEL', KEYS[1], ARGV[1])
+if redis.call('HGET', KEYS[2], ARGV[3]) == ARGV[1] then redis.call('HDEL', KEYS[2], ARGV[3]) end
+return 1
+"""
+UPDATE_ATTEMPTS = 3
+
+
 class EmailAlreadyExists(ValueError):
     pass
+
+
+class UserChanged(RuntimeError):
+    """다른 요청이 같은 계정을 동시에 고쳐 여러 번 다시 시도해도 맞추지 못했다."""
 
 
 class NameAlreadyExists(ValueError):
@@ -99,6 +135,31 @@ class UserStore:
     async def get_by_email(self, email: str) -> dict | None:
         raw = await self.redis.hget(self.key, email.lower())
         return json.loads(raw) if raw else None
+
+    async def update(self, email: str, change, new_name: str | None = None) -> dict:
+        """change(user) → 고친 user. new_name이면 닉네임 예약도 옮긴다 (이미 쓰는 이름이면 NameAlreadyExists)."""
+        email = email.lower()
+        for _ in range(UPDATE_ATTEMPTS):
+            raw = await self.redis.hget(self.key, email)
+            if raw is None:
+                raise UserChanged()
+            user = json.loads(raw)
+            updated = change(dict(user))
+            result = await self.redis.eval(UPDATE, 2, self.key, self.names_key, email, raw,
+                                           json.dumps(updated, ensure_ascii=False), new_name or "",
+                                           user["name"], str(time.time()))
+            if result == "name":
+                raise NameAlreadyExists()
+            if result == "ok":
+                return updated
+        raise UserChanged()
+
+    async def delete(self, user: dict) -> bool:
+        """읽어 둔 계정 기록이 그대로일 때만 지운다."""
+        raw = await self.redis.hget(self.key, user["email"])
+        if raw is None or json.loads(raw)["id"] != user["id"]:
+            return False
+        return bool(await self.redis.eval(DELETE, 2, self.key, self.names_key, user["email"], raw, user["name"]))
 
     async def authenticate(self, email: str, password: str) -> dict | None:
         user = await self.get_by_email(email)

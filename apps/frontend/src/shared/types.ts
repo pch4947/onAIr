@@ -97,6 +97,8 @@ export interface AuthUser {
   createdAt: string
   isGuest?: boolean
   isAdmin?: boolean
+  // 사연·신청곡을 보낼 때 "익명으로"의 기본값 (#325)
+  defaultAnonymous?: boolean
 }
 
 export interface AuthResponse {

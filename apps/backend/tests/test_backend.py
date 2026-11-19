@@ -96,6 +96,8 @@ class BackendTests(unittest.TestCase):
                          {"/health", "/health/redis", "/api/scheduler/tick", "/hls/{station_id}/{filename}",
                           "/api/auth/signup", "/api/auth/login", "/api/auth/me",
                           "/api/auth/guest", "/api/auth/admin", "/api/auth/logout",
+                          "/api/account", "/api/account/name", "/api/account/password",
+                          "/api/account/preferences", "/api/account/sent",
                           "/api/stations/{station_id}/corner-skip", "/api/stations/{station_id}/persona",
                           "/api/stations/{station_id}/format",
                           "/api/stations/{station_id}/decisions", "/api/stations/{station_id}/events",
