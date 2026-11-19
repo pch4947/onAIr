@@ -9,7 +9,8 @@ export function AuthBrandPanel() {
         <BrandWordmark className="h-25 bg-white" />
       </div>
 
-      <h1 className="text-[34px] font-bold leading-snug text-white">
+      {/* 고정 폭 패널이라 한 줄에 다 들어가지 않는다 — 한글이 글자 단위로 끊기지 않게 단어 단위로 줄바꿈한다 */}
+      <h1 className="break-keep text-balance text-[34px] font-bold leading-snug text-white">
         내 취향의 방송을 열고,
         <br />
         같은 취향인 사람들과 함께
@@ -17,8 +18,8 @@ export function AuthBrandPanel() {
 
       <ul className="flex flex-col gap-3">
         {AUTH_FEATURES.map((feature) => (
-          <li key={feature.text} className="flex items-center gap-2 text-base text-nav-inactive">
-            <span>{feature.icon}</span>
+          <li key={feature.text} className="flex items-center gap-2.5 break-keep text-base text-nav-inactive">
+            <feature.icon className="size-5 shrink-0 text-white" />
             <span>{feature.text}</span>
           </li>
         ))}

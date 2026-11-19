@@ -1,4 +1,5 @@
 // public/*.svg 아이콘을 currentColor로 색을 제어할 수 있도록 인라인 SVG로 옮겨온 컴포넌트
+import type { ReactNode } from 'react'
 
 interface IconProps {
   className?: string
@@ -45,6 +46,63 @@ export function HistoryIcon({ className }: IconProps) {
       <path d="m12 0a12.03 12.03 0 0 1 8 3.078v-3.078h2v5.143a1.859 1.859 0 0 1 -1.857 1.857h-5.143v-2h4.121a9.985 9.985 0 1 0 2.879 7h2a12 12 0 1 1 -12-12z" />
       <path d="m11 7v5.414l3.293 3.293 1.414-1.414-2.707-2.707v-4.586z" />
     </svg>
+  )
+}
+
+// 로그인 화면 기능 소개 — FlaskIcon과 같은 선 아이콘 스타일
+function LineIcon({ className, children }: IconProps & { children: ReactNode }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {children}
+    </svg>
+  )
+}
+
+export function MicIcon({ className }: IconProps) {
+  return (
+    <LineIcon className={className}>
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M5 11a7 7 0 0 0 14 0" />
+      <path d="M12 18v3" />
+    </LineIcon>
+  )
+}
+
+export function ChatBubbleIcon({ className }: IconProps) {
+  return (
+    <LineIcon className={className}>
+      <path d="M20 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z" />
+      <path d="M8 9h8" />
+      <path d="M8 13h5" />
+    </LineIcon>
+  )
+}
+
+export function UsersIcon({ className }: IconProps) {
+  return (
+    <LineIcon className={className}>
+      <circle cx="9" cy="8" r="3.5" />
+      <path d="M2.5 20a6.5 6.5 0 0 1 13 0" />
+      <path d="M16 4.6a3.5 3.5 0 0 1 0 6.8" />
+      <path d="M18.5 14.2a6.5 6.5 0 0 1 3 5.8" />
+    </LineIcon>
+  )
+}
+
+export function ChevronRightIcon({ className }: IconProps) {
+  return (
+    <LineIcon className={className}>
+      <path d="M9 6l6 6-6 6" />
+    </LineIcon>
   )
 }
 
