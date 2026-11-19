@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
-import { normalizeYoutubeLink } from '@/routes/listen/trackClient'
 import { GENRE_OPTIONS, MAX_MUSIC_TASTE, getVoices } from '@/routes/station-create/api'
+import { FirstSongField } from '@/routes/station-create/FirstSongField'
+import { EMPTY_FIRST_SONG, firstSongError, firstSongUrl } from '@/routes/station-create/firstSong'
+import type { FirstSongValue } from '@/routes/station-create/firstSong'
 import { defaultVoiceId, voiceChoiceGroups } from '@/routes/station-create/voiceOptions'
 import type {
   Energy,
@@ -124,7 +126,7 @@ export function PersonaFormStep({ format, onBack, onSubmit, serverErrors = {} }:
   const [voiceAttempt, setVoiceAttempt] = useState(0)
   const [broadcastMinutes, setBroadcastMinutes] = useState(30)
   const [topic, setTopic] = useState('')
-  const [firstSongUrl, setFirstSongUrl] = useState('')
+  const [firstSong, setFirstSong] = useState<FirstSongValue>(EMPTY_FIRST_SONG)
   const [corners, setCorners] = useState<TalkCorner[]>(DEFAULT_CORNERS)
   const [newsSections, setNewsSections] = useState<NewsSection[]>(DEFAULT_NEWS_SECTIONS)
   const [intensity, setIntensity] = useState<Intensity>('mid')
@@ -165,8 +167,8 @@ export function PersonaFormStep({ format, onBack, onSubmit, serverErrors = {} }:
     if (topic.length > 60) nextErrors.topic = '60자 이하로 입력해주세요'
     if (format === 'talk' && corners.length < 2) nextErrors.corners = '본 코너를 2~3개 골라주세요'
     if (format === 'news' && newsSections.length < 2) nextErrors.newsSections = '분야를 2~3개 골라주세요'
-    const firstSong = firstSongUrl.trim() ? normalizeYoutubeLink(firstSongUrl) : null
-    if (firstSongUrl.trim() && !firstSong) nextErrors.firstSongUrl = '올바른 유튜브 영상 링크를 입력해주세요'
+    const firstSongProblem = firstSongError(firstSong)
+    if (firstSongProblem) nextErrors.firstSongUrl = firstSongProblem
     setErrors(nextErrors)
     if (Object.keys(nextErrors).length > 0) return
 
@@ -181,7 +183,7 @@ export function PersonaFormStep({ format, onBack, onSubmit, serverErrors = {} }:
       {
         broadcastMinutes,
         topic: topic.trim() || undefined,
-        firstSongUrl: firstSong ?? undefined,
+        firstSongUrl: firstSongUrl(firstSong) ?? undefined,
         format,
         intensity,
         corners: format === 'talk' ? corners : undefined,
@@ -386,20 +388,14 @@ export function PersonaFormStep({ format, onBack, onSubmit, serverErrors = {} }:
 
       <div className="h-px bg-border" />
 
-      <label className="flex flex-col gap-1.5">
-        <span className={fieldLabelClass}>첫 노래 (선택, YouTube 링크)</span>
-        <input
-          type="text"
-          maxLength={2048}
-          value={firstSongUrl}
-          onChange={(event) => setFirstSongUrl(event.target.value)}
-          placeholder="https://youtu.be/... (10분 이하 영상)"
-          className={textInputClass}
-        />
-        <span className={errors.firstSongUrl ? errorTextClass : 'block text-xs text-text-muted'}>
-          {errors.firstSongUrl || '방송이 시작되면 이 곡이 먼저 나오고, DJ가 오프닝에서 소개해요.'}
-        </span>
-      </label>
+      <FirstSongField
+        value={firstSong}
+        onChange={(next) => {
+          setFirstSong(next)
+          setErrors(({ firstSongUrl: _cleared, ...rest }) => rest)
+        }}
+        error={errors.firstSongUrl}
+      />
 
       <label className="flex flex-col gap-1.5">
         <span className={fieldLabelClass}>방송 시간</span>
