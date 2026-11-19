@@ -47,6 +47,36 @@ _HEDGE_TTS_BASE_SEC, _HEDGE_TTS_PER_CHAR_SEC = 6.5, 0.07
 _HEDGE_TTS_MIN_SEC, _HEDGE_TTS_MAX_SEC = 10.0, 22.0
 
 
+# "답으로 온 글은 없어서", "아직 답은 없네요" — 답을 받는 멘트가 답이 없다고 말하는 대목 (#348).
+# '답답할 때는 없으니까'는 아니다: 답 바로 뒤에 답이 오지 않고, 답 앞에 다른 글자가 붙지 않는다('대답'은 본다)
+_NO_ANSWER = re.compile(r"(?<![가-힣])대?답(?!답)[^.?!,]{0,14}?(?:없|안 왔|오지 않|못 받)")
+# 문장 머리의 "…없어서, " 꼴이면 그 마디만 덜어 낸다 — 뒤에 DJ 자신의 답이 이어진다
+_NO_ANSWER_CLAUSE = re.compile(
+    r"^[^.?!,]{0,8}?(?<![가-힣])대?답(?!답)[^.?!,]{0,14}?(?:없|안 왔|오지 않|못 받)[^.?!,]{0,6}?"
+    r"(?:어서|아서|으니까|으니|지만|는데|고|서)\s*,?\s*")
+_MIN_REST_CHARS = 8  # 마디를 덜고 남은 말이 이보다 짧으면 문장째 뺀다
+
+
+def drop_no_answer(text: str) -> str:
+    """답을 받는 멘트에서 답이 없다는 말을 걷어낸다. 걷어낼 것이 없거나 다 사라지면 그대로 돌려준다.
+
+    청취자가 곡이 나가는 동안 글을 여덟 건 보냈는데 "답으로 온 글은 없어서, 저는 달걀이나…"라고 했다
+    (2026-11-20 실제 방송). 프롬프트는 그 말을 하지 말라고 하지만 드물게 나온다 — 같은 상황을 120번 다시 돌렸을 때는
+    한 번도 나오지 않아, 프롬프트를 고쳐서는 고쳐졌는지 잴 수 없다. 그래서 규칙으로 잡는다.
+    """
+    if not _NO_ANSWER.search(text):
+        return text
+    kept = []
+    for sentence in split_sentences(text):
+        if not _NO_ANSWER.search(sentence):
+            kept.append(sentence)
+            continue
+        rest = _NO_ANSWER_CLAUSE.sub("", sentence, count=1)
+        if rest != sentence and len(rest) >= _MIN_REST_CHARS and not _NO_ANSWER.search(rest):
+            kept.append(rest)
+    return " ".join(kept) if kept else text
+
+
 def tts_hedge_sec(text: str) -> float:
     """이 대본의 합성이 이만큼 지나도 끝나지 않으면 늦은 것이다 — 합성 시간은 대본 길이에 비례한다."""
     return min(_HEDGE_TTS_MAX_SEC, max(_HEDGE_TTS_MIN_SEC, _HEDGE_TTS_BASE_SEC + _HEDGE_TTS_PER_CHAR_SEC * len(text)))
@@ -239,6 +269,16 @@ class GenerationPipeline:
         if script.text.strip() == REJECT:
             self._log(job, "l1", t1, t1, "reject")
             return None
+
+        # 답을 받는 멘트가 "답으로 온 글은 없어서"라고 말하면 그 말을 걷어낸다 (#348)
+        if job.material.extra.get("asked"):
+            trimmed = [drop_no_answer(text) for text in texts]
+            if trimmed != texts:
+                logger.info("NO_ANSWER_TRIMMED %s [%s] %s", job.job_id, job.corner_type, script.text)
+                self._log(job, "no_answer", t1, time.time(), "trimmed")
+                texts = trimmed
+                script = Script(text=texts[0])
+                job.script_chars = len(script.text)
 
         # 뉴스 대본에 DJ의 의견·평가·전망이 섞였으면 한 번 다시 쓰고, 그래도 남으면 그 문장을 뺀다 (CORNER_DESIGN 6.4절)
         if job.step.startswith(_NEWS_STEP):
