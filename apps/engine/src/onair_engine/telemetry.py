@@ -480,6 +480,21 @@ class Telemetry:
                     outcome=round_.outcome, counts=round_.counts, score=dict(score), talks=round_.talks)
         self._db.commit()
 
+    def log_chat_tone(self, req, tone: str, method: str) -> None:
+        """채팅 성격 판정 — 패널에만 남긴다. 보통 채팅은 남기지 않는다(대부분이 보통이다)."""
+        if tone == "plain" and method == "llm":
+            return
+        label = {"complaint": "불만 — 받지 않음", "joke": "농담", "plain": "판정 못 함 — 보통 채팅으로"}[tone]
+        self._event("chat_tone", f"채팅 성격 · \"{_excerpt(req.body)}\" · {label}",
+                    request_id=req.request_id, tone=tone, method=method)
+        self._db.commit()
+
+    def log_question(self, event: str, text: str) -> None:
+        """곡 앞에서 던진 질문과 그 답을 받는 멘트 — 패널에만 남긴다. event는 asked | answered | dropped."""
+        label = {"asked": "곡 앞에서 물음", "answered": "곡 뒤에 답을 받음", "dropped": "받지 못하고 접음"}[event]
+        self._event("question", f"질문 · {label} · \"{_excerpt(text)}\"", event=event)
+        self._db.commit()
+
     def log_callback(self, aired) -> None:
         """청취자 이야기 다시 꺼내기 — 패널에만 남긴다. 소재 출처는 decision_log의 material에 있다."""
         self._event("callback", f"다시 꺼내기 · \"{_excerpt(aired.body)}\"", kind=aired.kind)

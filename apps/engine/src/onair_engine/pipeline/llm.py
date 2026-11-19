@@ -20,7 +20,7 @@ from typing import Protocol
 
 from .. import __version__
 from ..catalog import mood_ko
-from ..corners.steps import BLOCK_MARKER, BLOCK_STEP, STEP_KINDS
+from ..corners.steps import ASK_MARKER, BLOCK_MARKER, BLOCK_STEP, STEP_KINDS
 from ..domain import Prompt, Script
 from ..prompt_data import CHAT, STORY, TOPIC
 
@@ -141,6 +141,8 @@ _TEMPLATES: dict[str, list[str]] = {
 }
 # 인용할 채팅이 있으면 앞에 붙인다 — 파이프라인 인용 검사를 통과해야 한다
 _QUOTE_TEMPLATE = "{quote}, 이렇게 보내 주신 분이 있네요. 고마워요. "
+# 곡 앞에서 묻는 곡 소개 (CORNER_DESIGN 7.7.2절) — 더미 방송에서도 곡 뒤에 답을 받는 흐름이 돈다
+_ASK_TEMPLATE = "여러분은 어느 쪽이 더 좋으세요? 곡이 나가는 동안 채팅으로 남겨 주세요. "
 
 _PROFILE_RE = re.compile(r"\[(?P<concept>.+?)\]의 DJ (?P<dj>.+?)다\.")
 _TRACK_RE = re.compile(r"곡: (?P<title>.+?) — (?P<artist>.+?)(?: \(무드: (?P<mood>.+?)\))?$",
@@ -209,17 +211,21 @@ class DummyLlmClient:
         for line in reversed(m["body"].splitlines() if m else []):
             if line.strip() and (not self.quote_miss_rate or self._rng.random() >= self.quote_miss_rate):
                 text = _QUOTE_TEMPLATE.format(quote=line.strip()[:60]) + text
+        if ASK_MARKER in _DATA_RE.sub("", prompt.user):
+            text = _ASK_TEMPLATE + text
         return Script(text=text)
 
     async def complete(self, prompt: Prompt, *, max_tokens: int) -> str:
         await self._wait()
-        from ..inputs import dilemmas, song_fit, song_picks, story_judge, topic_plan
+        from ..inputs import chat_tone, dilemmas, song_fit, song_picks, story_judge, topic_plan
         if BLOCK_MARKER in _DATA_RE.sub("", prompt.user):
             m = _PARTS_RE.search(prompt.user)
             lines = _TEMPLATES[BLOCK_STEP][:int(m.group(1)) if m else 3]
             return "\n\n".join(line.format_map(_slots(prompt)) for line in lines)
         if story_judge.MARKER in prompt.user:
             return story_judge.dummy_judgement_json(prompt)
+        if chat_tone.MARKER in prompt.user:
+            return chat_tone.dummy_tone_json(prompt)
         if topic_plan.MARKER in prompt.user:
             return topic_plan.dummy_plan_json(prompt)
         if dilemmas.MARKER in prompt.user:

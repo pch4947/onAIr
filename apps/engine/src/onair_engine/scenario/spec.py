@@ -58,6 +58,9 @@ class SimSpec(_Spec):
     # 가상 청취자의 글을 쓰는 LLM. DJ와 다른 모델을 써야 DJ와 같은 말버릇으로 쓰지 않는다. --llm dummy면 이것도 더미다
     listener_llm: Literal["gemini", "openai", "claude", "dummy"] = "gemini"
     listener_model: str | None = "gemini-3.8-flash"
+    # 방송이 시작하는 시각(한국 시간, "04:10"). DJ가 듣는 시각만 바꾼다 — 심야 방송을 낮에 돌려도 새벽으로 안다.
+    # 없으면 실제 시각이다. 날짜와 요일은 실행한 날 그대로다
+    clock: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     seed: int = 1  # 회차마다 seed + 회차 번호
 
 

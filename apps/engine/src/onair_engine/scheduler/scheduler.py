@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -23,6 +24,9 @@ from ..corners.run import CornerRun, MaterialSources, PlannedStep, Thread
 from ..corners.steps import BLOCK_STEP, STEP_KINDS
 from ..domain import (
     QUOTE_LEVEL,
+    TONE_COMPLAINT,
+    TONE_JOKE,
+    TONE_PENDING,
     Anchor,
     BlockScript,
     ChatType,
@@ -92,17 +96,61 @@ _FORMAT_READY_WAIT_SEC = 8.0
 _REACTION_LAG_SEC = 5.0
 _MOOD_LEVEL = 1  # 기획서 4.2절 ① — 한 건씩 인용하지 않고 분위기로 언급했다
 _OPENERS = ("talk_open", "talk_resume")  # 코너의 화제를 꺼내는 단계 — 갈래와 시간 맥락은 여기에만 붙인다
+# 곡 앞에서 물으려면 곡 뒤에 답을 받을 말 코너가 들어갈 시간이 남아 있어야 한다 [임시값]
+_ANSWER_ROOM_SEC = 120.0
+# 곡 전에 던진 질문으로 돌아오는 멘트에 싣는 답의 수 — 한 건만 받으면 나머지 답은 인용 간격에 걸려 대부분 못 받는다.
+# 계약 v2(input_refs)로 보낼 때만 여러 건을 싣는다 [임시값]
+_ANSWER_QUOTES = 3
+_ASKED_BEFORE = 5  # 곡 소개에 알려 주는 "이미 던진 질문"의 수
+# 질문을 던진 곡 소개가 제출되기를(앞 순번을) 기다리는 상한 — 넘으면 곡이 끝나는 때를 모르는 채로 진행한다
+_ASK_PUBLISH_WAIT_SEC = 30.0
+_QUESTION_RE = re.compile(r"[^.!?…]*[?？]")
+# 차분한 말투의 DJ는 묻는 말도 마침표로 끝낸다("…느껴진 적 있으신가요.") — 물음표가 없으면 묻는 말끝으로 찾는다.
+# "~세요."는 넣지 않는다. "채팅으로 남겨 주세요."가 걸린다
+_ASKING_RE = re.compile(r"[^.!?…]*(?:나요|가요|까요|니까)\.")
+# 시간대와, 그 시간대에 지금처럼 말하면 어긋나는 때
+_DAY_PARTS = {"밤": "아침이나 낮", "새벽": "아침이나 낮, 저녁", "아침": "낮이나 저녁, 밤",
+              "오전": "저녁이나 밤, 새벽", "오후": "아침이나 밤, 새벽", "저녁": "아침이나 낮, 새벽"}
 _KST = timezone(timedelta(hours=9))  # 방송 시각은 한국 시간이다 (서머타임 없음)
 _WEEKDAYS = "월화수목금토일"
 
 logger = logging.getLogger(__name__)
 
 
+def day_part(hour: int) -> str:
+    """시간대 이름. 다섯 시는 아침이 아니라 새벽으로 부른다 — 겨울에는 해가 뜨기 전이다."""
+    return ("밤" if hour in (0, 21, 22, 23) else "새벽" if hour < 6 else "아침" if hour < 9
+            else "오전" if hour < 12 else "오후" if hour < 18 else "저녁")
+
+
+def daytime(now: float) -> dict[str, str]:
+    """모든 멘트에 알리는 시간대 — '새벽', '4시쯤'과, 지금처럼 말하면 어긋나는 때 (steps.DAYTIME_RULE)."""
+    t = datetime.fromtimestamp(now, _KST)
+    part = day_part(t.hour)
+    return {"part": part, "clock": f"{t.hour % 12 or 12}시쯤", "others": _DAY_PARTS[part]}
+
+
+def question_of(script: str) -> str:
+    """대본에서 청취자에게 물은 문장만. 묻지 않았으면 빈 문자열."""
+    asked = _QUESTION_RE.findall(script) or _ASKING_RE.findall(script)
+    return " ".join(s.strip() for s in asked)
+
+
+@dataclass
+class Asked:
+    """곡 앞에서 던진 질문 — 곡 뒤 첫 이야기 멘트가 받는다 (CORNER_DESIGN 7.7.2절)."""
+
+    segment_id: str
+    text: str
+    at: float
+    anchor_id: str | None = None  # 질문을 던진 곡 소개의 앵커 — 그 곡이 끝나는 때를 타임라인에서 찾는다
+    corner: str | None = None  # 질문이 나온 이야기 코너 — 곡 뒤에 다른 코너가 올 차례면 이 코너가 먼저 답을 받는다
+
+
 def time_context(now: float, started_at: float) -> str:
     """'금요일 밤 11시 40분, 방송 18분째' — 화제를 꺼낼 때 DJ가 쓸 수 있는 시간 맥락."""
     t = datetime.fromtimestamp(now, _KST)
-    part = ("밤" if t.hour in (0, 21, 22, 23) else "새벽" if t.hour < 5 else "아침" if t.hour < 9
-            else "오전" if t.hour < 12 else "오후" if t.hour < 18 else "저녁")
+    part = day_part(t.hour)
     clock = f"{t.hour % 12 or 12}시" + (f" {t.minute}분" if t.minute else "")
     minutes = int(max(0.0, now - started_at) // 60)
     elapsed = f"방송 {minutes}분째" if minutes else "방송 시작 직후"
@@ -141,8 +189,9 @@ class Scheduler:
                  telemetry: Telemetry, chat_rules: ChatRules, violates,
                  target_buffer_sec: float = 30.0, max_concurrent: int = 2,
                  emit_corner_changed: bool = False, topic_plan: TopicPlan | None = None,
-                 contract_version: int = 1, emit_corner_format: bool = False):
+                 contract_version: int = 1, emit_corner_format: bool = False, tone_judge=None):
         self.config = config
+        self.tone_judge = tone_judge  # 채팅 성격 판정 (inputs/chat_tone.py) — 없으면 모든 채팅을 보통으로 본다
         self._contract_version = contract_version  # 엔진→백엔드 계약 버전 (10.10절)
         self._notices: set[asyncio.Task] = set()  # 동기 콜백에서 띄운 상태 통보 — 끝날 때까지 붙잡아 둔다
         self.fmt = fmt
@@ -185,6 +234,16 @@ class Scheduler:
         self._generating: dict[str, ListenerRequest] = {}  # 생성 중인 입력
         self._discard: set[str] = set()  # 생성 중 취소·철회된 입력 — 결과를 버린다
         self._steer_pending = False  # 화제를 바꿀 인용을 생성 중 — 결과가 나와야 다음 단계의 화제가 정해진다
+        # 곡 앞에서 묻고 곡 뒤에 답을 받는다 (CORNER_DESIGN 7.7.2절)
+        self._ask_pending = False  # 질문을 던지는 곡 소개를 생성 중 — 곡 뒤 멘트를 미리 만들지 않는다
+        self._asked: Asked | None = None  # 던졌고 아직 받지 않은 질문
+        self._questions: list[str] = []  # 오늘 던진 질문들 — 같은 것을 또 묻지 않게 곡 소개에 알려 준다
+        # 백엔드가 알리는 재생 시작 시각은 청취자가 듣는 시각이다(방송 지연만큼 뒤). 알림을 받은 때와의 차이가 그 지연이다
+        self._air_delay_sec = 0.0
+        # 프롬프트에 넣는 시각에 더하는 값. 시나리오 실행기가 방송 시각을 정할 때 쓴다(심야 방송을 낮에 시험한다)
+        self.clock_offset_sec = 0.0
+        self._corner_now: str | None = None  # 지금 코너와 그 앞 코너 — 이야기 코너 뒤의 곡 앞에서만 묻는다
+        self._corner_before: str | None = None
         self._emit_corner_changed = emit_corner_changed
         self._emit_corner_format = emit_corner_format  # corner.changed에 형식을 싣는다 (#260)
         self._announced_corner: str | None = None
@@ -373,13 +432,34 @@ class Scheduler:
         self.telemetry.log_request_state(req.request_id, req.state)
         self.pool.add(req)
         self._last_chat_at = max(self._last_chat_at, req.received_at)
+        if self.tone_judge is not None and req.kind == CHAT:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:  # 루프 밖에서 부른 동기 호출 — 판정하지 않고 보통 채팅으로 둔다
+                return
+            req.tone = TONE_PENDING
+            task = loop.create_task(self._judge_tone(req))
+            self._notices.add(task)
+            task.add_done_callback(self._notices.discard)
+
+    async def _judge_tone(self, req: ListenerRequest) -> None:
+        """채팅의 성격을 묻는다. 불만이면 후보에서 뺀다 — 인용도 분위기 전달도 하지 않는다 (CORNER_DESIGN 5.1.4절)."""
+        try:
+            req.tone = await self.tone_judge.judge(req)
+        except Exception:  # 판정이 채팅을 붙잡아 두면 안 된다
+            logger.exception("CHAT_TONE_FAILED %s", req.request_id)
+            req.tone = None
+        if req.tone == TONE_COMPLAINT and self.pool.pop(req.request_id) is not None:
+            await self._transition(req, RequestState.EXPIRED)
 
     def on_track_started(self, track_ref: str, started_at: float) -> None:
+        self._air_delay_sec = max(0.0, started_at - time.time())
         self.timeline.sync_track(track_ref, started_at)
 
     def on_segment_started(self, segment_id: str, started_at: float) -> None:
         """재생 시작 확인 — 인용이 들어 있으면 반영 확정 (CORNER_DESIGN 9.3, 9.4절). 재전달은 무시한다."""
         self._unaired.pop(segment_id, None)
+        self._air_delay_sec = max(0.0, started_at - time.time())
         self.sources.votes.started(segment_id, started_at)  # 투표를 여는 멘트면 창이 이때 열린다
         if not self.timeline.sync_started(segment_id, started_at):
             return
@@ -394,7 +474,8 @@ class Scheduler:
         req.state = RequestState.REFLECTED
         self.telemetry.log_request_state(req.request_id, req.state)
         self._notify_reflected(req, segment_id, started_at)
-        self.callbacks.add(req, started_at)
+        if req.tone != TONE_JOKE:  # 농담은 그 자리에서 끝난 말이다 — 엔딩에서 돌아보면 진지한 말이 된다
+            self.callbacks.add(req, started_at)
         # 곡 재생 중에 도착한 반응은 곡 위에서 말할 수 없어 기다린다 — 그 구조적 대기를 뺀다
         song_end = self.timeline.track_end(req.anchor_id)
         waited = max(0.0, song_end - req.received_at) if song_end else 0.0
@@ -495,7 +576,7 @@ class Scheduler:
                 continue
             if (ctx.inflight_generations >= self.max_concurrent
                     or ctx.generated_buffer_sec >= self.target_buffer_sec
-                    or self._steer_pending):
+                    or self._steer_pending or self._ask_pending or self._waits_for_answers(ctx.now)):
                 self.telemetry.log_decision(ctx, Decision(action="wait"))
                 await asyncio.sleep(_IDLE_SLEEP_SEC)
                 continue
@@ -571,6 +652,8 @@ class Scheduler:
         empty = 0
         while True:
             if self._run is None:
+                if self._forced is None:
+                    self._forced = self._answer_corner()
                 if self._forced is not None:  # 운영자가 고른 코너 — 못 들어가면 원래 순환으로 이어진다
                     entry, self._forced = self._admit(self._forced, forced=True), None
                 else:
@@ -598,6 +681,7 @@ class Scheduler:
                                       continues=not plays_song and self._last_talk_corner == corner_type,
                                       after_song=not plays_song and self._song_since_talk)
                 self._entered[corner_type] = self._entered.get(corner_type, 0) + 1
+                self._corner_before, self._corner_now = self._corner_now, corner_type
                 if plays_song:
                     self._song_since_talk = True
                 else:
@@ -748,6 +832,7 @@ class Scheduler:
             self._next_pub = self._seq
         self._sem = asyncio.Semaphore(self.max_concurrent)
         self._steer_pending = False
+        self._ask_pending = False
         self.sources.votes.abandon()  # 진행 중인 투표 라운드를 접는다 — 열린 투표의 결과는 받지 않는다
         if self._deferred is not None:  # 만들 때를 기다리던 곡 소개 — 곡을 되돌린다
             self.sources.tracks.put_back(self._deferred.items[0])
@@ -791,6 +876,7 @@ class Scheduler:
         corner, step = planned.corner, planned.step
         material = Material(items=list(planned.items), label=planned.label,
                             topic=self._run.thread.topic if self._run else self.topic)
+        material.extra["daytime"] = daytime(time.time() + self.clock_offset_sec)
         if self._run is not None and self._run.thread.steered:
             material.extra["steered"] = True
         feature = None
@@ -813,6 +899,7 @@ class Scheduler:
             material.extra.update(guide=self.fmt.guide, corners=self.clock.main_titles())
         elif step.kind in _OPENERS:
             block = self._plan_block(corner)
+            self._attach_asked(material)
             self._open_thread(material, block)
             if block is not None:
                 step_kind = BLOCK_STEP
@@ -843,8 +930,20 @@ class Scheduler:
                 job_id=new_id("job"), corner_type=corner.corner_type, step=BLOCK_STEP, material=material,
                 plain=corner.subjectivity == "none", anchor=anchor, block=point["block"], part=point["part"],
             )
+        if step_kind == "talk":
+            self._attach_asked(material)
         material.quotes = self._take_quotes(corner.mode("chat"), step_kind, anchor, material)
         self._take_mood(corner.mode("chat"), step_kind, material)
+        if step_kind == "talk" and material.quotes and self._run is not None and self._run.asked:
+            material.extra.setdefault("asked_earlier", self._run.asked)
+        # 채팅 한 건을 받는 곡 소개에서는 받고 나서 묻는다. 여러 건이나 반응 분위기까지 받으면 멘트가 너무 길다
+        if (step_kind == "music_intro" and len(material.quotes) <= 1 and not material.mood
+                and self._should_ask(material, time.time())):
+            material.extra["ask"] = True
+            material.extra["ask_corner"] = self._corner_before
+            material.extra["asked_before"] = self._questions[-_ASKED_BEFORE:]
+            self._ask_pending = True
+            self._last_question_at = time.time()
         if point is not None:
             if point["source"] == "chat" and not material.quotes:  # 선별기가 고르지 않았다 — 다른 소재로
                 point = self._quiet_point(self._run) or {"source": "topic"}
@@ -880,8 +979,8 @@ class Scheduler:
     def _open_thread(self, material: Material, block: BlockScript | None = None) -> None:
         """화제를 꺼내는 단계 — 이번 진입의 갈래를 정하고 질문·다룬 갈래·시간 맥락을 붙인다 (CORNER_DESIGN 5.1.1절)."""
         now = time.time()
-        quiet = self._is_quiet(now)
-        material.extra["now"] = time_context(now, self._started_at or now)
+        material.extra["now"] = time_context(now + self.clock_offset_sec,
+                                             (self._started_at or now) + self.clock_offset_sec)
         run = self._run
         song_story = None
         if block is not None:
@@ -897,13 +996,8 @@ class Scheduler:
                 song_story = self._last_track
             # 곡을 받는 말도 매번 하면 틀이 된다. 곡 이야기를 하는 차례에는 그 이야기가 곡을 받는다
             material.extra["back_announce"] = song_story is None and self._song_returns % 2 == 1
-        ask = self.intensity.question and (
-            not quiet or now - self._last_question_at >= self.chat_rules.question_gap_sec)
-        material.extra["question"] = ask
-        if ask:
-            self._last_question_at = now
-        elif quiet:
-            material.extra["no_question"] = True
+        # 화제를 꺼내면서 묻지 않는다 — 질문은 곡 앞에서 던지고 답은 곡 뒤에 받는다 (_should_ask, 7.7.2절)
+        material.extra["no_question"] = True
         if song_story is not None:
             material.extra["song_story"] = song_story
             return
@@ -924,6 +1018,86 @@ class Scheduler:
                 covered = covered[:-1]
         if covered:
             material.extra["covered_angles"] = covered
+
+    def _should_ask(self, material: Material, now: float) -> bool:
+        """이 곡 소개에서 청취자에게 물을지 — 곡이 답을 치는 시간을 가려 주고, 곡 뒤 첫 이야기 멘트가 답을 받는다.
+
+        이야기 코너 바로 뒤의 곡 앞에서만 묻는다(물을 거리가 방금 한 이야기다). 신청곡 소개와 더미 곡(실제로
+        나가지 않는다) 앞에서는 묻지 않는다. 곡 뒤에 다른 코너가 올 차례여도 묻는다 — 그때는 이야기 코너가
+        먼저 들어와 답을 받는다(_answer_corner).
+        """
+        track = material.track or {}
+        if (not self.intensity.question or self._asked is not None or self._ask_pending
+                or material.feature_ref or track.get("requester_nickname") or track.get("dummy")):
+            return False
+        rules = self.chat_rules
+        gap = rules.question_gap_sec if self._is_quiet(now) else rules.question_active_gap_sec
+        if now - self._last_question_at < gap:
+            return False
+        song_sec = int(track.get("duration_ms") or 0) / 1000
+        if self._remaining_sec(now) < song_sec + self.clock.closing_sec() + _ANSWER_ROOM_SEC:
+            return False
+        return self._talks(self._corner_before)
+
+    def _talks(self, corner_type: str | None) -> bool:
+        """이야기 단계(talk_point)가 있는 코너."""
+        corner = self.fmt.corners.get(corner_type) if corner_type else None
+        return corner is not None and any(step.items == "talk_point" for step in corner.steps)
+
+    def _answer_corner(self) -> ClockEntry | None:
+        """받지 않은 질문이 있는데 다음 차례가 이야기 코너가 아니면, 질문이 나온 이야기 코너를 먼저 넣는다.
+
+        곡이 나가는 동안 문자가 오면 곡 뒤 차례가 문자 소개가 된다 — 그대로 두면 답은 질문 없이 따로 인용되고
+        질문은 몇 분 뒤에야 돌아온다 (시험 실행 20261119-133632). 클락의 순환은 건드리지 않는다.
+        """
+        asked = self._asked
+        if (asked is None or asked.corner not in self.fmt.corners or self._talk_comes_next()
+                or time.time() - asked.at > self.chat_rules.question_open_sec):
+            return None
+        return ClockEntry(self.fmt.corner(asked.corner))
+
+    def _talk_comes_next(self) -> bool:
+        """클락의 다음 코너가 이야기 코너다 — 진입 조건을 못 채울 코너는 대체 코너로 보거나 건너뛴다."""
+        for entry in self.clock.upcoming(4):
+            corner = entry.corner
+            if not self.sources.satisfies(corner, entry.label):
+                if not corner.fallback:
+                    continue
+                corner = self.fmt.corner(corner.fallback)
+            if self._plays_song(corner):  # 곡은 연달아 틀지 않는다 — 그 뒤 코너를 본다
+                continue
+            return self._talks(corner.corner_type)
+        return False
+
+    def _waits_for_answers(self, now: float) -> bool:
+        """질문을 던진 곡이 끝나 갈 때까지 곡 뒤 멘트를 만들지 않는다.
+
+        두면 곡 소개를 만드는 동안 곡 뒤 멘트까지 만든다(동시 생성) — 답이 오기 전에 대본이 정해진다.
+        곡이 끝나기 target_buffer_sec 전부터 만든다. 답을 여러 건 받는 멘트는 길어서 합성이 15초 넘게 걸린다 —
+        20초 전에 만들기 시작했을 때는 곡 뒤에 무음이 8~12초 났다 (시험 실행 20261119-133632).
+        타임라인의 시각은 청취자가 듣는 시각이라 방송 지연만큼 뺀다.
+        """
+        asked = self._asked
+        if asked is None:
+            return False
+        end = self.timeline.track_end(asked.anchor_id)
+        if end is None:  # 아직 제출되지 않았다(앞 순번을 기다린다) — 잠깐만 기다린다
+            return now - asked.at < _ASK_PUBLISH_WAIT_SEC
+        return now < end - self._air_delay_sec - self.target_buffer_sec
+
+    def _attach_asked(self, material: Material) -> None:
+        """곡 전에 던진 질문이 있으면 이 멘트가 받는다. 너무 오래된 질문은 접는다."""
+        asked, self._asked = self._asked, None
+        if asked is None:
+            return
+        if time.time() - asked.at > self.chat_rules.question_open_sec:
+            self.telemetry.log_question("dropped", asked.text)
+            return
+        material.extra["asked"] = asked.text
+        material.extra["asked_at"] = asked.at
+        if self._run is not None:
+            self._run.asked = asked.text
+        self.telemetry.log_question("answered", asked.text)
 
     def _talk_point(self, run: CornerRun) -> dict | None:
         """이야기 단계의 소재 하나 — 인용할 채팅 → 다시 꺼낼 청취자 이야기 → 갈래의 말할 거리 (CORNER_DESIGN 7.7절).
@@ -959,8 +1133,12 @@ class Scheduler:
         return None
 
     def _take_callback(self, run: CornerRun, now: float):
-        """다시 꺼낼 청취자 이야기 — 한 코너에 한 번, 방송 전체로는 callback_gap_sec에 한 번."""
-        if run.called_back or now - self._last_callback_at < self.chat_rules.callback_gap_sec:
+        """다시 꺼낼 청취자 이야기 — 한 코너에 한 번, 방송 전체로는 callback_gap_sec에 한 번.
+
+        운영 설정은 꺼 두었다(chat_rules.callbacks, 2026-11-19) — 그때는 엔딩 돌아보기만 청취자 이야기를 다시 꺼낸다.
+        """
+        if (not self.chat_rules.callbacks or run.called_back
+                or now - self._last_callback_at < self.chat_rules.callback_gap_sec):
             return None
         aired = self.callbacks.take(now)
         if aired is not None:
@@ -1032,10 +1210,17 @@ class Scheduler:
         if not self._quote_ready(chat_mode, step_kind, with_feature):
             return []
         limit = self._quote_limit(with_feature, step_kind)
+        if material.extra.get("asked") and limit and self._contract_version >= 2:
+            limit = max(limit, _ANSWER_QUOTES)  # 질문에 온 답은 한 멘트에서 여러 건 받는다
         now = time.time()
         topic_words = anchor.keywords | keywords(material.topic)
+        candidates = self.pool.quotable()
+        if asked_at := material.extra.get("asked_at"):
+            # 질문을 던진 뒤에 온 글이 답이다 — 있으면 그 가운데서 고른다. 없으면 기다리던 글을 받는다.
+            # 가리지 않았을 때는 답을 두고 질문보다 먼저 와 있던 글 세 건을 받았다 (시험 실행 20261119-133632)
+            candidates = [req for req in candidates if req.received_at >= asked_at] or candidates
         selection = self.selector.select(
-            self.pool.quotable(), limit=limit, arrivals=self.pool.recent_arrivals(now),
+            candidates, limit=limit, arrivals=self.pool.recent_arrivals(now),
             last_requester=self._last_requester, topic_words=topic_words)
         self.telemetry.log_selection(selection, anchor.id)
         material.extra["selection"] = selection
@@ -1068,6 +1253,8 @@ class Scheduler:
     def _mark_steer(self, material: Material) -> None:
         """고른 채팅이 화제를 바꿀 조건을 채우면 표시한다. 화제는 인용이 대본에 들어간 뒤에 바꾼다."""
         if not material.quotes or self._run is None:
+            return
+        if material.quotes[0].tone == TONE_JOKE:  # 농담은 한마디로 받고 넘긴다 — 화제로 삼으면 장난에 끌려간다
             return
         rule = steer_rule(material.quotes[0].body, self.chat_rules, self.config.profile.dj_name)
         if rule and self._run.can_steer(self.intensity.steer_limit):
@@ -1124,8 +1311,9 @@ class Scheduler:
         """다음 단계부터 이 채팅이 화제다 (CORNER_DESIGN 5.2절). 앵커도 새 화제로 새로 만든다."""
         run = self._run
         old_topic = run.thread.topic
-        # 바뀐 화제에는 갈래가 없다 — 그 화제로 두 번까지 이야기한다
-        run.thread = Thread(topic=req.body, keywords=sorted(keywords(req.body)), free_points=2, steered=True)
+        # 바뀐 화제에는 갈래가 없다 — 그 화제로 정해진 횟수(chat_rules.steer_points)만 이야기한다
+        run.thread = Thread(topic=req.body, keywords=sorted(keywords(req.body)),
+                            free_points=self.chat_rules.steer_points, steered=True)
         run.steers += 1
         self._run_anchor = None
         self.telemetry.log_steer(request_id=req.request_id, segment_id=segment_id,
@@ -1182,6 +1370,7 @@ class Scheduler:
                     return
                 if not job.provider_failed:  # 고정 문구로 대체됐으면 언급이 나가지 않았다
                     self._log_aggregate(job, sub.id)
+                    self._note_asked(job, sub.id)
                 # 대본에 실제로 들어간 입력만 반영된 것이다. 나머지는 인용이 빠졌거나 filler로 대체됐다
                 refs = sub.input_refs or ([sub.request_ref] if sub.request_ref else [])
                 reflected = [req for req in inputs if req.request_id in refs]
@@ -1222,11 +1411,25 @@ class Scheduler:
                 self._inflight -= 1
                 if job.material.extra.get("steer"):
                     self._steer_pending = False
+                if job.material.extra.get("ask"):
+                    self._ask_pending = False
                 for req in inputs:
                     self._generating.pop(req.request_id, None)
                 # 실패해도 순번은 비워야 뒤 순번이 나간다. 곡 길이는 백엔드가 실제로 틀 곡(music_ref)만 센다
                 track_ms = int((job.material.track or {}).get("duration_ms") or 0)
                 await self._complete(seq, sub, track_ms if sub and sub.music_ref else 0, job.anchor, job)
+
+    def _note_asked(self, job: GenerationJob, segment_id: str) -> None:
+        """질문을 던지라고 한 곡 소개가 실제로 물었으면 그 질문을 적어 둔다 — 곡 뒤 멘트가 받는다."""
+        if not job.material.extra.get("ask"):
+            return
+        # 시험용 파이프라인에는 대본을 묻는 길이 없을 수 있다 — 없으면 묻지 않은 것으로 둔다
+        question = question_of(getattr(self.pipeline, "script_of", lambda _id: None)(segment_id) or "")
+        if question:
+            self._asked = Asked(segment_id, question, time.time(), job.anchor.id if job.anchor else None,
+                                job.material.extra.get("ask_corner"))
+            self._questions.append(question)
+            self.telemetry.log_question("asked", question)
 
     def _put_back_track(self, job: GenerationJob) -> None:
         """곡 소개 멘트가 나가지 못했다 — 소개하려던 곡을 다음 곡 소개 차례로 돌린다 (#216)."""
@@ -1254,6 +1457,8 @@ class Scheduler:
         되돌린 입력 수를 돌려준다.
         """
         self._unaired.pop(sub.id, None)
+        if self._asked is not None and self._asked.segment_id == sub.id:  # 질문을 던진 멘트가 나가지 않았다
+            self._asked = None
         self.sources.votes.discarded(sub.id)  # 투표를 열 멘트였으면 그 투표는 열리지 않는다
         self.pipeline.take_aired(sub.id)
         if job is not None:

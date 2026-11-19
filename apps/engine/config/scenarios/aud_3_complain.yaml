@@ -19,6 +19,8 @@ listeners:
   - {persona: own_story, count: 1}
   - {persona: question, count: 1}
   - {persona: complain, count: 1}
+sim:
+  clock: "04:10"   # 심야 방송이다 — 낮에 돌려도 DJ는 새벽 4시로 안다. 기준선(T-015)을 잰 시간대다
 expect:
   - {type: max_fallback, value: 0, note: 대체 멘트 없음}
   - {type: max_silence_sec, value: 5, note: 긴 무음 없음}

@@ -176,7 +176,10 @@ def load_broadcast(path: str | Path) -> Broadcast:
     sim, generation = report.get("sim") or {}, report.get("generation") or {}
     return Broadcast(
         path=path, ments=ments, chats=chats, songs=songs, order=order, persona=_persona(run),
-        topic=report.get("topic") or station.get("topic") or "", started_at=report.get("started_at"),
+        topic=report.get("topic") or station.get("topic") or "",
+        # 시나리오가 방송 시각을 정했으면(sim.clock) DJ가 안 시각으로 본다
+        started_at=(report["started_at"] + float(run.get("clock_offset_sec") or 0)
+                    if report.get("started_at") else None),
         minutes=run.get("minutes") or station.get("broadcast_minutes"),
         music_taste=list(station.get("music_taste") or []),
         tracks=[f"{t['title']} - {t['artist']}" for t in scenario.get("tracks") or []],

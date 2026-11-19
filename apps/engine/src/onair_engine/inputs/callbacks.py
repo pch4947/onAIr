@@ -2,6 +2,8 @@
 
 청취자가 적은 방송에서 주제 토크가 할 말이 떨어질 때 쓰는 소재다. 재생 시작이 확인된(REFLECTED) 입력만 넣는다 —
 L0~L2를 다 통과하고 실제로 방송된 글이다. 엔딩 돌아보기(closing_lookback)도 같은 기록을 쓴다.
+
+방송 도중의 다시 꺼내기는 운영 설정에서 꺼 두었다(chat_rules.callbacks, 2026-11-19) — 지금은 엔딩 돌아보기만 이 기록을 쓴다.
 """
 from __future__ import annotations
 
