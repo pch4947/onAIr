@@ -94,6 +94,15 @@ def test_every_ment_is_told_the_time_of_day(step):
     assert DAYTIME_RULE.split("{")[0] not in build_prompt(step, Material(track=dict(TRACK)), PROFILE).user
 
 
+def test_system_prompt_spells_out_the_dj_name():
+    """ "DJ 새벽다."만으로는 이름을 '새벽다'로 읽을 때가 있다 — 시간대 낱말 '새벽'이 프롬프트에 함께 나오면 더 그렇다."""
+    from onair_engine.domain import StationProfile
+
+    profile = StationProfile(dj_name="새벽", tone="차분한 존댓말", concept="심야 스터디 라디오")
+    system = build_prompt("opening_greeting", Material(), profile).system
+    assert system.startswith("당신은 라디오 스테이션 [심야 스터디 라디오]의 DJ 새벽다. DJ의 이름은 '새벽'이다. 말투는")
+
+
 def test_scheduler_puts_the_time_of_day_on_every_job(tmp_path):
     engine, _ = _engine(tmp_path, corners=["topic_talk"])
     scheduler = engine.scheduler
