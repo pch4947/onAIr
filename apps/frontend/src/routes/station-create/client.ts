@@ -1,6 +1,7 @@
 import type {
   NewsSection, Persona, PersonaFieldError, PersonaForm, StationFormat, StationInfo, TalkCorner, Voice,
 } from '../../shared/types'
+import type { TrackCandidate } from '../listen/trackClient'
 
 type WirePersona = Omit<Persona, 'musicTaste' | 'djName' | 'signaturePhrases'> & {
   music_taste: string[]; dj_name: string; signature_phrases: string[]
@@ -99,6 +100,10 @@ export function createStationClient(base: string, getToken: () => string | null)
         if (error instanceof StationApiError && error.status === 422) return { ok: false, errors: error.errors }
         throw error
       }
+    },
+    // 방송 만들기의 첫 노래 검색 (#346). 방송이 아직 없어 신청곡 검색(방송별)을 쓸 수 없다. 후보는 최대 3개
+    async searchFirstSong(query: string, signal?: AbortSignal): Promise<TrackCandidate[]> {
+      return (await request<{ candidates: TrackCandidate[] }>('/tracks/search', { query }, undefined, signal)).candidates
     },
     async createStation(input: StationInfo & { persona: Persona }, key: string): Promise<StationResult> {
       return (await request<{ station: StationResult }>('/stations', {
