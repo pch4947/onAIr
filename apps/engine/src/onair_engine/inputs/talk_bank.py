@@ -48,6 +48,7 @@ class BankItem:
     points: tuple[str, ...]
     format: str
     persona: str
+    kind: str = ""  # 이야기를 푸는 방식 (themes.yaml의 kinds) — 방식을 나누지 않고 만든 것은 빈 문자열
 
     def text(self) -> str:
         """임베딩할 글 — 큰 주제까지 넣어야 짧은 제목만으로 엉뚱한 주제에 걸리지 않는다."""

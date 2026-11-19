@@ -157,8 +157,23 @@ def test_shipped_dataset_loads_and_covers_every_cell():
     cells = {(item.format, item.persona) for item in items}
     assert cells == {(fmt, pid) for fmt in seed["formats"] for pid in [COMMON, *seed["personas"]]}
     assert set(talk_bank.load_personas(directory)) == set(seed["personas"])
-    assert {item.theme for item in items} <= set(seed["themes"])
+    assert {item.theme for item in items} == set(seed["themes"]), "빈 주제가 없다"
     assert all(len(item.points) >= bank_cli.MIN_POINTS for item in items)
+    assert {item.kind for item in items} == set(seed["kinds"]), "방식을 나눠 만든 것만 싣는다"
+    # 방송 하나가 보는 묶음(공통 + 프리셋 하나)에 주제마다 갈래가 한 칸 몫은 있고 방식이 섞여 있다.
+    # 가득 찬 묶음은 한 칸 몫의 두 배다 — 닮아서 버린 자리는 비워 두므로 다 차지 않은 묶음이 있다
+    for fmt, spec in seed["formats"].items():
+        for pid in seed["personas"]:
+            pools: dict[str, list] = {theme: [] for theme in seed["themes"]}
+            for item in items:
+                if item.format == fmt and item.persona in (COMMON, pid):
+                    pools[item.theme].append(item)
+            thin = [theme for theme, pool in pools.items()
+                    if len(pool) < spec["per_theme"] or len({item.kind for item in pool}) < 4]
+            assert not thin, f"{fmt}.{pid}: 갈래가 모자라거나 방식이 쏠린 주제 {thin[:5]}"
+        for theme in seed["themes"]:
+            titles = [item.title for item in items if item.format == fmt and item.theme == theme]
+            assert len(set(titles)) == len(titles), f"{fmt} {theme}: 같은 제목이 둘"
 
 
 # ── 방송별 사용 기록 ───────────────────────────────────────────────────
@@ -348,20 +363,45 @@ def test_refill_replaces_angles_dropped_for_reuse(tmp_path):
 # ── 데이터셋 만들기 ────────────────────────────────────────────────────
 
 def test_build_prompt_differs_for_common_and_persona_cells():
-    common = bank_cli.build_prompt(["겨울 간식", "시험 기간"], 4, "토크 방송이다.", None).user
-    assert "갈래 4개" in common and "- 토크 방송이다." in common and "어느 방송에서나" in common
+    common = bank_cli.build_prompt({"겨울 간식": ["", ""], "시험 기간": ["", ""]}, "토크 방송이다.", None).user
+    assert "갈래 2개" in common and "- 토크 방송이다." in common and "어느 방송에서나" in common
     assert '<data label="주제 목록">\n- 겨울 간식\n- 시험 기간' in common and "스테이션 컨셉" not in common
+    assert "이미 있는 갈래" not in common and '"kind"' not in common
     persona = {"concept": "심야 스터디 라디오", "tone": "차분한 존댓말", "description": "조용한 DJ",
                "forbidden": ["다그치기"]}
-    own = bank_cli.build_prompt(["겨울 간식"], 2, "음악 방송이다.", persona).user
+    own = bank_cli.build_prompt({"겨울 간식": [""]}, "음악 방송이다.", persona).user
     assert '<data label="스테이션 컨셉">\n심야 스터디 라디오\n조용한 DJ\n차분한 존댓말' in own
     assert "다음은 넣지 않는다: 다그치기" in own and "어느 방송에서나" not in own
+
+
+def test_build_prompt_asks_for_kinds_and_shows_what_exists():
+    kinds = {"장면": "한 장면을 따라간다.", "갈림": "갈리는 선택을 다룬다.", "요령": "요령을 모은다."}
+    text = bank_cli.build_prompt({"겨울 간식": ["장면", "갈림"], "시험 기간": ["갈림"]}, "토크 방송이다.", None, kinds=kinds,
+                                 existing={"겨울 간식": ["붕어빵", "호떡"], "시험 기간": [], "남의 주제": ["버림"]}).user
+    assert "방식마다 하나씩" in text and '<data label="주제 목록">\n- 겨울 간식: 장면, 갈림\n- 시험 기간: 갈림' in text
+    assert "  - 장면: 한 장면을 따라간다." in text and "  - 갈림: 갈리는 선택을 다룬다." in text
+    assert "요령을 모은다" not in text, "달라고 하지 않은 방식은 풀이하지 않는다"
+    assert '<data label="이미 있는 갈래">\n- 겨울 간식: 붕어빵 / 호떡\n</data>' in text and '"kind": "방식 이름"' in text
+
+
+def test_kinds_are_spread_so_one_broadcast_sees_them_all():
+    kinds = ["장면", "갈림", "요령", "달라짐", "어긋남", "사람"]
+    for theme_no in range(len(kinds) + 1):
+        common = bank_cli.kinds_for(kinds, 4, theme_no, 0)
+        assert len(set(common)) == 4
+        for persona_no in range(1, 6):
+            own = bank_cli.kinds_for(kinds, 4, theme_no, persona_no)
+            assert len(set(own)) == 4 and set(common) | set(own) == set(kinds), "공통 + 프리셋 하나에 여섯 방식이 다 있다"
+    assert bank_cli.kinds_for(kinds, 4, 0, 0) != bank_cli.kinds_for(kinds, 4, 1, 0), "주제마다 시작을 돌린다"
+    assert bank_cli.kinds_for([], 3, 0, 2) == ["", "", ""]
+    assert bank_cli.kinds_for(["장면", "갈림"], 3, 0, 1) == ["장면", "갈림", "장면"], "방식이 모자라면 돌려 쓴다"
 
 
 def test_parse_items_keeps_usable_angles_only():
     text = "결과:\n" + json.dumps({"themes": [
         {"theme": "겨울 간식", "angles": [
-            {"title": "붕어빵", "points": ["a", "b", "c"]},
+            {"kind": " 갈림 ", "title": "붕어빵", "points": ["a", "b", "c"]},
+            "갈래 아님",
             {"title": "말할 거리가 모자란 갈래", "points": ["a", "b"]},
             {"title": "연락처", "points": ["a", "b", "example 닷컴"]}]},
         {"theme": "이름을 바꿔 적은 주제", "angles": [{"title": "벼락치기", "points": ["a", "b", "c", "d"]}]},
@@ -373,6 +413,7 @@ def test_parse_items_keeps_usable_angles_only():
     assert [(i.theme, i.title, i.format, i.persona) for i in items] == [
         ("겨울 간식", "붕어빵", "talk", "night"), ("시험 기간", "벼락치기", "talk", "night")]
     assert items[0].id == bank_cli.item_id("talk", "night", "겨울 간식", "붕어빵") and items[0].id.startswith("talk.night.")
+    assert [i.kind for i in items] == ["갈림", ""]
     with pytest.raises(ValueError):
         bank_cli.parse_items("JSON 아님", ["겨울 간식"], "talk", COMMON, lambda t: None)
 
@@ -387,7 +428,8 @@ def test_build_writes_one_file_per_cell_and_search_reads_it_back(tmp_path, monke
     class ThemeLlm:
         async def complete(self, prompt, *, max_tokens):
             themes = [line[2:] for line in prompt.user.split('<data label="주제 목록">\n')[1].split("\n</data>")[0].splitlines()]
-            return json.dumps({"themes": [{"theme": t, "angles": [{"title": f"{t} 이야기", "points": ["a", "b", "c"]}]}
+            who = "밤 " if "스테이션 컨셉" in prompt.user else ""
+            return json.dumps({"themes": [{"theme": t, "angles": [{"title": f"{who}{t} 이야기", "points": ["a", "b", "c"]}]}
                                           for t in themes]}, ensure_ascii=False)
 
     monkeypatch.setattr(bank_cli, "make_llm", lambda *a, **kw: ThemeLlm())
@@ -400,11 +442,94 @@ def test_build_writes_one_file_per_cell_and_search_reads_it_back(tmp_path, monke
     assert talk_bank.load_personas(directory)["saebyeok"].startswith("심야 스터디 라디오. ")
     capsys.readouterr()
     bank_cli.cli([*common, "index"])
-    assert "이야깃거리 6건, 벡터 4건" in capsys.readouterr().out, "같은 글은 한 번만 임베딩한다 (주제 셋 + 프리셋 하나)"
+    assert "이야깃거리 6건, 벡터 7건" in capsys.readouterr().out, "이야깃거리 여섯 + 프리셋 하나"
     bank_cli.cli([*common, "search", "겨울 간식 이야기", "--min-score", "0.3",
                   "--persona", str(ENGINE_ROOT / "config" / "personas" / "saebyeok.yaml")])
     out = capsys.readouterr().out
     assert "닮은 프리셋: saebyeok" in out and "겨울 간식 — 겨울 간식 이야기" in out
+
+
+class KindLlm:
+    """달라고 한 자리마다 갈래를 하나씩 낸다. 제목은 titles(주제, 방식, 몇 번째 물음)가 정한다."""
+
+    def __init__(self, titles):
+        self.titles = titles
+        self.prompts: list[str] = []
+
+    async def complete(self, prompt, *, max_tokens):
+        self.prompts.append(prompt.user)
+        asked = sum("스테이션 컨셉" in p for p in self.prompts) if "스테이션 컨셉" in prompt.user else 0
+        lines = prompt.user.split('<data label="주제 목록">\n')[1].split("\n</data>")[0].splitlines()
+        groups = []
+        for line in lines:
+            theme, wanted = line[2:].split(": ")
+            groups.append({"theme": theme, "angles": [
+                {"kind": kind, "title": self.titles(theme, kind, asked), "points": ["a", "b", "c"]}
+                for kind in wanted.split(", ")]})
+        return json.dumps({"themes": groups}, ensure_ascii=False)
+
+
+def _kind_seed(directory, themes):
+    directory.mkdir(exist_ok=True)
+    (directory / "themes.yaml").write_text(yaml.safe_dump({
+        "personas": ["saebyeok"], "themes": themes, "kinds": {"장면": "장면이다.", "갈림": "갈림이다.", "요령": "요령이다."},
+        "formats": {"talk": {"per_theme": 2, "guide": "토크 방송이다."}}}, allow_unicode=True, sort_keys=False),
+        encoding="utf-8")
+
+
+def _build(directory, tmp_path, *extra):
+    bank_cli.cli(["--dir", str(directory), "--cache", str(tmp_path / "vectors.sqlite"), "build",
+                  "--personas-dir", str(ENGINE_ROOT / "config" / "personas"), "--safety-rules", str(RULES), *extra])
+
+
+def test_build_drops_a_look_alike_and_asks_for_that_slot_again(tmp_path, monkeypatch, capsys):
+    directory = tmp_path / "bank"
+    _kind_seed(directory, ["겨울 간식"])
+
+    def titles(theme, kind, asked):
+        # 공통: 장면 = 간식 이야기, 갈림 = 시험 이야기. 프리셋의 요령은 처음에 공통의 장면과 같은 축(간식)이고,
+        # 다시 물으면 다른 축(출근)을 낸다
+        if asked == 0:
+            return {"장면": "간식 굽는 골목", "갈림": "시험 전날의 선택"}[kind]
+        return {"요령": "간식 고르는 요령" if asked == 1 else "출근 전에 챙기는 요령", "장면": "노래 듣는 심야"}[kind]
+
+    llm = KindLlm(titles)
+    monkeypatch.setattr(bank_cli, "make_llm", lambda *a, **kw: llm)
+    monkeypatch.setattr(bank_cli, "make_embedder", lambda kind: AxisEmbedder())
+    _build(directory, tmp_path, "--embedder", "dummy")
+    items = load_items(directory)
+    assert {(i.persona, i.kind, i.title) for i in items} == {
+        (COMMON, "장면", "간식 굽는 골목"), (COMMON, "갈림", "시험 전날의 선택"),
+        ("saebyeok", "장면", "노래 듣는 심야"), ("saebyeok", "요령", "출근 전에 챙기는 요령")}
+    assert "겹쳐 버린 것 1건" in capsys.readouterr().out
+    again = llm.prompts[-1]
+    assert "- 겨울 간식: 요령\n" in again, "버린 자리만 다시 묻는다"
+    assert "- 겨울 간식: 간식 굽는 골목 / 시험 전날의 선택 / 노래 듣는 심야" in again, "이미 있는 갈래를 보여 준다"
+    cached = sqlite3.connect(tmp_path / "vectors.sqlite").execute("SELECT count(*) FROM vectors").fetchone()[0]
+    assert cached >= len(items), "만들면서 임베딩한 것을 벡터 캐시에 둔다"
+
+
+def test_build_fill_keeps_what_exists_and_makes_only_what_is_missing(tmp_path, monkeypatch, capsys):
+    directory = tmp_path / "bank"
+    _kind_seed(directory, ["겨울 간식"])
+    llm = KindLlm(lambda theme, kind, asked: f"{theme} {kind} {'프리셋' if asked else '공통'}")
+    monkeypatch.setattr(bank_cli, "make_llm", lambda *a, **kw: llm)
+    _build(directory, tmp_path)
+    first = {i.id for i in load_items(directory)}
+    assert len(first) == 4 and "제목이 같은 것만 거른다" in capsys.readouterr().out
+    # 주제를 하나 더하고, 있던 주제의 한 칸에서 하나를 지운다
+    _kind_seed(directory, ["겨울 간식", "시험 기간"])
+    path = directory / "items" / "talk.common.jsonl"
+    path.write_text(path.read_text(encoding="utf-8").splitlines()[0] + "\n", encoding="utf-8")
+    calls = len(llm.prompts)
+    _build(directory, tmp_path, "--fill")
+    items = load_items(directory)
+    assert first <= {i.id for i in items} and len(items) == 8
+    assert all("겨울 간식: 장면, 갈림" not in p for p in llm.prompts[calls:]), "있는 것은 다시 만들지 않는다"
+    # --fill이 없으면 처음부터 다시 만든다. 씨앗에서 뺀 주제의 것은 남기지 않는다
+    _kind_seed(directory, ["시험 기간"])
+    _build(directory, tmp_path, "--only", "talk.saebyeok")
+    assert {(i.theme, i.persona) for i in load_items(directory)} == {("시험 기간", COMMON), ("시험 기간", "saebyeok")}
 
 
 # ── 엔진 연결 ──────────────────────────────────────────────────────────
