@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -27,8 +28,12 @@ from .inputs.song_fit import SongFitJudge
 from .inputs.song_picks import Pick, SongPicker
 from .inputs.stories import StoryPool
 from .inputs.story_judge import StoryJudge
+from .inputs.talk_bank import TalkBank, persona_text, shared_bank
 from .inputs.topic_plan import TopicPlan, angle_count
+from .inputs.topic_usage import DAYS as TOPIC_REUSE_DAYS
+from .inputs.topic_usage import TopicUsage
 from .personas import unsafe_fields
+from .pipeline.embed import make_embedder
 from .pipeline.llm import make_llm
 from .pipeline.pipeline import GenerationPipeline
 from .pipeline.safety import SafetyChecker
@@ -85,6 +90,14 @@ class EngineSettings:
     # 반드시 답한다(apps/backend/app/dj_picks.py TOTAL_BUDGET_SEC) — 그보다 길어야 같은 자리에 두 번 제안하지 않는다
     song_pick_timeout_sec: float = 300.0
     vote_window_sec: float = 60.0  # 투표 창 길이 — 기준 세그먼트의 재생 시작부터 [예시]
+    # 이야깃거리 데이터셋 (#332, CORNER_DESIGN 5.9절) — 방송 시작 때 주제와 가까운 이야깃거리를 찾아 갈래 계획의
+    # 참고 자료로 넣는다. None이면 쓰지 않고 LLM만으로 갈래를 짠다
+    talk_bank_dir: Path | None = None
+    talk_bank_cache: Path = field(default_factory=lambda: Path("var/talk_bank.sqlite"))  # 벡터 캐시 — 지워도 된다
+    embedder: str = "dummy"  # dummy(글자 겹침, 키 불필요) | gemini(GEMINI_API_KEY 필요)
+    # 방송별로 쓴 갈래의 기록 — 기간 안에 다른 방송이 쓴 갈래를 규칙으로 뺀다. None이면 적지도 거르지도 않는다
+    topic_usage_path: Path | None = None
+    topic_reuse_days: float = TOPIC_REUSE_DAYS
     # 뉴스 피드 읽기를 바꿔 끼운다 (URL → 바이트). 시나리오 실행기와 테스트가 네트워크 없이 돌릴 때 쓴다
     rss_fetch: Callable[[str], bytes] | None = None
     # 엔진→백엔드 이벤트의 계약 버전. 2면 segment.submitted에 input_refs·reflection_levels를, request.state에
@@ -205,6 +218,9 @@ class StationEngine:
         )
         self.story_judge = StoryJudge(llm, self.topic, self.sources.stories, telemetry=self.telemetry)
         self._llm = llm
+        # 이 방송의 id — 방송별 사용 기록에서 "다른 방송"을 가린다. 스테이션 id는 고정 채널이라 쓸 수 없다 (#332)
+        self._broadcast_id = new_id("bc")
+        self._bank, self._usage = self._make_talk_sources()
         self.topic_plan = self._make_topic_plan(fmt)
         self.sources.votes.window_sec = settings.vote_window_sec
         self._dilemma_task: asyncio.Task | None = None  # 투표 고민 만들기 — 방송에 한 번
@@ -270,6 +286,21 @@ class StationEngine:
             on_refresh=self.telemetry.log_rss,
         )
 
+    def _make_talk_sources(self) -> tuple[TalkBank | None, TopicUsage | None]:
+        """이야깃거리 데이터셋과 방송별 사용 기록 (#332). 열지 못해도 방송은 한다 — 갈래를 LLM만으로 짠다."""
+        s = self.settings
+        if s.talk_bank_dir is None and s.topic_usage_path is None:
+            return None, None
+        try:
+            embedder = make_embedder(s.embedder)
+            bank = shared_bank(s.talk_bank_dir, embedder, s.talk_bank_cache) if s.talk_bank_dir else None
+            usage = (TopicUsage(s.topic_usage_path, embedder, days=s.topic_reuse_days)
+                     if s.topic_usage_path else None)
+        except (RuntimeError, ValueError, TypeError, KeyError, OSError, sqlite3.Error) as exc:  # 키 누락·파일 오류
+            logger.warning("TALK_BANK_OFF %s: %s", self.config.station_id, exc)
+            return None, None
+        return bank, usage
+
     def _make_topic_plan(self, fmt) -> TopicPlan | None:
         """호스트가 정한 주제가 있고 이 형식에 주제 토크가 있을 때만 — 컨셉을 갈래로 펼치지는 않는다."""
         talks = any({s.kind, s.again} & {"talk_open", "talk_resume"}
@@ -279,7 +310,9 @@ class StationEngine:
         return TopicPlan(
             self._llm, self.config.topic, count=angle_count(self.config.broadcast_minutes),
             violates=self._safety.check_l2, forbidden=self.config.profile.forbidden,
-            telemetry=self.telemetry,
+            telemetry=self.telemetry, bank=self._bank, usage=self._usage,
+            station_id=self.config.station_id, broadcast_id=self._broadcast_id, fmt=fmt.format,
+            persona=persona_text(self.config.profile.concept, self.config.profile.tone),
         )
 
     def _plan_dilemmas(self, fmt, corners: list[str] | None) -> None:
@@ -333,6 +366,8 @@ class StationEngine:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             self.telemetry.close()
+            if self._usage is not None:
+                self._usage.close()
 
     def stop(self) -> None:
         self._stop.set()

@@ -473,14 +473,15 @@ class OpenAiLlmClient:
 
 
 def make_llm(kind: str, *, model: str | None = None, base_url: str | None = None,
-             reasoning_effort: str | None = None) -> LlmClient:
+             reasoning_effort: str | None = None, timeout: float = 20.0) -> LlmClient:
+    """timeout은 호출 하나의 상한 — 긴 구조화 출력을 받는 도구(onair-bank)만 늘린다."""
     if kind == "dummy":
         return DummyLlmClient()
     if kind == "claude":
-        return ClaudeLlmClient(model or DEFAULT_CLAUDE_MODEL)
+        return ClaudeLlmClient(model or DEFAULT_CLAUDE_MODEL, timeout=timeout)
     if kind == "gemini":
-        return GeminiLlmClient(model or DEFAULT_GEMINI_MODEL)
+        return GeminiLlmClient(model or DEFAULT_GEMINI_MODEL, timeout=timeout)
     if kind == "openai":
         return OpenAiLlmClient(model, base_url=base_url or DEFAULT_OPENAI_BASE_URL,
-                               reasoning_effort=reasoning_effort)
+                               reasoning_effort=reasoning_effort, timeout=timeout)
     raise ValueError(f"unknown llm adapter: {kind}")

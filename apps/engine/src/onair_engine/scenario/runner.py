@@ -74,8 +74,15 @@ def _flag(value) -> bool:
     return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _bank_dir(value) -> Path | None:
+    return ENGINE_ROOT / "config" / "talk_bank" if _flag(value) else None
+
+
+# 이야깃거리 데이터셋은 기본으로 끈다 — 켜고 견줄 때: --variant bank:engine.talk_bank_dir=1,engine.embedder=gemini (#332).
+# 방송별 사용 기록(topic_usage)은 열지 않는다: 회차끼리 영향을 주면 견줄 수 없다
 ENGINE_KEYS = {"target_buffer_sec": float, "max_concurrent_generations": int, "contract_version": int,
-               "emit_song_picks": _flag}  # DJ 선곡을 끈 기준선: --set engine.emit_song_picks=0 (#295)
+               "emit_song_picks": _flag,  # DJ 선곡을 끈 기준선: --set engine.emit_song_picks=0 (#295)
+               "talk_bank_dir": _bank_dir, "embedder": str}
 STATION_KEYS = ("intensity",)
 # 회차의 루프 지연 P95가 이보다 크면 동시 실행이 타이밍 지표를 틀었다고 본다 [초기값] —
 # 2026-11-10 실측(flood, 더미 LLM): 30분 방송 동시 60회의 180~200ms에서는 세그먼트 생성 P95가 그대로였고
@@ -180,6 +187,7 @@ def _settings(args: argparse.Namespace, run_dir: Path) -> EngineSettings:
         emit_votes=True,  # 가짜 백엔드는 투표를 받는다 — 본 코너에 DJ 대 청취자가 있는 시나리오에서만 쓰인다
         # 가짜 백엔드는 선곡 제안도 받는다 — 플레이리스트가 있으면 엔진이 다음 곡을 늘 들고 있어 제안하지 않는다
         emit_song_picks=True,
+        talk_bank_cache=ENGINE_ROOT / "var" / "talk_bank.sqlite",  # 회차끼리 벡터 캐시를 나눠 쓴다
     )
     apply_llm_args(settings, args)
     return settings
