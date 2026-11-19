@@ -145,30 +145,39 @@ def _talk_job(scheduler, run) -> GenerationJob:
     return asyncio.run(scheduler._build_job(PlannedStep(corner, step, [{"source": "chat"}], None)))
 
 
-def test_reaction_is_told_as_mood_and_own_story_is_quoted(tmp_path):
+def _after_song_job(scheduler, run) -> GenerationJob:
+    """곡 뒤 첫 멘트 — 반응 분위기는 이 자리에서만 전한다 (T-019)."""
+    corner = scheduler.fmt.corner("topic_talk")
+    step = next(s for s in corner.steps if s.kind in ("talk_open", "talk_resume"))
+    run.after_song = True
+    scheduler._last_track = {"track_ref": "yt:abc", "title": "새벽 버스", "artist": "모의 밴드", "duration_ms": 200_000}
+    return asyncio.run(scheduler._build_job(PlannedStep(corner, step, [], None)))
+
+
+def test_own_story_is_quoted_and_reaction_waits_for_the_ment_after_the_song(tmp_path):
     scheduler, run = _scheduler_run(tmp_path, None)
     scheduler.enqueue_request(_chat(AGREE, rid="react"))
     scheduler.enqueue_request(_chat("저는 수능 날 도시락으로 김밥 싸 갔어요", rid="own", who="u2"))
     assert scheduler._talk_point(run) == {"source": "chat"}
     job = _talk_job(scheduler, run)
     assert [q.request_id for q in job.material.quotes] == ["own"]
-    assert [m.request_id for m in job.material.mood] == ["react"]
+    assert job.material.mood == [], "이야기 도중에는 반응 분위기를 전하지 않는다 — 하던 이야기에 끼어든다"
+    assert scheduler.pending_count == 1
+    assert [m.request_id for m in _after_song_job(scheduler, run).material.mood] == ["react"]
     assert scheduler.pending_count == 0
 
 
-def test_reactions_alone_open_a_talk_and_are_spaced_out(tmp_path):
+def test_reactions_alone_do_not_open_a_talk(tmp_path):
     scheduler, run = _scheduler_run(tmp_path, None)
     scheduler.enqueue_request(_chat("맞아요 맞아요", rid="a"))
     scheduler.enqueue_request(_chat("그 얘기 공감돼요", rid="b", who="u2"))
-    assert scheduler._talk_point(run) == {"source": "chat"}, "반응만 와 있어도 이야기 단계를 연다"
-    job = _talk_job(scheduler, run)
+    assert scheduler._talk_point(run) != {"source": "chat"}, "반응만으로는 이야기 단계를 열지 않는다"
+    job = _after_song_job(scheduler, run)
     assert job.material.quotes == [] and {m.request_id for m in job.material.mood} == {"a", "b"}
-    assert job.material.extra["material"] == "topic", "인용할 채팅이 없으면 다른 소재로 말하고 분위기를 붙인다"
 
     scheduler.enqueue_request(_chat("저도요 ㅋㅋ", rid="c", who="u3"))
-    assert _talk_job(scheduler, run).material.mood == [], "방금 분위기를 전했다 — 멘트마다 붙이지 않는다"
-    scheduler._last_mood_at -= scheduler.chat_rules.mood_gap_sec
-    assert [m.request_id for m in _talk_job(scheduler, run).material.mood] == ["c"]
+    assert _after_song_job(scheduler, run).material.mood == [], "방금 분위기를 전했다 — 간격을 둔다"
+    assert scheduler.pending_count == 0, "곡 뒤 첫 멘트를 놓친 반응은 받지 않는다"
 
 
 def test_question_reaction_is_still_quoted_one_by_one(tmp_path):
