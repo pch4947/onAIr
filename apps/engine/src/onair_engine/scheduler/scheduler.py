@@ -98,9 +98,9 @@ _MOOD_LEVEL = 1  # 기획서 4.2절 ① — 한 건씩 인용하지 않고 분�
 _OPENERS = ("talk_open", "talk_resume")  # 코너의 화제를 꺼내는 단계 — 갈래와 시간 맥락은 여기에만 붙인다
 # 곡 앞에서 물으려면 곡 뒤에 답을 받을 말 코너가 들어갈 시간이 남아 있어야 한다 [임시값]
 _ANSWER_ROOM_SEC = 120.0
-# 곡 전에 던진 질문으로 돌아오는 멘트에 싣는 답의 수 — 한 건만 받으면 나머지 답은 인용 간격에 걸려 대부분 못 받는다.
-# 계약 v2(input_refs)로 보낼 때만 여러 건을 싣는다 [임시값]
-_ANSWER_QUOTES = 3
+# 곡 전에 던진 질문으로 돌아오는 멘트에 주는 후보의 수 — 질문 뒤에 온 글을 이만큼 주고 답인 것만 세 건까지 고르게 한다
+# (steps.ANSWER_QUOTE_RULE). 계약 v2(input_refs)로 보낼 때만 여러 건을 싣는다 [임시값]
+_ANSWER_CANDIDATES = 6
 _ASKED_BEFORE = 5  # 곡 소개에 알려 주는 "이미 던진 질문"의 수
 # 질문을 던진 곡 소개가 제출되기를(앞 순번을) 기다리는 상한 — 넘으면 곡이 끝나는 때를 모르는 채로 진행한다
 _ASK_PUBLISH_WAIT_SEC = 30.0
@@ -948,7 +948,8 @@ class Scheduler:
             if point["source"] == "chat" and not material.quotes:  # 선별기가 고르지 않았다 — 다른 소재로
                 point = self._quiet_point(self._run) or {"source": "topic"}
             self._use_point(point, material)
-        if corner.mode("chat") == Mode.STEER:
+        # 답을 받는 멘트는 화제를 바꾸지 않는다 — 후보 가운데 어느 글을 받을지는 대본이 나와야 안다
+        if corner.mode("chat") == Mode.STEER and not material.extra.get("optional_quotes"):
             self._mark_steer(material)
         self._mark_aggregate(corner.mode("chat"), step_kind, material)
         if block is not None:
@@ -1210,18 +1211,21 @@ class Scheduler:
         if not self._quote_ready(chat_mode, step_kind, with_feature):
             return []
         limit = self._quote_limit(with_feature, step_kind)
-        if material.extra.get("asked") and limit and self._contract_version >= 2:
-            limit = max(limit, _ANSWER_QUOTES)  # 질문에 온 답은 한 멘트에서 여러 건 받는다
         now = time.time()
         topic_words = anchor.keywords | keywords(material.topic)
-        candidates = self.pool.quotable()
-        if asked_at := material.extra.get("asked_at"):
-            # 질문을 던진 뒤에 온 글이 답이다 — 있으면 그 가운데서 고른다. 없으면 기다리던 글을 받는다.
-            # 가리지 않았을 때는 답을 두고 질문보다 먼저 와 있던 글 세 건을 받았다 (시험 실행 20261119-133632)
-            candidates = [req for req in candidates if req.received_at >= asked_at] or candidates
+        candidates, last_requester = self.pool.quotable(), self._last_requester
+        asked_at = material.extra.get("asked_at")
+        replies = [req for req in candidates if req.received_at >= asked_at] if asked_at else []
+        if replies and limit and self._contract_version >= 2:
+            # 질문을 던진 뒤에 온 글을 후보로 넉넉히 주고, 답인 것만 대본이 골라 받는다 (steps.ANSWER_QUOTE_RULE).
+            # 먼저 와 있던 글은 다음 멘트가 받는다 — 가리지 않았을 때는 답을 두고 그 글들을 받았다 (20261119-133632).
+            # 방금 인용한 사람의 답도 받는다 — 연달아 받지 않는 규칙에 걸려 하나뿐인 답을 놓쳤다 (20261119-143036)
+            candidates, limit, last_requester = replies, _ANSWER_CANDIDATES, None
+            topic_words |= keywords(material.extra.get("asked"))
+            material.extra["optional_quotes"] = True
         selection = self.selector.select(
             candidates, limit=limit, arrivals=self.pool.recent_arrivals(now),
-            last_requester=self._last_requester, topic_words=topic_words)
+            last_requester=last_requester, topic_words=topic_words)
         self.telemetry.log_selection(selection, anchor.id)
         material.extra["selection"] = selection
         if not selection.picked:
@@ -1382,6 +1386,8 @@ class Scheduler:
                 for req in inputs:
                     if req in reflected:
                         await self._transition(req, RequestState.GENERATED)
+                    elif job.material.extra.get("optional_quotes") and req in job.material.quotes:
+                        await self._return_input(req)  # 답이 아니라서 받지 않았다 — 실패로 세지 않고 되돌린다
                     else:
                         await self._requeue_or_reject(req, job)
                 steering = _steering_quote(job)

@@ -285,6 +285,18 @@ def test_code_findings_and_judge_findings_merge_on_the_same_item(tmp_path):
     assert result["items"]["A2"]["passed"] is False and result["criteria"]["A"]["score"] == pytest.approx(2 / 3)
 
 
+def test_long_sentence_read_from_a_listener_message_is_not_the_djs(tmp_path):
+    """문자를 낭독한 문장은 DJ가 쓴 문장이 아니다 — 세면 문자를 많이 읽은 방송일수록 호흡 문제가 는다 (T-016)."""
+    message = ("새벽님 저는 추운 날 집 들어갈 때 트럭에서 파는 김 모락모락 나는 군밤 한 봉지 사서 까먹는 게 그렇게 좋더라고요 "
+               "껍질 까느라 손가락 끝은 시커멓게 되는데 달달하고 따뜻해서 방에서 이불 덮고 혼자 다 먹어요")
+    own = "어제 저녁에 집에 돌아오는 길에 골목 어귀에서 우연히 마주친 오래된 가게의 간판을 한참 바라보다가 문득 어린 시절에 할머니 손을 잡고 걷던 시장 골목이 떠올랐어요."
+    played = [*PLAYED[:6], _chat(40, "r9", "x", message),
+              _speech(41, f"귤러버 님의 문자입니다. {message}. 군밤 향이 여기까지 나는 것 같네요.", reflected=["r9"]),
+              _speech(42, own), *PLAYED[6:]]
+    found = _check(tmp_path, "long_sentence", played)
+    assert len(found) == 1 and found[0].quote.startswith("어제 저녁에"), "낭독한 문자는 빼고 DJ의 긴 문장만 센다"
+
+
 def test_wrong_blind_pick_is_a_personality_problem(tmp_path):
     result = _judge(tmp_path, FakeLlm({"pick": "천천히요"}))
     assert result["items"]["E2"]["passed"] is False and "고요(으)로 골랐다" in result["items"]["E2"]["findings"][0]["why"]

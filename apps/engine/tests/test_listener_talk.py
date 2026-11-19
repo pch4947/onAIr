@@ -12,6 +12,7 @@ import pytest
 
 from onair_engine.corners.run import CornerRun, PlannedStep, Thread
 from onair_engine.corners.steps import (
+    ANSWER_QUOTE_RULE,
     ASK_AFTER_QUOTE_RULE,
     ASK_NEW_RULE,
     ASK_RULE,
@@ -21,7 +22,9 @@ from onair_engine.corners.steps import (
     BACK_ANNOUNCE_RULE,
     DAYTIME_RULE,
     JOKE_RULE,
+    MULTI_QUOTE_RULE,
     PREV_TRACK,
+    QUOTE_RULE,
     STEER_RULE,
     STEERED_RULE,
     build_prompt,
@@ -35,6 +38,7 @@ from onair_engine.domain import (
     Material,
     Prompt,
     RequestState,
+    Script,
 )
 from onair_engine.format.clock import ClockEntry
 from onair_engine.inputs.chat_tone import ChatToneJudge, parse_tone
@@ -323,8 +327,15 @@ def test_ment_after_the_song_returns_to_the_question():
     assert ASKED_REPLIES_RULE in replied and ASKED_ALONE_RULE not in replied
     assert "답이 없다는 말은 하지 않고" in ASKED_REPLIES_RULE, "채팅은 왔는데 답인 글이 없을 수 있다"
     assert replied.index(ASKED) < replied.index("저는 호빵이요"), "질문을 먼저 알려 주고 채팅을 보여 준다"
+    assert "이 멘트는 곡 전에 무엇을 물었는지 한마디로 되짚는 문장으로 시작한다" in replied
+    assert QUOTE_RULE in replied and ANSWER_QUOTE_RULE not in replied
+    # 질문 뒤에 온 글을 후보로 주면 답인 것만 골라 받게 한다 — 다 받으라고 하지 않는다
+    picking = build_prompt("talk_resume", Material(
+        topic="겨울 간식", quotes=[_chat("저는 호빵이요"), _chat("내일 출근하기 싫어요", "c2")],
+        extra={**asked, "optional_quotes": True}), PROFILE).user
+    assert ANSWER_QUOTE_RULE in picking and QUOTE_RULE not in picking and MULTI_QUOTE_RULE not in picking
     block = build_prompt("talk_block", Material(topic="겨울 간식", extra={"asked": QUESTION, "parts": 4}), PROFILE).user
-    assert "첫 문단은 그 질문으로 돌아오며 시작한다" in block and ASKED_ALONE_RULE in block
+    assert "첫 문단은 곡 전에 무엇을 물었는지 한마디로 되짚는 문장으로 시작한다" in block and ASKED_ALONE_RULE in block
     # 답은 곡 뒤 첫 멘트가 다 받지 못한다 — 뒤 멘트가 받는 답도 질문과 함께 받는다
     later = build_prompt("talk", Material(topic="겨울 간식", quotes=[_chat("군고구마요")],
                                           extra={"asked_earlier": QUESTION}), PROFILE).user
@@ -353,20 +364,41 @@ def test_ment_after_the_song_waits_until_the_song_is_almost_over(tmp_path):
     assert scheduler._waits_for_answers(end - 43) and not scheduler._waits_for_answers(end - 41)
 
 
-@pytest.mark.parametrize(("extra", "contract", "taken"), [
-    ({"asked": QUESTION}, 2, 3),
-    ({}, 2, 1),  # 평소에는 참여 강도대로
-    ({"asked": QUESTION}, 1, 1),  # 계약 v1은 세그먼트에 입력 하나만 싣는다
+@pytest.mark.parametrize(("asked", "contract", "taken"), [
+    (True, 2, 6),  # 질문 뒤에 온 글을 후보로 넉넉히 준다 — 답인 것만 대본이 고른다
+    (False, 2, 1),  # 평소에는 참여 강도대로
+    (True, 1, 1),  # 계약 v1은 세그먼트에 입력 하나만 싣는다
 ])
-def test_answer_ment_takes_several_answers(tmp_path, extra, contract, taken):
+def test_answer_ment_gets_what_came_after_the_question_as_candidates(tmp_path, asked, contract, taken):
     scheduler, _ = _asking(tmp_path)
     scheduler._contract_version = contract
     run = _run(scheduler)
-    for i, body in enumerate(["저는 호빵이요", "군고구마 하나요", "붕어빵 팥으로요", "어묵 국물이 최고죠"]):
+    bodies = ["저는 호빵이요", "군고구마 하나요", "붕어빵 팥으로요", "어묵 국물이 최고죠", "전 귤이요", "호떡이죠",
+              "내일 출근하기 싫어요"]
+    for i, body in enumerate(bodies):
         scheduler.enqueue_request(_chat(body, f"c{i}"))
     anchor = scheduler.timeline.new_anchor("topic:1", "topic", ["겨울", "간식"])
-    material = Material(topic="겨울 간식", extra=dict(extra))
+    extra = {"asked": QUESTION, "asked_at": time.time() - 100} if asked else {}
+    material = Material(topic="겨울 간식", extra=extra)
     assert len(scheduler._take_quotes(run.spec.mode("chat"), "talk_resume", anchor, material)) == taken
+    assert bool(material.extra.get("optional_quotes")) is (taken > 1)
+    scheduler._mark_steer(material)
+
+
+def test_answer_from_the_listener_just_quoted_is_not_skipped(tmp_path):
+    """연달아 받지 않는 규칙에 걸려 하나뿐인 답을 놓치고 DJ가 혼자 답했다 (본 실행 20261119-143036)."""
+    scheduler, _ = _asking(tmp_path)
+    scheduler._contract_version = 2
+    run = _run(scheduler)
+    scheduler._last_requester = "same"
+    answer, other = _chat("전 무조건 팥이요", "a1"), _chat("새벽님은 고구마 먹을 때 뭐랑 드세요?", "q1")
+    answer.requester_ref = "same"
+    for chat in (answer, other):
+        scheduler.enqueue_request(chat)
+    anchor = scheduler.timeline.new_anchor("topic:1", "topic", ["겨울", "간식"])
+    material = Material(topic="겨울 간식", extra={"asked": QUESTION, "asked_at": time.time() - 100})
+    picked = scheduler._take_quotes(run.spec.mode("chat"), "talk_resume", anchor, material)
+    assert {req.request_id for req in picked} == {"a1", "q1"}
 
 
 def test_answer_ment_prefers_what_came_after_the_question(tmp_path):
@@ -386,8 +418,9 @@ def test_answer_ment_prefers_what_came_after_the_question(tmp_path):
     assert {req.request_id for req in scheduler.pool.quotable()} == {"old1", "old2"}, "먼저 와 있던 글은 뒤 멘트가 받는다"
     scheduler._last_quote_at = float("-inf")
     none_after = Material(topic="겨울 간식", extra={"asked": QUESTION, "asked_at": time.time() + 1})
-    assert len(scheduler._take_quotes(run.spec.mode("chat"), "talk_resume", anchor, none_after)) == 2, \
-        "답이 없으면 기다리던 글을 받는다"
+    assert len(scheduler._take_quotes(run.spec.mode("chat"), "talk_resume", anchor, none_after)) == 1, \
+        "질문 뒤에 온 글이 없으면 기다리던 글을 평소처럼 받는다"
+    assert "optional_quotes" not in none_after.extra
 
 
 def test_song_intro_is_told_what_was_already_asked(tmp_path):
@@ -452,6 +485,47 @@ def test_broadcast_asks_before_the_song_and_takes_the_answer_after_it(tmp_path):
     events = [e for (e,) in db.execute(
         "SELECT json_extract(data_json, '$.event') FROM event_log WHERE kind = 'question' ORDER BY at")]
     assert events == ["asked", "answered"]
+
+
+class PickyLlm(RecordingLlm):
+    """답을 받는 멘트에서 후보 가운데 하나만 받는다 — 실제 LLM이 답인 글만 고르는 것을 흉내 낸다."""
+
+    async def generate(self, prompt):
+        if ANSWER_QUOTE_RULE in prompt.user:
+            self.generated.append(prompt)
+            return Script(text="어느 쪽이 좋은지 여쭤봤죠. 저는 호빵이요라고 하신 분, 든든한 선택이네요.")
+        return await super().generate(prompt)
+
+
+def test_candidates_that_are_not_answers_go_back_without_a_failure(tmp_path):
+    engine, _ = _engine(tmp_path, dummy_tracks=False, corners=["topic_talk"], topic="겨울 간식")
+    scheduler = engine.scheduler
+    scheduler._contract_version = 2
+    scheduler.pipeline.llm = llm = PickyLlm()
+    engine.topic_plan._llm.delay_sec = 0
+    engine.on_track_queued({"track": dict(TRACK), "source": "playlist"})
+
+    async def listener():
+        while scheduler._asked is None:
+            await asyncio.sleep(0.005)
+        await engine.submit_request("chat", "저는 호빵이요", "u1", request_id="in_answer")
+        await engine.submit_request("chat", "내일 출근하기 싫어요", "u2", request_id="in_other")
+
+    async def scenario():
+        task = asyncio.create_task(listener())
+        await engine.run(max_segments=14)
+        task.cancel()
+
+    asyncio.run(scenario())
+    engine.telemetry.close()
+    answer = next(p.user for p in llm.generated if ANSWER_QUOTE_RULE in p.user)
+    assert "저는 호빵이요" in answer and "내일 출근하기 싫어요" in answer
+    assert scheduler._failures.get("in_other", 0) == 0, "답이 아니라서 받지 않은 글은 실패가 아니다"
+    db = sqlite3.connect(tmp_path / "metrics.sqlite")
+    results = dict(db.execute("SELECT request_ref, result FROM quote_log WHERE kind = 'candidate'"))
+    assert results == {"in_answer": "ok", "in_other": "unpicked"}
+    later = [p.user for p in llm.generated if "내일 출근하기 싫어요" in p.user and ANSWER_QUOTE_RULE not in p.user]
+    assert later and QUOTE_RULE in later[0], "받지 않은 글은 다음 멘트가 평소처럼 받는다"
 
 
 def test_dj_answers_the_question_when_nobody_does(tmp_path):
