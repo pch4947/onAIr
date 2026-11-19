@@ -66,3 +66,37 @@ class SearchApiTests(unittest.IsolatedAsyncioTestCase):
                 error = await client.post(path, json={'query': 'song'})
                 self.assertEqual(error.status_code, 502)
                 self.assertNotIn('private', error.text)
+
+    async def test_host_searches_before_a_broadcast_exists_and_guests_cannot(self):
+        """방송 만들기의 첫 노래 검색 (#346): 방송 기록을 읽지 않고, 방송을 만들 수 있는 계정만 쓴다."""
+        app = create_app(Settings('127.0.0.1', 3000, lavalink_password='internal-test'))
+        app.state.redis = SimpleNamespace(get=AsyncMock(side_effect=AssertionError('no station is read')))
+        path = '/api/tracks/search'
+        upstream = AsyncMock()
+        upstream.__aenter__.return_value = upstream
+        upstream.get.return_value = httpx.Response(200, json={'loadType': 'search', 'data': [track(), track(isStream=True)]})
+        who = {'id': 'guest', 'kind': 'guest'}
+        app.dependency_overrides[get_current_user] = lambda: who
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
+            with patch('app.music.httpx.AsyncClient', return_value=upstream):
+                self.assertEqual((await client.post(path, json={'query': 'song'})).status_code, 403)
+                upstream.get.assert_not_awaited()
+                for kind in ('member', 'admin'):
+                    with self.subTest(kind=kind):
+                        who = {'id': 'host', 'kind': kind}
+                        response = await client.post(path, json={'query': '  가수 노래  '})
+                        self.assertEqual(response.status_code, 200)
+                        self.assertEqual([c['url'] for c in response.json()['candidates']],
+                                         ['https://www.youtube.com/watch?v=abcdefghijk'])
+                        self.assertEqual(upstream.get.call_args.kwargs['params'], {'identifier': 'ytsearch:가수 노래'})
+                self.assertEqual((await client.post(path, json={'query': ' '})).status_code, 422)
+                upstream.get.side_effect = httpx.ReadTimeout('private')
+                self.assertEqual((await client.post(path, json={'query': 'song'})).status_code, 504)
+            app.dependency_overrides.clear()
+            self.assertEqual((await client.post(path, json={'query': 'song'})).status_code, 401)
+
+    async def test_search_before_a_broadcast_is_unavailable_without_the_search_service(self):
+        app = create_app(Settings('127.0.0.1', 3000))
+        app.dependency_overrides[get_current_user] = lambda: {'id': 'host', 'kind': 'member'}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
+            self.assertEqual((await client.post('/api/tracks/search', json={'query': 'song'})).status_code, 503)

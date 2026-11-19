@@ -114,6 +114,7 @@ class BackendTests(unittest.TestCase):
                           "/api/replays/{session_id}/bookmark", "/hls/{station_id}/vod/{session_id}/{filename}",
                           "/api/replays/{session_id}", "/api/stations/{station_id}/presence",
                           "/api/stations/{station_id}/tracks", "/api/stations/{station_id}/tracks/search",
+                          "/api/tracks/search",
                           "/api/notifications", "/api/notifications/{notification_id}/read",
                           "/api/notifications/read-all", "/api/notifications/{notification_id}",
                           "/api/stations/{station_id}/stream/state", "/api/stations/{station_id}/requests",

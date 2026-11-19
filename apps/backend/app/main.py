@@ -9,7 +9,7 @@ from .board import router as board_router
 from .notifications import router as notifications_router
 from .stations import router as stations_router
 from .replays import router as replays_router
-from .music import router as music_router
+from .music import router as music_router, search_router as track_search_router
 from .test_controls import router as test_controls_router
 from .votes import router as votes_router
 from .realtime import router as realtime_router
@@ -84,6 +84,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(stations_router)
     application.include_router(replays_router)
     application.include_router(music_router)
+    application.include_router(track_search_router)
     application.include_router(test_controls_router)
     application.include_router(votes_router)
     application.include_router(realtime_router)
