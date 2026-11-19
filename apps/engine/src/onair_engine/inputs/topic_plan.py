@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import re
+import sqlite3
 from dataclasses import dataclass
 
 from ..domain import Prompt
@@ -38,6 +39,10 @@ MAX_REFERENCES = 12
 # 1,189건에 24초). 그때는 이번 방송만 검색 없이 가고 캐시는 뒤에서 마저 채운다. 운영(--serve)은 엔진을 띄울 때
 # 미리 채운다 (main.py). 손으로 채우기: onair-bank index [예시]
 SEARCH_WAIT_SEC = 20.0
+# 데이터셋과 사용 기록은 갈래 계획을 돕는 것이다 — 이것들이 실패해도 계획은 예전처럼 LLM만으로 선다.
+# 임베딩 장애만이 아니라 sqlite 파일(벡터 캐시, 사용 기록)이 잠기거나 깨진 것도 여기서 받는다:
+# 계획은 뒤에서 도는 작업이라, 새어 나간 예외는 아무도 받지 않고 방송 내내 갈래가 없게 된다
+_SOURCE_ERRORS = (EmbedError, TimeoutError, sqlite3.Error, OSError)
 
 _SYSTEM = ("너는 라디오 방송 구성 작가다. 오늘 주제로 DJ가 방송 중에 꺼낼 이야기 갈래를 짠다.\n"
            + DATA_RULES)
@@ -184,7 +189,7 @@ class TopicPlan:
     async def run(self) -> None:
         """갈래를 만든다. 방송 시작과 함께 백그라운드로 돈다 — 첫 주제 토크 전에 끝나지 않으면 그 진입은 갈래 없이 간다."""
         references = await self._references()
-        avoid = await self._usage.nearby_titles(self._broadcast, self._topic) if self._usage else []
+        avoid = await self._aired_elsewhere()
         try:
             prompt = build_prompt(self._topic, self._count, self._forbidden, references=references, avoid=avoid)
             text = await self._llm.complete(prompt, max_tokens=self.max_tokens)
@@ -203,11 +208,16 @@ class TopicPlan:
         dropped = len(angles) - len(kept)
         reused: list[Angle] = []
         if self._usage is not None:
-            screened = await self._usage.screen(self._broadcast, kept, keep_min=MIN_ANGLES)
-            kept, reused, self._vectors = screened.kept, screened.reused, screened.vectors
-            if reused and method == "llm":
-                more, again = await self._refill(self._count - len(kept), kept, [*avoid, *(a.title for a in reused)])
-                kept, reused = kept + more, reused + again
+            try:
+                screened = await self._usage.screen(self._broadcast, kept, keep_min=MIN_ANGLES)
+            except _SOURCE_ERRORS as exc:  # 견줄 수 없으면 거르지 않는다
+                log.warning("갈래를 다른 방송과 견주지 못했다: %r", exc)
+            else:
+                kept, reused, self._vectors = screened.kept, screened.reused, screened.vectors
+                if reused and method == "llm":
+                    more, again = await self._refill(self._count - len(kept), kept,
+                                                     [*avoid, *(a.title for a in reused)])
+                    kept, reused = kept + more, reused + again
         self._angles = kept
         self.ready = True
         if self._telemetry is not None:
@@ -230,23 +240,38 @@ class TopicPlan:
             return [], []
         taken = {a.title for a in kept}
         angles = [a for a in angles if a.title not in taken and self._violates(a.text()) is None][:need]
-        screened = await self._usage.screen(self._broadcast, angles)
+        try:
+            screened = await self._usage.screen(self._broadcast, angles)
+        except _SOURCE_ERRORS as exc:
+            log.warning("다시 짠 갈래를 다른 방송과 견주지 못했다: %r", exc)
+            return angles, []
         self._vectors.update(screened.vectors)
         return screened.kept, screened.reused
+
+    async def _aired_elsewhere(self) -> list[str]:
+        """주제와 가까운, 다른 방송에서 다룬 갈래의 제목. 기록을 읽지 못하면 없이 간다."""
+        if self._usage is None:
+            return []
+        try:
+            return await self._usage.nearby_titles(self._broadcast, self._topic)
+        except _SOURCE_ERRORS as exc:
+            log.warning("다른 방송의 갈래를 읽지 못했다: %r", exc)
+            return []
 
     async def _references(self) -> list:
         """오늘 주제와 가까운 이야깃거리 — 다른 방송이 쓴 것은 뺀다. 검색이 실패하거나 늦으면 없이 간다."""
         if self._bank is None:
             return []
-        used = self._usage.used_items(self._broadcast) if self._usage else set()
         k = min(MAX_REFERENCES, self._count * REFERENCES_PER_ANGLE)
-        # 늦어도 검색을 끊지 않는다 — 뒤에서 벡터 캐시를 끝까지 채워야 다음 방송이 쓴다
-        search = asyncio.ensure_future(
-            self._bank.search(self._topic, fmt=self._fmt, persona=self._persona, k=k, exclude=used))
-        search.add_done_callback(lambda task: task.cancelled() or task.exception())  # 버린 결과의 예외를 거둔다
         try:
+            # 다른 방송이 쓴 것을 알 수 없으면 참고 자료 없이 간다 — 모르고 주면 같은 이야기를 또 한다
+            used = self._usage.used_items(self._broadcast) if self._usage else set()
+            # 늦어도 검색을 끊지 않는다 — 뒤에서 벡터 캐시를 끝까지 채워야 다음 방송이 쓴다
+            search = asyncio.ensure_future(
+                self._bank.search(self._topic, fmt=self._fmt, persona=self._persona, k=k, exclude=used))
+            search.add_done_callback(lambda task: task.cancelled() or task.exception())  # 버린 결과의 예외를 거둔다
             found = await asyncio.wait_for(asyncio.shield(search), SEARCH_WAIT_SEC)
-        except (EmbedError, TimeoutError) as exc:
+        except _SOURCE_ERRORS as exc:
             log.warning("이야깃거리 검색 실패, 참고 자료 없이 갈래를 짠다: %r", exc)
             if self._telemetry is not None:
                 self._telemetry.log_talk_bank(self._topic, None, error=repr(exc)[:200])

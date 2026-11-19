@@ -299,6 +299,28 @@ def test_plan_goes_on_without_references_when_search_fails(tmp_path):
     assert "429" in db.execute("SELECT error FROM talk_bank_log").fetchone()[0]
 
 
+def test_plan_still_plans_when_the_usage_or_cache_database_breaks(tmp_path):
+    # 기록 파일이 잠기거나 깨져도(sqlite 오류) 갈래 계획이 죽지 않는다 — 예전처럼 LLM만으로 짠다
+    reply = _reply({"title": "새로 짠 갈래", "points": ["a"]}, {"title": "둘째 갈래", "points": ["b"]})
+    usage = _usage(tmp_path)
+    usage.record("bc_other", "겨울 간식", Angle("남의 갈래", ("x",)), None)
+    usage._db.close()  # 닫힌 연결 — 읽을 때마다 sqlite3.ProgrammingError
+    plan, llm, telemetry = _plan(tmp_path, reply, bank=_bank(), usage=usage)
+    asyncio.run(plan.run())
+    assert plan.ready and plan.next_angle().title == "새로 짠 갈래"
+    assert "참고 이야깃거리" not in llm.prompts[0].user, "다른 방송이 쓴 것을 알 수 없으면 참고 자료 없이 짠다"
+    telemetry.close()
+
+    class BrokenCacheBank:
+        async def search(self, *args, **kw):
+            raise sqlite3.OperationalError("database is locked")
+
+    plan, llm, telemetry = _plan(tmp_path, reply, bank=BrokenCacheBank())
+    asyncio.run(plan.run())
+    assert plan.ready and plan.next_angle().title == "새로 짠 갈래"
+    telemetry.close()
+
+
 def test_next_broadcast_does_not_reuse_what_the_first_one_told(tmp_path):
     usage = _usage(tmp_path, threshold=0.9)
     first, _, t1 = _plan(tmp_path, _reply({"title": "밤샘 간식 고르기", "points": ["편의점 간식"], "source": 1},
