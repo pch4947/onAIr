@@ -68,7 +68,8 @@ def create_access_token(user: dict, secret: str) -> str:
 def public_user(user: dict) -> dict:
     kind = user.get("kind", "member")
     return {"id": user["id"], "email": user["email"], "name": user["name"], "createdAt": user["createdAt"],
-            "isGuest": kind == "guest", "isAdmin": kind == "admin"}
+            "isGuest": kind == "guest", "isAdmin": kind == "admin",
+            "defaultAnonymous": bool(user.get("defaultAnonymous", False))}
 
 
 def reject_reserved_name(name: str, request: Request) -> None:

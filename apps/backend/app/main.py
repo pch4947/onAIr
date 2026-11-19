@@ -3,6 +3,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .api import BroadcastState, router
+from .account import router as account_router
 from .auth import router as auth_router
 from .board import router as board_router
 from .notifications import router as notifications_router
@@ -77,6 +78,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                allow_headers=["Content-Type", "Idempotency-Key", "Authorization"])
     application.include_router(router)
     application.include_router(auth_router)
+    application.include_router(account_router)
     application.include_router(board_router)
     application.include_router(notifications_router)
     application.include_router(stations_router)

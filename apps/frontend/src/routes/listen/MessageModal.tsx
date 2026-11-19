@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { submitRequest } from '@/shared/api'
+import { useCurrentUser } from '@/shared/useCurrentUser'
 import { isUnauthorizedError, LoginExpiredNotice } from '@/routes/listen/LoginExpiredNotice'
 
 const MESSAGE_MAX_LENGTH = 200
@@ -16,7 +17,9 @@ interface MessageModalProps {
 
 export function MessageModal({ stationId, listenerName, onClose, onSubmitted }: MessageModalProps) {
   const [body, setBody] = useState('')
-  const [anonymous, setAnonymous] = useState(false)
+  // 계정 설정의 "기본으로 익명 보내기"(#325)를 처음 값으로 쓴다
+  const { data: currentUser } = useCurrentUser()
+  const [anonymous, setAnonymous] = useState(Boolean(currentUser?.defaultAnonymous))
   const sendMutation = useMutation({ mutationFn: submitRequest })
   const trimmed = body.trim()
 

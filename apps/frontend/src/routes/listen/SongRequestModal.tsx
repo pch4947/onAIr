@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { getAccessToken } from '@/shared/authToken'
 import { randomId } from '@/shared/randomId'
+import { useCurrentUser } from '@/shared/useCurrentUser'
 import {
   createTrackClient, normalizeYoutubeLink, SONG_NOT_FIT_MESSAGE, SongNotFitError, youtubeThumbnailFromRef,
 } from './trackClient'
@@ -38,7 +39,9 @@ interface SongRequestModalProps {
 export function SongRequestModal({ onClose, stationId, onSubmitted }: SongRequestModalProps) {
   const [link, setLink] = useState('')
   const [comment, setComment] = useState('')
-  const [anonymous, setAnonymous] = useState(false)
+  // 계정 설정의 "기본으로 익명 보내기"(#325)를 처음 값으로 쓴다
+  const { data: currentUser } = useCurrentUser()
+  const [anonymous, setAnonymous] = useState(Boolean(currentUser?.defaultAnonymous))
   const [validation, setValidation] = useState('')
   const [candidates, setCandidates] = useState<TrackCandidate[] | null>(null)
   const [selected, setSelected] = useState<TrackCandidate | null>(null)
