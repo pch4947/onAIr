@@ -273,6 +273,31 @@ def test_ment_after_the_song_waits_for_the_song_when_listeners_are_chatting(tmp_
     assert not scheduler._waits_for_song(now + 60), "곡 뒤 차례가 이야기 코너가 아니면 기다리지 않는다"
 
 
+def test_song_whose_intro_did_not_air_is_not_waited_for(tmp_path):
+    """곡 소개를 LLM이 거부하면 곡도 나가지 않는다 — 기다리면 곡 뒤 멘트가 늦어 무음이 난다 (T-017 본 실행)."""
+    scheduler, _ = _asking(tmp_path)
+    scheduler._last_chat_at = time.time()
+    spec = scheduler.fmt.corner("music_intro")
+    first = asyncio.run(scheduler._build_job(PlannedStep(spec, spec.steps[0], [dict(TRACK)], None)))
+    played = scheduler._song_hold
+    scheduler.timeline.append("seg_i", first.anchor, 10_000, time.time() - 200, track_ref="yt:abc", track_ms=120_000)
+    refused = asyncio.run(scheduler._build_job(PlannedStep(spec, spec.steps[0], [dict(TRACK, id=2)], None)))
+    assert scheduler._song_hold[0] == refused.anchor.id and scheduler._waits_for_song(time.time())
+
+    class Refuses:
+        async def run(self, job):
+            return None
+
+    scheduler.pipeline = Refuses()
+
+    async def scenario():
+        await scheduler._generate(refused, scheduler._reserve())
+
+    asyncio.run(scenario())
+    assert scheduler._song_hold == played, "앞 곡으로 되돌린다 — 반응이 곡 하나만 넘는 것은 그대로 지킨다"
+    assert not scheduler._waits_for_song(time.time())
+
+
 def test_reactions_cross_one_song_only(tmp_path):
     """곡 뒤에 이야기 없이 또 곡이 오면, 앞 곡 전에 온 반응은 두 곡 뒤에야 전해진다 — 받지 않는다."""
     scheduler, states = _with_reactions(tmp_path)

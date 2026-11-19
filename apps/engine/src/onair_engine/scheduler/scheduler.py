@@ -239,6 +239,7 @@ class Scheduler:
         self._ask_pending = False  # 질문을 던지는 곡 소개를 생성 중 — 곡 뒤 멘트를 미리 만들지 않는다
         self._asked: Asked | None = None  # 던졌고 아직 받지 않은 질문
         self._song_hold: tuple[str, float] | None = None  # 가장 최근에 소개한 곡의 (앵커, 소개를 만든 때)
+        self._song_before: tuple[str, float] | None = None  # 그 앞 곡 — 소개가 나가지 못하면 여기로 되돌린다
         self._questions: list[str] = []  # 오늘 던진 질문들 — 같은 것을 또 묻지 않게 곡 소개에 알려 준다
         # 백엔드가 알리는 재생 시작 시각은 청취자가 듣는 시각이다(방송 지연만큼 뒤). 알림을 받은 때와의 차이가 그 지연이다
         self._air_delay_sec = 0.0
@@ -936,6 +937,7 @@ class Scheduler:
             # 멘트가 전하게 된다 — "앞선 곡과 신청곡을 건너뛰며 지나간 화제를 불쑥 꺼낸다" (시험 실행 20261119-211622)
             if self._song_hold is not None:
                 await self._mark_expired(self.pool.drop_moods(before=self._song_hold[1]))
+            self._song_before = self._song_hold
             self._song_hold = (anchor.id, time.time())
         await self._expire_inputs(time.time())
         if point is not None and point["source"] == "block":  # 이미 쓴 덩어리의 다음 문단 — 합성만 한다
@@ -1453,6 +1455,8 @@ class Scheduler:
                         await self._requeue_or_reject(req, job)
         finally:
             self._jobs.pop(seq, None)
+            if not (sub and sub.music_ref) or seq in self._abandoned:
+                self._release_song(job)
             settled = seq in self._settling
             self._settling.discard(seq)
             if seq in self._abandoned:
@@ -1483,6 +1487,16 @@ class Scheduler:
                                 job.material.extra.get("ask_corner"))
             self._questions.append(question)
             self.telemetry.log_question("asked", question)
+
+    def _release_song(self, job: GenerationJob) -> None:
+        """곡 소개가 나가지 못했다(거부, 실패, 코너 바꿈) — 나가지 않을 곡이 끝나기를 기다리지 않는다.
+
+        두면 곡 뒤 멘트를 _ASK_PUBLISH_WAIT_SEC 동안 만들지 않아 무음이 난다 (본 실행 20261119-221335,
+        부적절한 채팅을 받은 곡 소개를 LLM이 거부한 뒤 4.2초). 앞 곡으로 되돌려, 반응이 곡 하나만 넘는 것은 지킨다.
+        """
+        hold = self._song_hold
+        if hold is not None and job.material.track and job.anchor is not None and hold[0] == job.anchor.id:
+            self._song_hold = self._song_before
 
     def _put_back_track(self, job: GenerationJob) -> None:
         """곡 소개 멘트가 나가지 못했다 — 소개하려던 곡을 다음 곡 소개 차례로 돌린다 (#216)."""
