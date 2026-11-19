@@ -84,10 +84,10 @@ def test_expired_input_is_logged_and_sent_to_backend(tmp_path):
 
     async def scenario():
         req = await engine.submit_request("story", "이 노래 좋아요", "u1")
-        # 분위기로 전하는 반응은 mood_window_sec(300초) 동안 후보다
+        # 분위기로 전하는 반응은 mood_window_sec(420초) 동안 후보다
         await engine.scheduler._expire_inputs(time.time() + 61)
         assert req.state != RequestState.EXPIRED
-        await engine.scheduler._expire_inputs(time.time() + 301)
+        await engine.scheduler._expire_inputs(time.time() + 421)
         return req
 
     req = asyncio.run(scenario())

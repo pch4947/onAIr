@@ -481,12 +481,17 @@ class Telemetry:
         self._db.commit()
 
     def log_chat_tone(self, req, tone: str, method: str) -> None:
-        """채팅 성격 판정 — 패널에만 남긴다. 보통 채팅은 남기지 않는다(대부분이 보통이다)."""
-        if tone == "plain" and method == "llm":
+        """채팅 성격 판정 — 패널에만 남긴다. 혼자 뜻이 통하는 보통 채팅은 남기지 않는다(대부분이 그렇다)."""
+        about = getattr(req, "about", None)
+        leaning = {"talk": "방금 들은 말에 기대는 글", "song": "곡 감상"}.get(about)
+        if tone == "plain" and method == "llm" and leaning is None:
             return
-        label = {"complaint": "불만 — 받지 않음", "joke": "농담", "plain": "판정 못 함 — 보통 채팅으로"}[tone]
+        label = {"complaint": "불만 — 받지 않음", "joke": "농담",
+                 "plain": "보통 채팅" if method == "llm" else "판정 못 함 — 보통 채팅으로"}[tone]
+        if leaning:
+            label += f" · {leaning}"
         self._event("chat_tone", f"채팅 성격 · \"{_excerpt(req.body)}\" · {label}",
-                    request_id=req.request_id, tone=tone, method=method)
+                    request_id=req.request_id, tone=tone, method=method, about=about)
         self._db.commit()
 
     def log_question(self, event: str, text: str) -> None:

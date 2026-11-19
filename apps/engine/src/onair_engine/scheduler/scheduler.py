@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from ..corners.run import CornerRun, MaterialSources, PlannedStep, Thread
 from ..corners.steps import BLOCK_STEP, STEP_KINDS
 from ..domain import (
+    ABOUT_SELF,
     QUOTE_LEVEL,
     TONE_COMPLAINT,
     TONE_JOKE,
@@ -50,7 +51,7 @@ from ..inputs.aggregate import chat_trend
 from ..inputs.callbacks import CallbackStore
 from ..inputs.classify import classify, keywords, steer_rule
 from ..inputs.on_air import OnAirTimeline
-from ..inputs.pool import QuotePool
+from ..inputs.pool import QuotePool, leans
 from ..inputs.router import BOARD_STORY, CHAT, MESSAGE, SONG_REQUEST, normalize_kind
 from ..inputs.rules import ChatRules
 from ..inputs.selector import RELEVANCE, QuoteSelector
@@ -237,6 +238,7 @@ class Scheduler:
         # 곡 앞에서 묻고 곡 뒤에 답을 받는다 (CORNER_DESIGN 7.7.2절)
         self._ask_pending = False  # 질문을 던지는 곡 소개를 생성 중 — 곡 뒤 멘트를 미리 만들지 않는다
         self._asked: Asked | None = None  # 던졌고 아직 받지 않은 질문
+        self._song_hold: tuple[str, float] | None = None  # 가장 최근에 소개한 곡의 (앵커, 소개를 만든 때)
         self._questions: list[str] = []  # 오늘 던진 질문들 — 같은 것을 또 묻지 않게 곡 소개에 알려 준다
         # 백엔드가 알리는 재생 시작 시각은 청취자가 듣는 시각이다(방송 지연만큼 뒤). 알림을 받은 때와의 차이가 그 지연이다
         self._air_delay_sec = 0.0
@@ -451,6 +453,11 @@ class Scheduler:
             req.tone = None
         if req.tone == TONE_COMPLAINT and self.pool.pop(req.request_id) is not None:
             await self._transition(req, RequestState.EXPIRED)
+        # 혼자 뜻이 통하는 글인지는 LLM의 판정이 규칙 분류보다 앞선다 (CORNER_DESIGN 5.1.5절)
+        if req.about == ABOUT_SELF:
+            req.chat_type = ChatType.STANDALONE
+        elif req.about is not None:
+            req.chat_type = ChatType.REACTION
 
     def on_track_started(self, track_ref: str, started_at: float) -> None:
         self._air_delay_sec = max(0.0, started_at - time.time())
@@ -576,7 +583,8 @@ class Scheduler:
                 continue
             if (ctx.inflight_generations >= self.max_concurrent
                     or ctx.generated_buffer_sec >= self.target_buffer_sec
-                    or self._steer_pending or self._ask_pending or self._waits_for_answers(ctx.now)):
+                    or self._steer_pending or self._ask_pending or self._waits_for_answers(ctx.now)
+                    or self._waits_for_song(ctx.now)):
                 self.telemetry.log_decision(ctx, Decision(action="wait"))
                 await asyncio.sleep(_IDLE_SLEEP_SEC)
                 continue
@@ -923,6 +931,8 @@ class Scheduler:
         if point is not None:
             material.items = []
         anchor = self._anchor_for(planned)
+        if step.items == "track":
+            self._song_hold = (anchor.id, time.time())
         await self._expire_inputs(time.time())
         if point is not None and point["source"] == "block":  # 이미 쓴 덩어리의 다음 문단 — 합성만 한다
             material.extra["material"] = "block"
@@ -933,7 +943,12 @@ class Scheduler:
         if step_kind == "talk":
             self._attach_asked(material)
         material.quotes = self._take_quotes(corner.mode("chat"), step_kind, anchor, material)
-        self._take_mood(corner.mode("chat"), step_kind, material)
+        # 반응을 뭉쳐서 전하는 자리는 곡 뒤 첫 멘트 하나다 — 이야기를 새로 여는 자리라 끊을 흐름이 없다.
+        # 그 멘트가 질문의 답을 받는 차례면 답만 받는다. 이 자리를 놓친 반응은 받지 않는다 (5.1.5절, T-017)
+        if material.extra.get("after_song"):
+            if not material.extra.get("asked"):
+                self._take_mood(corner.mode("chat"), step_kind, material)
+            await self._mark_expired(self.pool.drop_moods())
         if step_kind == "talk" and material.quotes and self._run is not None and self._run.asked:
             material.extra.setdefault("asked_earlier", self._run.asked)
         # 채팅 한 건을 받는 곡 소개에서는 받고 나서 묻는다. 여러 건이나 반응 분위기까지 받으면 멘트가 너무 길다
@@ -1086,6 +1101,22 @@ class Scheduler:
             return now - asked.at < _ASK_PUBLISH_WAIT_SEC
         return now < end - self._air_delay_sec - self.target_buffer_sec
 
+    def _waits_for_song(self, now: float) -> bool:
+        """청취자가 있으면 곡 뒤 첫 이야기 멘트를 곡이 끝나 갈 때 만든다 — 곡이 나가는 동안 온 반응을 받는다.
+
+        두면 곡 소개와 함께 미리 만들어, 곡 감상과 곡 직전의 말에 대한 반응이 곡 뒤 첫 멘트에 실리지 못한다.
+        곡 뒤 차례가 이야기 코너일 때만 기다린다(문자 소개처럼 긴 낭독은 합성이 오래 걸린다). 조용한 방송은
+        받을 반응이 없으니 기다리지 않는다. 시각 계산은 _waits_for_answers와 같다.
+        """
+        hold = self._song_hold
+        if hold is None or self._is_quiet(now) or not self._talk_comes_next():
+            return False
+        anchor_id, built_at = hold
+        end = self.timeline.track_end(anchor_id)
+        if end is None:  # 곡 소개가 아직 제출되지 않았다 — 잠깐만 기다린다
+            return now - built_at < _ASK_PUBLISH_WAIT_SEC
+        return now < end - self._air_delay_sec - self.target_buffer_sec
+
     def _attach_asked(self, material: Material) -> None:
         """곡 전에 던진 질문이 있으면 이 멘트가 받는다. 너무 오래된 질문은 접는다."""
         asked, self._asked = self._asked, None
@@ -1111,8 +1142,8 @@ class Scheduler:
         if run.block is not None and run.block_next < run.block.parts:
             run.block_next += 1
             return {"source": "block", "block": run.block, "part": run.block_next - 1}
-        # 반응만 와 있어도 이야기 단계를 연다 — 인용할 채팅이 없으면 다른 소재로 말하고 분위기를 붙인다
-        if self._quote_ready(run.spec.mode("chat"), "talk") or self._mood_ready(run.spec.mode("chat"), "talk"):
+        # 반응 분위기는 이야기 단계를 열지 않는다 — 곡 뒤 첫 멘트가 전한다 (_build_job)
+        if self._quote_ready(run.spec.mode("chat"), "talk"):
             return {"source": "chat"}
         return self._quiet_point(run)
 
@@ -1199,10 +1230,14 @@ class Scheduler:
             return min(self.intensity.quote_limit, _QUOTES_WITH_FEATURE)
         return self.intensity.quote_limit
 
+    def _may_quote(self, chat_mode, step_kind: str, with_feature: bool = False) -> bool:
+        """이 단계가 채팅을 받을 수 있다 — 코너 계약과 참여 강도가 허용한다."""
+        return (chat_mode in QUOTABLE and STEP_KINDS[step_kind].quotable
+                and self._quote_limit(with_feature) > 0)
+
     def _quote_ready(self, chat_mode, step_kind: str, with_feature: bool = False) -> bool:
         """지금 이 단계에 채팅을 인용할 수 있다 — 풀에 채팅이 있고 계약·참여 강도·인용 간격이 허용한다."""
-        return (bool(self.pool.quotable()) and chat_mode in QUOTABLE and STEP_KINDS[step_kind].quotable
-                and self._quote_limit(with_feature) > 0
+        return (bool(self.pool.quotable()) and self._may_quote(chat_mode, step_kind, with_feature)
                 and time.time() - self._last_quote_at >= self.intensity.quote_gap_sec)
 
     def _take_quotes(self, chat_mode, step_kind: str, anchor: Anchor,
@@ -1210,15 +1245,18 @@ class Scheduler:
         """코너 계약과 참여 강도가 허용하면 선별기가 고른다 (CORNER_DESIGN 5.1, 5.7절)."""
         # 계약 v1의 request_ref는 하나뿐이다 — v2로 보낼 때만 주 소재와 함께, 여러 건을 싣는다
         with_feature = bool(material.feature_ref)
-        if not self._quote_ready(chat_mode, step_kind, with_feature):
+        asked_at = material.extra.get("asked_at")
+        # 답은 질문에 기대는 글이다 — 한 건씩 받을 때를 놓친 글(분위기로만 전할 글)도 답 후보로는 본다
+        replies = (self.pool.answerable(asked_at)
+                   if asked_at and self._contract_version >= 2 and self._may_quote(chat_mode, step_kind, with_feature)
+                   else [])
+        if not replies and not self._quote_ready(chat_mode, step_kind, with_feature):
             return []
         limit = self._quote_limit(with_feature, step_kind)
         now = time.time()
         topic_words = anchor.keywords | keywords(material.topic)
         candidates, last_requester = self.pool.quotable(), self._last_requester
-        asked_at = material.extra.get("asked_at")
-        replies = [req for req in candidates if req.received_at >= asked_at] if asked_at else []
-        if replies and limit and self._contract_version >= 2:
+        if replies and limit:
             # 질문을 던진 뒤에 온 글을 후보로 넉넉히 주고, 답인 것만 대본이 골라 받는다 (steps.ANSWER_QUOTE_RULE).
             # 먼저 와 있던 글은 다음 멘트가 받는다 — 가리지 않았을 때는 답을 두고 그 글들을 받았다 (20261119-133632).
             # 방금 인용한 사람의 답도 받는다 — 연달아 받지 않는 규칙에 걸려 하나뿐인 답을 놓쳤다 (20261119-143036)
@@ -1389,7 +1427,10 @@ class Scheduler:
                     if req in reflected:
                         await self._transition(req, RequestState.GENERATED)
                     elif job.material.extra.get("optional_quotes") and req in job.material.quotes:
-                        await self._return_input(req)  # 답이 아니라서 받지 않았다 — 실패로 세지 않고 되돌린다
+                        if leans(req):  # 질문에 기대는 글인데 답으로 받지 않았다 — 받을 자리가 지났다
+                            await self._transition(req, RequestState.EXPIRED)
+                        else:  # 답이 아니라서 받지 않았다 — 실패로 세지 않고 되돌린다
+                            await self._return_input(req)
                     else:
                         await self._requeue_or_reject(req, job)
                 steering = _steering_quote(job)
