@@ -15,10 +15,11 @@ from datetime import datetime, timezone
 from typing import Annotated, Literal
 from urllib.parse import parse_qs, urlsplit
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from redis.exceptions import RedisError
 
+from .auth import get_broadcast_host
 from .messaging.contracts import Segment, validate_audio
 from .song_fit import song_fits
 from .station_runtime import station_runtime
@@ -26,6 +27,7 @@ from .stations import User
 from .streaming.tracks import MUSIC_SEGMENT_PREFIX, REGISTER, now_playing
 
 router = APIRouter(prefix='/api/stations')
+search_router = APIRouter(prefix='/api/tracks')
 logger = logging.getLogger(__name__)
 
 
@@ -162,6 +164,18 @@ async def search_tracks(station_id: str, body: TrackSearchInput, request: Reques
         raise HTTPException(503, 'Search service unavailable') from None
     except (ValueError, TypeError, AttributeError):
         raise HTTPException(502, 'Invalid search service response') from None
+
+
+@search_router.post('/search', response_model=TrackSearchResult,
+    responses={401: {'description': 'Login required'}, 403: {'description': 'Guests cannot create broadcasts'},
+               503: {'description': 'Search service unavailable'}, 504: {'description': 'Search timed out'}})
+async def search_before_broadcast(body: TrackSearchInput, request: Request,
+                                  host: Annotated[dict, Depends(get_broadcast_host)]):
+    """방송 만들기 화면에서 첫 노래를 검색으로 고른다 (#346). 방송이 아직 없어 방송별 검색을 쓸 수 없다.
+
+    방송을 만들 수 있는 계정만 쓴다(게스트 403). 응답은 방송별 검색과 같고, 고른 후보의 url을 first_song_url로 보낸다.
+    """
+    return TrackSearchResult(candidates=await search_youtube(request.app.state.settings, body.query))
 
 
 def youtube_id(value):
