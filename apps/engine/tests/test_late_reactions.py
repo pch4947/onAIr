@@ -336,3 +336,16 @@ def test_paraphrased_candidate_counts_as_taken():
     other = "곡 전에는 호빵 속 취향을 여쭤봤습니다. 저는 팥이 든 호빵을 좋아해요."
     assert not mentioned(chat, other)
     assert not mentioned("내일 출근하기 싫어요", "어느 쪽이 좋은지 여쭤봤죠. 저는 호빵이요라고 하신 분, 든든한 선택이네요.")
+
+
+def test_words_of_the_question_do_not_count_as_a_mention():
+    """답 후보와 대본은 질문의 낱말을 어차피 함께 쓴다 (본 실행 20261119-221335, T-017)."""
+    question = "군고구마는 손에 쥐고 먹기 좋은 작은 쪽을 고르시나요, 나눠 먹기 좋은 큰 쪽을 고르시나요?"
+    chat = "전 무조건 큰 거 골라서 집에 가자마자 엄마랑 반 갈라서 김치 올려 먹어요 ㅋㅋ"
+    script = ("아까는 군고구마 크기를 어떻게 고르는지 나눴죠. 작은 게 편하다고 하신 분, 걷는 길에도 잘 어울리겠어요. "
+              "큰 걸 골라 어머니와 나눠 먹는다고 하신 분, 김치까지 곁들이면 더 맛있게 남겠네요.")
+    assert mentioned(chat, script, question), "질문에 없는 낱말 둘(골라, 김치)이 겹친다 — 풀어서 받았다"
+    asked = "함께 나눌 때, 먼저 건네고 싶은 겨울 간식은 무엇인가요?"
+    unread = "새벽님은 친구랑 간식 나눠 먹을 때 보통 양보하는 편이세요? 아니면 먼저 고르세요?"
+    own = "함께 나눌 때 먼저 건네고 싶은 간식을 여쭈었지요. 저는 각자 좋아하는 걸 하나씩 골라 가운데 놓고 싶어요. 나눠 먹는 맛에 보태지니까요."
+    assert not mentioned(unread, own, asked), "DJ가 자기 답만 했다 — 겹친 것은 질문의 낱말뿐이다"
