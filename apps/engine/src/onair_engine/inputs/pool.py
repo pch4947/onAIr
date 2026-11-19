@@ -83,9 +83,13 @@ class QuotePool:
         return [req for req in self.items
                 if req.received_at >= since and req.tone != TONE_PENDING and req.about != ABOUT_SONG]
 
-    def drop_moods(self) -> list[ListenerRequest]:
-        """곡 뒤 첫 멘트가 지나갔다 — 그 자리를 놓친 반응은 받지 않는다. 뺀 글을 돌려준다."""
-        gone = [req for req in self.items if is_mood(req) and req.tone != TONE_PENDING]
+    def drop_moods(self, before: float | None = None) -> list[ListenerRequest]:
+        """곡 뒤 첫 멘트가 지나갔다 — 그 자리를 놓친 반응은 받지 않는다. 뺀 글을 돌려준다.
+
+        before를 주면 그 전에 온 반응만 뺀다.
+        """
+        gone = [req for req in self.items if is_mood(req) and req.tone != TONE_PENDING
+                and (before is None or req.received_at < before)]
         self.items = [req for req in self.items if req not in gone]
         return gone
 

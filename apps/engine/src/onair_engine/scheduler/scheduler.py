@@ -932,6 +932,10 @@ class Scheduler:
             material.items = []
         anchor = self._anchor_for(planned)
         if step.items == "track":
+            # 반응은 곡 하나만 넘긴다. 곡 뒤에 이야기 없이 또 곡이 오면(신청곡 등), 앞 곡 전에 온 반응은 두 곡 뒤의
+            # 멘트가 전하게 된다 — "앞선 곡과 신청곡을 건너뛰며 지나간 화제를 불쑥 꺼낸다" (시험 실행 20261119-211622)
+            if self._song_hold is not None:
+                await self._mark_expired(self.pool.drop_moods(before=self._song_hold[1]))
             self._song_hold = (anchor.id, time.time())
         await self._expire_inputs(time.time())
         if point is not None and point["source"] == "block":  # 이미 쓴 덩어리의 다음 문단 — 합성만 한다

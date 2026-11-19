@@ -273,6 +273,18 @@ def test_ment_after_the_song_waits_for_the_song_when_listeners_are_chatting(tmp_
     assert not scheduler._waits_for_song(now + 60), "곡 뒤 차례가 이야기 코너가 아니면 기다리지 않는다"
 
 
+def test_reactions_cross_one_song_only(tmp_path):
+    """곡 뒤에 이야기 없이 또 곡이 오면, 앞 곡 전에 온 반응은 두 곡 뒤에야 전해진다 — 받지 않는다."""
+    scheduler, states = _with_reactions(tmp_path)
+    spec = scheduler.fmt.corner("music_intro")
+    asyncio.run(scheduler._build_job(PlannedStep(spec, spec.steps[0], [dict(TRACK)], None)))
+    assert len(scheduler.pool.reactions()) == 2, "첫 곡은 넘긴다 — 곡 뒤 첫 멘트가 전한다"
+    scheduler.pool.add(_chat(SONG, "song2", about=ABOUT_SONG, anchor_id="track:2", anchor_seq=1))
+    asyncio.run(scheduler._build_job(PlannedStep(spec, spec.steps[0], [dict(TRACK)], None)))
+    assert [r.request_id for r in scheduler.pool.reactions()] == ["song2"]
+    assert {rid for rid, state in states if state == RequestState.EXPIRED} == {"agree", "song"}
+
+
 # ── 프롬프트와 인용 검사 ───────────────────────────────────────────────
 
 def test_mood_prompt_names_what_the_reactions_were_about():
