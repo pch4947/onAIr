@@ -94,6 +94,8 @@ GUEST_DOMAIN = "guest.onair.invalid"
 ADMIN_DOMAIN = "admin.onair.invalid"
 # 브라우저만 닫고 떠난 게스트도 이 시간이 지나면 닉네임을 돌려준다. 토큰 만료와 같다.
 GUEST_TTL_SECONDS = 24 * 3600
+# 탈퇴한 계정의 글·댓글·요청에 남는 이름. 다른 사람이 닉네임으로 쓰지 못하게 예약한다 (#344)
+WITHDRAWN_NAME = "탈퇴한 사용자"
 
 
 class UserStore:

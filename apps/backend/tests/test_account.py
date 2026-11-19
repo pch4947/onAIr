@@ -8,9 +8,11 @@ import unittest
 import uuid
 
 import httpx
+import jwt
 from redis.asyncio import Redis
 
 from app.account import WITHDRAWN_NAME
+from app.auth import JWT_ALGORITHM
 from app.board import LikeStore
 from app.board_stories import POSTS_KEY
 from app.config import Settings
@@ -72,6 +74,15 @@ class AccountApiTests(unittest.IsolatedAsyncioTestCase):
     def auth(self, user):
         return {'Authorization': f'Bearer {user["token"]}'}
 
+    def token_issued(self, user, seconds_ago):
+        """다른 기기에서 예전에 로그인해 둔 토큰."""
+        now = datetime.now(timezone.utc)
+        return {'token': jwt.encode({'sub': user['email'], 'uid': user['id'], 'iat': now - timedelta(seconds=seconds_ago),
+                                     'exp': now + timedelta(days=1)}, self.app.state.settings.jwt_secret, JWT_ALGORITHM)}
+
+    async def me_status(self, user):
+        return (await self.client.get('/api/auth/me', headers=self.auth(user))).status_code
+
     async def seed_content(self):
         """내 글·댓글(다른 사람 글에), 다른 사람 글·댓글, 이 채널의 내 요청(이름·익명)과 다른 사람 요청."""
         mine_post, other_post = 'p_mine_' + self.tag, 'p_other_' + self.tag
@@ -127,6 +138,13 @@ class AccountApiTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(name=name):
                 self.assertEqual((await self.client.post('/api/account/name', json={'name': name},
                                                           headers=self.auth(self.me))).status_code, 422)
+        # 탈퇴한 계정에 남는 이름은 누구도 닉네임으로 쓰지 못한다 (#344)
+        self.assertEqual((await self.client.post('/api/account/name', json={'name': f' {WITHDRAWN_NAME} '},
+                                                  headers=self.auth(self.me))).status_code, 409)
+        self.assertEqual((await self.client.post('/api/auth/guest', json={'name': WITHDRAWN_NAME})).status_code, 409)
+        self.assertEqual((await self.client.post('/api/auth/signup', json={
+            'email': f'acct_{uuid.uuid4().hex[:10]}@example.com', 'password': PASSWORD,
+            'name': WITHDRAWN_NAME})).status_code, 409)
         # 지금 이름 그대로는 바꿀 것이 없어도 성공한다
         same = await self.client.post('/api/account/name', json={'name': self.me['name']}, headers=self.auth(self.me))
         self.assertEqual(same.status_code, 200)
@@ -138,12 +156,37 @@ class AccountApiTests(unittest.IsolatedAsyncioTestCase):
         short = await self.client.post('/api/account/password', json={'currentPassword': PASSWORD, 'newPassword': 'short'},
                                        headers=self.auth(self.me))
         self.assertEqual(short.status_code, 422)
+        elsewhere = self.token_issued(self.me, 60)
+        self.assertEqual(await self.me_status(elsewhere), 200)
         ok = await self.client.post('/api/account/password', json={'currentPassword': PASSWORD, 'newPassword': 'newpass1234'},
                                     headers=self.auth(self.me))
         self.assertEqual(ok.status_code, 204)
         login = lambda pw: self.client.post('/api/auth/login', json={'email': self.me['email'], 'password': pw})  # noqa: E731
         self.assertEqual((await login(PASSWORD)).status_code, 401)
-        self.assertEqual((await login('newpass1234')).status_code, 200)
+        again = await login('newpass1234')
+        self.assertEqual(again.status_code, 200)
+        # 바꾸기 전에 발급된 다른 기기의 토큰은 버린다. 바꾼 이 기기와 새로 로그인한 토큰은 그대로 쓴다 (#344)
+        self.assertEqual(await self.me_status(elsewhere), 401)
+        self.assertEqual(await self.me_status(self.me), 200)
+        self.assertEqual(await self.me_status({'token': again.json()['accessToken']}), 200)
+        # 한 번 더 바꾸면 방금까지 쓰던 다른 토큰도 버려진다
+        second = {'token': again.json()['accessToken']}
+        stale = self.token_issued(self.me, 30)
+        self.assertEqual((await self.client.post('/api/account/password', headers=self.auth(second), json={
+            'currentPassword': 'newpass1234', 'newPassword': 'thirdpass1234'})).status_code, 204)
+        self.assertEqual(await self.me_status(stale), 401)
+        self.assertEqual(await self.me_status(second), 200)
+
+    async def test_token_of_a_deleted_account_does_not_open_a_new_one_with_the_same_email(self):
+        self.assertEqual((await self.client.request('DELETE', '/api/account', json={'password': PASSWORD},
+                                                    headers=self.auth(self.me))).status_code, 204)
+        self.assertEqual(await self.me_status(self.me), 401)
+        again = await self.client.post('/api/auth/signup', json={
+            'email': self.me['email'], 'password': 'another1234', 'name': '다시' + self.tag})
+        self.assertEqual(again.status_code, 201, again.text)
+        self.assertNotEqual(again.json()['user']['id'], self.me['id'])
+        self.assertEqual(await self.me_status(self.me), 401)  # 탈퇴 전 토큰 (#344)
+        self.assertEqual(await self.me_status({'token': again.json()['accessToken']}), 200)
 
     async def test_default_anonymous_preference(self):
         me = await self.client.get('/api/auth/me', headers=self.auth(self.me))

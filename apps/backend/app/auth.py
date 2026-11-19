@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 from redis.exceptions import RedisError
 
-from .users import EmailAlreadyExists, NameAlreadyExists
+from .users import WITHDRAWN_NAME, EmailAlreadyExists, NameAlreadyExists
 
 router = APIRouter(prefix="/api/auth")
 ACCESS_TOKEN_TTL = timedelta(days=7)
@@ -74,8 +74,21 @@ def public_user(user: dict) -> dict:
 
 def reject_reserved_name(name: str, request: Request) -> None:
     # 어드민 닉네임을 다른 사람이 먼저 가져가면 그 어드민이 참가할 수 없게 된다
-    if name.strip() in request.app.state.settings.admin_pins.values():
+    if name.strip() == WITHDRAWN_NAME or name.strip() in request.app.state.settings.admin_pins.values():
         raise HTTPException(409, "Name already taken")
+
+
+def token_matches(payload: dict, user: dict) -> bool:
+    """토큰이 지금 이 계정의 것인가 (#344). 이메일만 보면 탈퇴한 뒤 같은 이메일로 다시 가입한 계정에 옛 토큰이 통한다.
+    비밀번호를 바꾸면 그 전에 발급된 토큰은 버린다 — 바꾼 요청에 쓴 토큰(keptTokenIat)만 남긴다."""
+    if payload.get("uid") != user["id"]:
+        return False
+    changed = user.get("passwordChangedAt")
+    if changed is None:
+        return True
+    issued = payload.get("iat")
+    # iat는 초 단위라, 바꾼 바로 그 초에 새로 로그인한 토큰까지 받는다
+    return isinstance(issued, (int, float)) and (issued >= int(changed) or issued == user.get("keptTokenIat"))
 
 
 async def get_current_user(request: Request,
@@ -97,6 +110,8 @@ async def get_current_user(request: Request,
         raise HTTPException(503, "Redis unavailable") from None
     if user is None:
         raise HTTPException(401, "User not found")
+    if not token_matches(payload, user):
+        raise HTTPException(401, "Invalid or expired token")
     return user
 
 

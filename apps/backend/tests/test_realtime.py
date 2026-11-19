@@ -240,6 +240,11 @@ class TokenTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await user_id_from(app, None))
         gone = create_access_token({'email': 'gone@example.com', 'id': 'u9'}, 'secret')
         self.assertIsNone(await user_id_from(app, {'type': 'auth', 'token': gone}))
+        # 탈퇴한 뒤 같은 이메일로 다시 가입한 계정에 옛 토큰은 통하지 않는다 (#344)
+        former = create_access_token(dict(USER, id='u0'), 'secret')
+        self.assertIsNone(await user_id_from(app, {'type': 'auth', 'token': former}))
+        app.state.users = FakeUsers(dict(USER, passwordChangedAt=4102444800.0))  # 비밀번호를 바꾸기 전 토큰
+        self.assertIsNone(await user_id_from(app, {'type': 'auth', 'token': token}))
 
 
 class EndpointTests(unittest.TestCase):

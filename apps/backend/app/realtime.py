@@ -21,7 +21,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from redis.exceptions import RedisError
 
 from .api import public_request
-from .auth import JWT_ALGORITHM
+from .auth import JWT_ALGORITHM, token_matches
 from .station_runtime import ensure_runtimes
 from .streaming.tracks import now_playing
 from .votes import close_due, current_vote
@@ -200,7 +200,7 @@ async def user_id_from(app, message) -> str | None:
         return None
     async with asyncio.timeout(3):
         user = await app.state.users.get_by_email(payload['sub'])
-    return user['id'] if user else None
+    return user['id'] if user and token_matches(payload, user) else None
 
 
 async def receive_json_or_none(websocket):
