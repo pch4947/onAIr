@@ -87,7 +87,8 @@ def test_every_ment_is_told_the_time_of_day(step):
     """화제를 꺼내는 단계에만 시각을 넣었더니 그 밖의 멘트가 새벽 4시에 "오늘 저녁"이라고 했다 (T-016)."""
     extra = {"daytime": {"part": "새벽", "clock": "4시쯤", "others": "아침이나 낮, 저녁"}}
     user = build_prompt(step, Material(topic="겨울 간식", track=dict(TRACK), extra=extra), PROFILE).user
-    assert "방송 시간대는 새벽이다(4시쯤)." in user and "아침이나 낮, 저녁처럼 말하지 않는다" in user
+    assert "방송 시간대: 새벽 4시쯤." in user and "아침이나 낮, 저녁처럼 말하지 않는다" in user
+    assert "새벽이다" not in user, "DJ 이름이 '새벽'이면 '새벽다'로 엉킨다 — 시간대 낱말에 '이다'를 붙이지 않는다"
     assert "일부러 넣지 않는다" in user, "시간대를 말하라는 지시가 아니다 — 알려만 주면 멘트마다 시간대를 말한다"
     assert detect_step(user) == step
     assert DAYTIME_RULE.split("{")[0] not in build_prompt(step, Material(track=dict(TRACK)), PROFILE).user
