@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import logging
 import os
+import sqlite3
 from pathlib import Path
 
 import yaml
@@ -12,7 +13,10 @@ from dotenv import load_dotenv
 
 from .domain import StationConfig, StationProfile
 from .engine import EngineSettings
+from .inputs.talk_bank import shared_bank
+from .inputs.topic_usage import DAYS as TOPIC_REUSE_DAYS
 from .manager import EngineManager
+from .pipeline.embed import make_embedder
 from .pipeline.llm import make_llm
 from .pipeline.safety import SafetyChecker
 from .pipeline.tts import list_gemini_voices
@@ -82,6 +86,11 @@ def load_config(path: Path) -> tuple[StationConfig, EngineSettings]:
         emit_votes=bool(pipe.get("emit_votes", False)),
         emit_song_picks=bool(pipe.get("emit_song_picks", False)),
         vote_window_sec=float(pipe.get("vote_window_sec", 60.0)),
+        talk_bank_dir=Path(pipe["talk_bank"]) if pipe.get("talk_bank") else None,
+        talk_bank_cache=Path(pipe.get("talk_bank_cache", "var/talk_bank.sqlite")),
+        embedder=pipe.get("embedder", "dummy"),
+        topic_usage_path=Path(pipe["topic_usage"]) if pipe.get("topic_usage") else None,
+        topic_reuse_days=float(pipe.get("topic_reuse_days", TOPIC_REUSE_DAYS)),
         tts=pipe.get("tts", "dummy"),
         tts_voice=pipe.get("tts_voice"),
         tts_cache_dir=Path(pipe["tts_cache_dir"]) if pipe.get("tts_cache_dir") else None,
@@ -120,6 +129,16 @@ def apply_llm_args(settings: EngineSettings, args: argparse.Namespace) -> None:
         settings.llm_reasoning_effort = args.llm_reasoning_effort
 
 
+async def _warm_talk_bank(settings: EngineSettings) -> None:
+    """이야깃거리 벡터 캐시를 미리 채운다 (#332) — 배포 뒤 첫 방송이 검색을 기다리다 놓치지 않게."""
+    try:
+        made = await shared_bank(settings.talk_bank_dir, make_embedder(settings.embedder),
+                                 settings.talk_bank_cache).index()
+        logger.info("TALK_BANK_READY 새로 만든 벡터 %d건", made)
+    except (RuntimeError, ValueError, TypeError, KeyError, OSError, sqlite3.Error) as exc:  # 키 누락·임베딩 실패·파일 오류
+        logger.warning("TALK_BANK_WARM_FAILED %s", exc)
+
+
 async def _serve(manager: EngineManager, settings: EngineSettings, *, with_stations: bool) -> None:
     """엔진 REST(+ engine:control 소비). 둘 중 하나가 끝나면 함께 끝낸다."""
     from .api import create_app, serve_api  # fastapi는 선택 의존성 — 쓸 때만 불러온다
@@ -134,6 +153,9 @@ async def _serve(manager: EngineManager, settings: EngineSettings, *, with_stati
         logger.warning("ONAIR_ENGINE_TOKEN이 없어 엔진 REST를 인증 없이 엽니다 (루프백 전용)")
     app = create_app(manager, drafter, settings, settings.transport_token)
     tasks = [asyncio.create_task(serve_api(app, settings))]
+    if with_stations and settings.talk_bank_dir is not None:
+        warm = asyncio.create_task(_warm_talk_bank(settings))  # 끝나기를 기다리지 않는다 — 실패해도 방송은 한다
+        warm.add_done_callback(lambda task: task.cancelled() or task.exception())
     if with_stations:
         tasks.append(asyncio.create_task(
             manager.serve(RedisControlChannel(settings.transport_redis_url))))
@@ -161,6 +183,8 @@ def cli(argv: list[str] | None = None) -> None:
     add_llm_args(parser)
     parser.add_argument("--tts", choices=["dummy", "google", "edge", "gemini", "cartesia"], default=None,
                         help="설정 파일의 pipeline.tts를 덮어쓴다")
+    parser.add_argument("--embedder", choices=["dummy", "gemini"], default=None,
+                        help="설정 파일의 pipeline.embedder를 덮어쓴다 (이야깃거리 검색, #332)")
     parser.add_argument("--list-voices", action="store_true",
                         help="Gemini 보이스 목록(ID·이름·성별·한국어 여부)을 출력하고 종료 — "
                              "pipeline.tts_voice에 쓸 ID")
@@ -194,6 +218,8 @@ def cli(argv: list[str] | None = None) -> None:
     apply_llm_args(settings, args)
     if args.tts:
         settings.tts = args.tts
+    if args.embedder:
+        settings.embedder = args.embedder
     if args.transport:
         settings.transport_kind = args.transport
     if args.backend_url:

@@ -31,6 +31,16 @@ pipeline:
                               # 플레이리스트가 있는 방송에서는 제안하지 않는다. 문제가 생기면 false로 되돌린다 —
                               # 그러면 플레이리스트가 빈 방송은 다시 곡 없이 말만 한다
   # vote_window_sec: 60       # 투표 창 길이(초) — 고민을 소개하는 멘트의 재생 시작부터
+  talk_bank: config/talk_bank # 이야깃거리 데이터셋 (#332, CORNER_DESIGN 5.9절) — 방송 시작 때 주제와 가까운 이야깃거리를
+                              # 임베딩으로 찾아 갈래 계획의 참고 자료로 넣는다. 지우면 LLM만으로 갈래를 짠다.
+                              # 엔진만 바뀌므로 백엔드 배포를 기다리지 않는다
+  embedder: gemini            # dummy(글자 겹침 — 흐름 확인용, 사실상 찾지 못한다) | gemini(GEMINI_API_KEY 필요).
+                              # 키가 없으면 경고만 남기고 데이터셋 없이 방송한다. 실행 시 --embedder로 바꿀 수 있다
+  # talk_bank_cache: var/talk_bank.sqlite  # 벡터 캐시. 지워도 된다 — 없는 것만 다시 임베딩한다 (7,089건에 5분쯤).
+                              # 운영(--serve)은 엔진을 띄울 때 미리 채운다. 손으로 채우기: onair-bank index --embedder gemini
+  topic_usage: var/topic_usage.sqlite  # 방송별로 쓴 갈래의 기록 — 기간 안에 다른 방송이 쓴 갈래를 규칙으로 뺀다.
+                              # 지우면 적지도 거르지도 않는다. 기록을 비우려면 파일을 지운다 (리허설을 여러 번 한 뒤 등)
+  topic_reuse_days: 30        # [임시값] 이 기간이 지난 갈래는 다시 써도 된다
   emit_corner_format: true    # corner.changed에 형식(format)을 싣는다 — 방송 중 형식 전환 때 화면이 소리에 맞춰 바뀐다 (#260).
                               # 백엔드가 이 필드를 받게 배포돼(PR #284) 2026-11-15에 켰다. 받지 않는 백엔드와 켜면
                               # corner.changed가 통째로 격리된다
