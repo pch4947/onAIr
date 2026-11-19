@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Callable
 
-from ..domain import ChatType, ListenerRequest
+from ..domain import TONE_PENDING, ChatType, ListenerRequest
 
 _MAX_ANCHOR_GAP = 1  # 반응 대상은 재생될 때 현재 또는 바로 앞 앵커여야 한다
 # 무엇에 대한 말인지가 글에 없는 반응 — 대상을 가리키기만 하거나("그 말"), 짧은 감탄이다.
@@ -54,12 +54,12 @@ class QuotePool:
         return None
 
     def quotable(self) -> list[ListenerRequest]:
-        """한 건씩 인용할 수 있는 채팅."""
-        return [req for req in self.items if not is_mood(req)]
+        """한 건씩 인용할 수 있는 채팅. 성격 판정을 기다리는 채팅은 아직 후보가 아니다 (inputs/chat_tone.py)."""
+        return [req for req in self.items if not is_mood(req) and req.tone != TONE_PENDING]
 
     def reactions(self) -> list[ListenerRequest]:
         """분위기로만 전하는 반응."""
-        return [req for req in self.items if is_mood(req)]
+        return [req for req in self.items if is_mood(req) and req.tone != TONE_PENDING]
 
     def recent_arrivals(self, now: float) -> int:
         """최근 W 동안 도착한 입력 수 — 상황(뜸함·보통·폭주) 판단 기준 (5.7절)."""

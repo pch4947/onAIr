@@ -231,7 +231,7 @@ class ExperimentSpec(BaseModel):
 
 | 순서 | 블록 | 주입 주체 | 현재 코드 |
 |---|---|---|---|
-| 1 | 정체성·컨셉 | persona | `system_prompt()`의 "당신은 … DJ {dj_name}다" — **있음** |
+| 1 | 정체성·컨셉 | persona | `system_prompt()`의 "당신은 … DJ {dj_name}다. DJ의 이름은 '{dj_name}'이다." — **있음**. 이름을 따로 한 번 더 적는다 — 앞 문장만 있으면 이름을 '새벽다'로 읽을 때가 있다(ENGINE_TUNING_LOG T-016) |
 | 2 | 말투 규칙 + few-shot 예시 | persona | `말투는 {tone}` + 입버릇(빈도 제한) + `examples` 데이터 블록 — **있음** |
 | 3 | 금지 사항 | persona | `forbidden` — **있음** |
 | 4 | 출력 형식 + 이번 세그먼트의 시간 예산 | 편성 관리자 / 코너 | 출력 형식은 `SPOKEN_RULES` — **있음**. 시간 예산은 코너 user 프롬프트의 "N문장 이내"로만 표현 — **부분** |

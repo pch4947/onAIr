@@ -10,9 +10,11 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from ..domain import Material, Prompt, StationProfile
+from ..domain import TONE_JOKE, Material, Prompt, StationProfile
 from ..prompt_data import (
     ANGLE,
+    ASKED,
+    ASKED_BEFORE,
     CALLBACK,
     CHAT,
     CORNERS,
@@ -39,13 +41,20 @@ from .base import system_prompt
 QUOTE_RULE = ("아래 청취자 채팅을 짧게 인용하고 한 문장으로 반응한다. 인용은 '~라고 하신 분'처럼 청취자의 말임을 밝힌다. "
               "채팅이 질문이면 '~냐고 물어보신 분'처럼 청취자가 물었다는 것부터 말하고 짧게 답한다. "
               "문장 끝은 DJ의 말투로 맺는다. 닉네임이나 아이디는 말하지 않는다.")
-# 다음 단계부터 이 채팅이 화제가 된다 — 청취자가 흐름이 바뀐 이유를 알 수 있게 한다 (CORNER_DESIGN 5.2절)
-STEER_RULE = "그리고 이 얘기를 조금 더 해 보겠다고 자연스럽게 말한다."
+# 다음 멘트가 이 채팅을 화제로 이어 간다 (CORNER_DESIGN 5.2절). 예전에는 "이 얘기를 조금 더 해 보겠다"고 말하게
+# 했는데, 그 말이 "겨울 간식 이야기를 더 나눠볼게요"처럼 오늘 주제를 예고하는 말로 나오고 다음 멘트는 채팅 이야기를
+# 이어 가서 예고와 어긋났다 — 가상 청취자 방송 40개에서 이어 말하기 문제 51건 중 28건이 이것이었다 (T-016)
+STEER_RULE = ("이 채팅 이야기는 다음 멘트에서 조금 더 이어 간다. 그러니 여기서 이야기를 마무리 짓지 않고, "
+              "무엇을 더 이야기하겠다고 예고하는 말로 멘트를 끝내지도 않는다.")
 # 한 멘트에 입력 여러 건 (계약 v2 input_refs, #267)
 # 묶어서 "여러 분이 ~라고 하셨네요"라고 하면 누구의 말도 인용되지 않는다 — 한 건씩 밝혀야 자기 말인 줄 안다
 MULTI_QUOTE_RULE = ("채팅이 여러 건이다. 한 건씩 따로 인용하고 각각 한 문장으로 반응한다. "
                     "한 건도 빠뜨리지 않고, 여러 건을 한 문장으로 묶지 않는다.")
-MULTI_STEER_RULE = "그리고 마지막에 인용한 채팅의 얘기를 조금 더 해 보겠다고 자연스럽게 말한다."
+MULTI_STEER_RULE = ("마지막에 인용한 채팅 이야기는 다음 멘트에서 조금 더 이어 간다. 그러니 여기서 그 이야기를 "
+                    "마무리 짓지 않고, 무엇을 더 이야기하겠다고 예고하는 말로 멘트를 끝내지도 않는다.")
+# 농담을 사실로 받으면 장난에 끌려간다 — "핫팩 먹어도 돼요?"에 먹지 말고 손에 쥐라고 답했다 (T-016)
+JOKE_RULE = ("{which} 청취자가 웃자고 한 농담이다. 사실로 받아 진지하게 답하거나 설명·조언·당부를 하지 않는다. "
+             "질문 꼴이어도 답하려 들지 않고, 농담인 줄 알고 가볍게 받아 한마디로 넘긴다.")
 # 반응형 채팅은 한 건씩 인용하지 않는다 (2026-11-15 결정) — 멘트가 만들어져 나가는 사이 화제가 바뀌어,
 # 앞 이야기에 대한 "맞는 것 같아요"가 지금 이야기에 대한 말처럼 인용됐다. 분위기만 전한다
 MOOD_RULE = ("아래는 방송을 듣던 청취자들이 보낸 반응이다. 한 건씩 인용하지 않고, 어떤 반응이 있었는지 "
@@ -65,7 +74,8 @@ _MOOD_MAX_LINES = 8
 _HEARD_MAX_CHARS = 400
 # 채팅이 꺼낸 화제로 잇는 멘트 — 화제 블록에 그 채팅이 그대로 들어 있어, 두면 멘트마다 다시 인용한다
 STEERED_RULE = ("아래 지금 화제는 앞 멘트에서 이미 인용한 청취자 채팅이다. 그 채팅을 다시 인용하거나 "
-                "누가 물었다고 다시 말하지 않고, 그 내용으로 DJ의 이야기만 이어간다.")
+                "누가 물었다고 다시 말하지 않고, 그 내용으로 DJ의 이야기만 이어간다. "
+                "앞 멘트에서 이미 한 답을 되풀이하지 않고, 거기에 덧붙일 다른 이야기를 한다.")
 # 주 소재(사연·신청곡)가 있는 멘트 — 채팅 때문에 사연이 요약되거나 곡 소개가 밀리면 안 된다
 WITH_FEATURE_RULE = ("이 멘트의 중심은 위에서 지시한 내용이다. 채팅 인용은 그 앞이나 뒤에 짧게 붙이고, "
                      "중심 내용을 줄이지 않는다. 위의 문장 수 제한에 채팅 인용은 넣지 않는다.")
@@ -85,6 +95,48 @@ CALLBACK_RULE = ("아래 앞서 방송에서 소개한 청취자 이야기를 '�
                  "내용을 지어내거나 뜻을 바꾸지 않고, 닉네임은 블록에 있을 때만 부른다.")
 # 시간 맥락은 화제를 꺼내는 단계에만 붙인다 — 매 멘트에 붙이면 "벌써 자정이네요"가 되풀이된다
 TIME_RULE = "아래 지금 시각은 이야기와 어울릴 때만 짧게 쓰고, 꼭 말하지 않아도 된다."
+# 질문은 곡 앞에서 던지고 답은 곡 뒤에 받는다 (CORNER_DESIGN 7.7.2절). 이야기 도중에 물으면 답이 오는 30~60초 동안
+# DJ는 다른 이야기를 하고 있어, 물어 놓고 넘어간 것처럼 들린다. 곡이 그 시간을 가려 준다
+# 말끝 예시("~곡 듣고 올게요")는 넣지 않는다 — 넣으면 그 말끝이 그대로 되풀이된다 (T-007)
+ASK_MARKER = "곡을 소개하기 전에"  # 더미 LLM이 곡 앞 질문을 알아보는 구절 (pipeline/llm.py)
+# "아래 지금 화제를 벗어나지 않는, 한마디로 답할 수 있는 질문"이라고만 했더니, 곡마다 "겨울 간식 중에 지금 가장 당기는
+# 건 뭔가요?" 같은 넓은 질문이 나오고 "한마디로 답해 주시면 돼요. 답은 곡이 나가는 동안 채팅으로 남겨 주세요"처럼
+# 지시문의 글귀가 그대로 읽혔다(시험 실행 20261119-130733). 화제 블록을 뺐을 때는 "식사 뒤에 물을 챙기시나요?"처럼
+# 주제 밖의 것을 물었다(20261119-133632). 그래서 화제 안에서, 직전 이야기의 구체적인 내용으로 묻게 한다
+ASK_RULE = (f"이번에는 {ASK_MARKER}, 청취자에게 가벼운 질문을 하나 던진다. 질문은 아래 지금 화제 안에서, 직전 멘트에서 "
+            "방금 한 이야기의 구체적인 내용으로 고른다 — 화제 전체를 묻는 넓은 질문은 하지 않는다. 길게 쓰지 않아도 답할 수 있는 "
+            "질문으로 하고, 질문 문장은 물음표로 끝낸다. 이어서, 곡을 듣는 동안 답을 채팅으로 보내 달라는 것과 곡이 끝나면 읽겠다는 것을 "
+            "DJ의 말투로 한 문장에 담는다 — 이 지시문의 글귀를 그대로 옮기지 않는다. 그 뒤에 곡을 소개하며 "
+            "멘트를 끝낸다. 질문과 안내는 위의 문장 수 제한에 넣지 않는다.")
+ASK_AFTER_QUOTE_RULE = "채팅 인용을 먼저 마치고 그 뒤에 묻는다."
+ASK_NEW_RULE = "아래 이미 던진 질문과 겹치지 않는 것을 묻는다."
+# 되짚지 않고 답부터 말하면 불쑥 시작한 것처럼 들린다("손끝이 먼저 따뜻해지는 편이에요.") — 첫 문장을 정해 준다
+ASKED_RULE = ("곡이 나가기 전에 DJ는 아래 질문을 청취자에게 던지고, 곡이 끝나면 답을 읽겠다고 했다. "
+              "{where} 곡 전에 무엇을 물었는지 한마디로 되짚는 문장으로 시작한다. 질문을 그대로 되풀이하지는 않는다. "
+              "질문으로 돌아오는 말은 위의 문장 수 제한에 넣지 않는다.")
+# "아직 답은 없네요"라고 말한 적이 있다 — 채팅은 왔는데 답인 글이 없을 때였다 (시험 실행 20261119-133632)
+ASKED_REPLIES_RULE = ("아래 채팅과 반응 가운데 그 질문의 답인 것은 질문에 온 답으로 받아 소개한다. "
+                      "받지 않은 답을 지어내지 않는다. 답인 글이 하나도 없으면 답을 읽겠다거나 답이 없다는 말은 하지 않고 "
+                      "DJ 자신의 답을 한 문장으로 말한다. 답을 받는 말에 다른 이야기를 섞지 않는다.")
+# 질문 뒤에 온 글을 후보로 넉넉히 주고 답인 것만 고르게 한다. 고른 대로 다 받게 했을 때는 "답을 읽어 볼게요" 하고
+# "가방 챙기기 귀찮다"는 글을 읽었다 (본 실행 20261119-143036). 받지 않은 글은 되돌아가 다음 멘트가 받는다
+ANSWER_QUOTE_RULE = ("아래 청취자 채팅은 질문을 던진 뒤에 온 글이다. 이 가운데 질문의 답인 글만 골라 세 건까지 받는다. "
+                     "한 건씩 '~라고 하신 분'처럼 청취자의 말임을 밝혀 짧게 인용하고 한마디로 반응한다. "
+                     "답이 아닌 글은 이 멘트에서 받지 않는다 — 다음 멘트가 따로 받는다. "
+                     "문장 끝은 DJ의 말투로 맺는다. 닉네임이나 아이디는 말하지 않는다.")
+ASKED_ALONE_RULE = ("받은 답은 아직 없다. 답이 없다는 말은 하지 않고, DJ 자신의 답을 한두 문장으로 말한 뒤 "
+                    "이야기를 잇는다. 청취자의 답을 지어내지 않는다.")
+# 답은 곡 뒤 첫 멘트가 다 받지 못한다(한 멘트에 인용 한두 건) — 뒤 멘트가 받는 답도 질문과 함께 받는다
+ASKED_EARLIER_RULE = ("아래 질문은 DJ가 곡 전에 청취자에게 던진 것이다. 아래 채팅이 그 질문의 답이면 "
+                      "질문에 온 답으로 받아 소개한다. 질문을 처음부터 다시 읽지는 않는다.")
+# 시간대는 모든 멘트에 알린다 — 화제를 꺼내는 단계에만 시각을 넣었더니 그 밖의 멘트가 새벽 4시에 "오늘 저녁은
+# 천천히 접어 두세요"라고 했다(방송 40개 중 9개, T-016). 시각을 말하라는 지시가 아니라 어긋나지 말라는 지시다
+# 요일과 시각을 앞세워 "지금은 목요일 오후 1시쯤이다"라고 했더니 "목요일 오후, 잠시 마음을…", "오후의 길 위를…"처럼
+# 시간대를 말하는 멘트가 한 방송에 여섯 번 나왔다(시험 실행 20261119-130733). 일부러 넣지 말라고 먼저 말한다
+# "방송 시간대는 새벽이다"라고 쓰면 안 된다 — DJ 이름이 '새벽'인 방송 40개 가운데 7개가 오프닝에서 "새벽다입니다"라고
+# 했다(시스템 프롬프트의 "DJ 새벽다."와 엉켰다, 본 실행 20261119-143036). 시간대 낱말에 서술격 조사를 붙이지 않는다
+DAYTIME_RULE = ("방송 시간대: {part} {clock}. 이것을 멘트에 일부러 넣지 않는다. 때를 가리키는 말을 쓸 일이 "
+                "있을 때만 이 시간대에 맞게 쓰고, 지금을 {others}처럼 말하지 않는다.")
 # 답이 없는 방송에서 계속 묻지 않는다 — 조용한 방송의 이야기 멘트 75%가 질문으로 끝났다 (2026-11-11 기준선, #262)
 NO_QUESTION_RULE = "청취자에게 질문하지 않는다. 묻는 대신 DJ가 생각을 풀어 가고, 질문으로 끝내지 않는다."
 # 곡 뒤에 고정 문구("다시 …로 돌아왔어요")를 틀지 않는다 — 그 자리는 이 멘트가 잇는다
@@ -151,7 +203,8 @@ def _after_song(m: Material) -> tuple[str, str]:
     track = m.extra.get("after_song")
     if not track:
         return "", ""
-    if m.extra.get("back_announce"):
+    # 곡 전에 던진 질문으로 돌아오는 멘트는 곡을 받는 말까지 하지 않는다 — 첫머리가 길어진다
+    if m.extra.get("back_announce") and not m.extra.get("asked"):
         return f" {AFTER_SONG_RULE} {BACK_ANNOUNCE_RULE}", "\n" + data_block(PREV_TRACK, track_line(track))
     return f" {AFTER_SONG_RULE}", ""
 
@@ -298,13 +351,23 @@ def _music_intro(m: Material) -> str:
             text += " 신청자가 남긴 한마디도 언급한다."
             info += "\n한마디: " + comment
         return text + "\n" + data_block(TRACK, info)
+    blocks = data_block(TRACK, track_line(m.track))
     if m.track.get("dj_pick"):  # DJ가 고른 곡 (계약 3.4절 track.suggest, #295)
         text += " DJ가 이 방송을 위해 직접 고른 곡이다."
         if why := m.track.get("pick_why"):
             # 곡 정보는 백엔드가 찾은 실제 곡이고, 까닭은 고를 때 적어 둔 것이다 — 곡이 달라졌을 수 있어 사실로 쓰지 않는다
-            return (text + " 아래 고른 까닭을 참고해 왜 골랐는지 한마디 곁들인다. 까닭에 없는 사실을 지어내지 않는다.\n"
-                    + data_block(TRACK, track_line(m.track)) + "\n" + data_block(PICK_WHY, why))
-    return text + "\n" + data_block(TRACK, track_line(m.track))
+            text += " 아래 고른 까닭을 참고해 왜 골랐는지 한마디 곁들인다. 까닭에 없는 사실을 지어내지 않는다."
+            blocks += "\n" + data_block(PICK_WHY, why)
+    if m.extra.get("ask"):  # 곡 앞에서 묻고 곡 뒤에 답을 받는다 (7.7.2절)
+        text += f" {ASK_RULE}"
+        if m.quotes:
+            text += f" {ASK_AFTER_QUOTE_RULE}"
+        if m.topic:
+            blocks += "\n" + data_block(TOPIC, m.topic)
+        if before := m.extra.get("asked_before"):
+            text += f" {ASK_NEW_RULE}"
+            blocks += "\n" + data_block(ASKED_BEFORE, "\n".join(f"- {q}" for q in before))
+    return text + "\n" + blocks
 
 
 def _story(m: Material) -> str:
@@ -487,12 +550,19 @@ def build_prompt(step: str, material: Material, profile: StationProfile, *,
                  plain: bool = False) -> Prompt:
     kind = STEP_KINDS[step]
     user = kind.build(material)
+    if asked := material.extra.get("asked"):  # 곡 전에 던진 질문으로 돌아온다 — 답이 왔으면 받고, 없으면 DJ가 답한다
+        where = "첫 문단은" if step == BLOCK_STEP else "이 멘트는"
+        follow = ASKED_REPLIES_RULE if material.quotes or material.mood else ASKED_ALONE_RULE
+        user += f"\n{ASKED_RULE.format(where=where)} {follow}\n" + data_block(ASKED, asked)
+    elif material.quotes and (earlier := material.extra.get("asked_earlier")):
+        user += f"\n{ASKED_EARLIER_RULE}\n" + data_block(ASKED, earlier)
     if material.quotes:
         if not kind.quotable:
             raise ValueError(f"{step} 단계는 채팅을 인용하지 않는다")
         quotes, steer = list(material.quotes), material.extra.get("steer")
-        rule = QUOTE_RULE
-        if len(quotes) > 1:
+        answers = bool(material.extra.get("optional_quotes"))  # 답인 글만 골라 받는다 — 다 받으라고 하지 않는다
+        rule = ANSWER_QUOTE_RULE if answers else QUOTE_RULE
+        if len(quotes) > 1 and not answers:
             rule += f" {MULTI_QUOTE_RULE}"
             if steer:  # 화제가 될 채팅(첫 건)을 마지막에 인용해야 "이 얘기를 더"로 이어진다
                 quotes = [*quotes[1:], quotes[0]]
@@ -502,6 +572,10 @@ def build_prompt(step: str, material: Material, profile: StationProfile, *,
             rule += f" {WITH_FEATURE_RULE}"
         if material.track and (len(quotes) > 1 or material.feature_ref):
             rule += f" {TRACK_LAST_RULE}"
+        jokes = [i for i, q in enumerate(quotes, 1) if q.tone == TONE_JOKE]
+        if jokes:
+            which = "이 채팅은" if len(quotes) == 1 else ", ".join(f"{i}번째" for i in jokes) + " 채팅은"
+            rule += " " + JOKE_RULE.format(which=which)
         chats = "\n".join(q.body for q in quotes)
         user += f"\n{rule}\n" + data_block(CHAT, chats)
         heard = list(dict.fromkeys(q.heard for q in quotes if q.back_ref and q.heard))[:2]
@@ -516,4 +590,6 @@ def build_prompt(step: str, material: Material, profile: StationProfile, *,
         user += f"\n{AGGREGATE_RULE}\n" + data_block(TREND, trend.keyword)
     elif preview := material.extra.get("preview"):
         user += "\n" + PREVIEW_RULE.format(title=preview["title"])
+    if daytime := material.extra.get("daytime"):
+        user += "\n" + DAYTIME_RULE.format(**daytime)
     return Prompt(system=system_prompt(profile, plain=plain), user=user)

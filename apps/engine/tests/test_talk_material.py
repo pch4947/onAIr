@@ -80,6 +80,7 @@ def _scheduler_run(tmp_path, angle: Angle | None):
 
 def test_talk_points_prefer_chat_then_angle_then_callback(tmp_path):
     scheduler, run = _scheduler_run(tmp_path, Angle("호빵", ("데우는 법", "팥과 야채", "편의점 풍경", "남은 한 개")))
+    scheduler.chat_rules = scheduler.chat_rules.model_copy(update={"callbacks": True})  # 운영 설정은 꺼 두었다 — 켰을 때의 순서를 본다
     scheduler.callbacks.min_age_sec = 0
     scheduler.callbacks.add(_req("message", "퇴근길 붕어빵"), aired_at=0)
     scheduler.callbacks.add(_req("message", "호떡 좋아요", rid="r2"), aired_at=0)
@@ -98,6 +99,7 @@ def test_talk_points_prefer_chat_then_angle_then_callback(tmp_path):
 def test_callbacks_are_spaced_out_across_corner_entries(tmp_path):
     """코너에 들어올 때마다 "아까 ~라고 해 주셨죠"가 나오지 않게 간격을 둔다 (callback_gap_sec)."""
     scheduler, run = _scheduler_run(tmp_path, None)
+    scheduler.chat_rules = scheduler.chat_rules.model_copy(update={"callbacks": True})
     scheduler.callbacks.min_age_sec = 0
     scheduler.callbacks.add(_req("message", "퇴근길 붕어빵"), aired_at=0)
     scheduler.callbacks.add(_req("message", "호떡 좋아요", rid="r2"), aired_at=0)
@@ -109,6 +111,16 @@ def test_callbacks_are_spaced_out_across_corner_entries(tmp_path):
     later = CornerRun(ClockEntry(scheduler.fmt.corner("topic_talk")), sources=scheduler.sources,
                       intensity=scheduler.intensity, thread=Thread(topic="겨울 간식"))
     assert [p and p["source"] for p in (scheduler._talk_point(later) for _ in range(2))] == ["topic", "callback"]
+
+
+def test_operating_rules_do_not_call_back_mid_broadcast(tmp_path):
+    """방송 도중의 "아까 ~라고 해 주셨죠"는 운영 설정에서 껐다 (2026-11-19, T-016). 엔딩 돌아보기는 그대로다."""
+    scheduler, run = _scheduler_run(tmp_path, None)
+    assert scheduler.chat_rules.callbacks is False
+    scheduler.callbacks.min_age_sec = 0
+    scheduler.callbacks.add(_req("message", "퇴근길 붕어빵"), aired_at=0)
+    assert [p and p["source"] for p in (scheduler._talk_point(run) for _ in range(2))] == ["topic", None]
+    assert [a.body for a in scheduler.callbacks.lookback()] == ["퇴근길 붕어빵"]
 
 
 def test_without_an_angle_topic_talk_gets_one_free_point(tmp_path):
@@ -153,6 +165,8 @@ def test_broadcast_calls_back_an_aired_message_and_reports_materials(tmp_path):
     engine, _ = _engine(tmp_path, corners=["topic_talk"], topic="겨울 간식")
     engine.scheduler.pipeline = pipeline = Recording()
     engine.topic_plan._llm.delay_sec = 0
+    scheduler = engine.scheduler
+    scheduler.chat_rules = scheduler.chat_rules.model_copy(update={"callbacks": True})
     engine.scheduler.callbacks.min_age_sec = 0
     engine.scheduler.callbacks.add(_req("message", "퇴근길에 붕어빵 샀어요"), aired_at=0)  # 앞서 방송에 나갔다
     asyncio.run(engine.run(max_segments=20))

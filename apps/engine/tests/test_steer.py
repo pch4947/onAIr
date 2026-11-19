@@ -26,8 +26,10 @@ QUESTION = "요즘 듣는 재즈 앨범 있으세요?"
     (QUESTION, "question"),
     ("여행 얘기 해 주세요", "request"),
     ("여행 얘기 해줘", "request"),
-    ("dj님 오늘 목소리 좋아요", "address"),
-    ("새벽님 오늘 목소리 좋아요", "address"),  # 방의 DJ 이름
+    ("dj님 오늘 목소리 좋아요", None),  # 부르기만 한 말은 화제로 삼지 않는다 (steer_on_address: false, T-016)
+    ("새벽님 오늘 목소리 좋아요", None),
+    ("새벽 버스 노래 너무 좋네요", None),  # DJ 이름이 흔한 낱말이다
+    ("새벽님은 붕어빵 어디부터 드세요?", "question"),  # 부르면서 물으면 질문이다
     ("저는 오늘 시험 끝났어요", None),
     ("왜요?", None),  # 화제가 될 내용이 없다
     ("그게 무슨 말이에요?", None),  # 방금 한 말을 되묻는다 — 답하면 끝이라 화제로 삼지 않는다
@@ -38,6 +40,12 @@ QUESTION = "요즘 듣는 재즈 앨범 있으세요?"
 ])
 def test_steer_rule(body, rule):
     assert steer_rule(body, RULES, "새벽") == rule
+
+
+def test_address_steers_only_when_enabled():
+    on = RULES.model_copy(update={"steer_on_address": True})
+    assert steer_rule("dj님 오늘 목소리 좋아요", on, "새벽") == "address"
+    assert steer_rule("새벽님 오늘 목소리 좋아요", on, "새벽") == "address"  # 방의 DJ 이름
 
 
 def _run(corner="topic_talk") -> CornerRun:

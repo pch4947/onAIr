@@ -54,6 +54,8 @@ def steer_rule(body: str, rules: ChatRules, dj_name: str) -> str | None:
         return "question"
     if any(p in text for p in rules.steer_requests):
         return "request"
+    if not rules.steer_on_address:  # 부르기만 한 말은 인사나 칭찬이 대부분이다 — 인용하고 답하면 끝이다
+        return None
     lowered = text.lower()
     if any(p.lower() in lowered for p in (*rules.steer_address, dj_name)):
         return "address"

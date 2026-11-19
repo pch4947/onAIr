@@ -1,6 +1,7 @@
 """편성 관리자 (ENGINE_ARCHITECTURE 3.1·4.1절) — 클락대로 진행, 순서 보장 제출, 과도기 인용, 곡."""
 import asyncio
 import sqlite3
+import time
 from pathlib import Path
 
 from onair_engine.domain import (
@@ -41,8 +42,9 @@ def short_talk(engine: StationEngine) -> StationEngine:
     return engine
 
 
-def _engine(tmp_path, dummy_tracks: bool = True, block: bool = False,
+def _engine(tmp_path, dummy_tracks: bool = True, block: bool = False, tone: bool = False,
             **config) -> tuple[StationEngine, Capture]:
+    """tone — 채팅 성격 판정을 켠다. 꺼 두면 채팅이 판정을 기다리지 않고 바로 인용 후보가 된다."""
     cfg = StationConfig(station_id="st_test", profile=PROFILE,
                         broadcast_minutes=config.pop("broadcast_minutes", 30), **config)
     settings = EngineSettings(audio_dir=tmp_path / "audio", sqlite_path=tmp_path / "metrics.sqlite",
@@ -50,6 +52,8 @@ def _engine(tmp_path, dummy_tracks: bool = True, block: bool = False,
                               dummy_tracks=dummy_tracks)
     transport = Capture()
     engine = StationEngine(cfg, settings, transport)
+    if not tone:
+        engine.scheduler.tone_judge = None
     return (engine if block else short_talk(engine)), transport
 
 
@@ -64,6 +68,9 @@ class FakePipeline:
 
     def __init__(self):
         self.calls = 0
+
+    def script_of(self, segment_id):
+        return None
 
     async def run(self, job):
         self.calls += 1
@@ -210,6 +217,8 @@ def test_corner_budget_excludes_song_introduced_before_it(tmp_path):
     # 곡 길이가 다음 코너 몫으로 잡히면 주제 토크가 '꺼내기 + 한 줄'만 하고 끝난다 (#220)
     engine, transport = _engine(tmp_path, dummy_tracks=False, corners=["topic_talk"])
     engine.scheduler.pipeline = SlowIntro()
+    # 곡 앞에서 묻는 곡 소개는 끝날 때까지 다음 코너를 편성하지 않는다 — 여기서는 묻지 않는 곡 소개를 본다
+    engine.scheduler._last_question_at = time.time()
     engine.sources.talk_points = lambda run: {"source": "topic"}  # 말할 거리는 떨어지지 않는다 — 예산만 본다
     # 동시 생성 2개 — 곡 뒤 코너의 나머지 단계는 곡 소개가 제출된 뒤에 편성된다 (실제 방송처럼)
     engine.scheduler.max_concurrent = 2

@@ -219,8 +219,10 @@ class GenerationPipeline:
         if feature and (job.material.must_read is None
                         or self._check_quote(job, "read", job.material.must_read, script.text, t1, feature)):
             refs.append(feature)
+        # 골라 받으라고 준 후보(답을 받는 멘트)는 받지 않아도 누락이 아니다
+        kind = "candidate" if job.material.extra.get("optional_quotes") else "chat"
         for quote in job.material.quotes:
-            if self._check_quote(job, "chat", quote.body, script.text, t1, quote.request_id):
+            if self._check_quote(job, kind, quote.body, script.text, t1, quote.request_id):
                 refs.append(quote.request_id)
         # 분위기로 전한 반응은 대본에 글이 그대로 들어가지 않는다 — 검사하지 않고 싣는다
         refs.extend(req.request_id for req in job.material.mood)
@@ -392,12 +394,13 @@ class GenerationPipeline:
         """인용 검사 하나 — 판정과 함께 채팅·대본·일치 비율을 남긴다. 누락이 LLM이 건너뛴 것인지
         풀어 말한 것을 검사가 못 알아본 것인지는 대본을 읽어야 갈린다 (ENGINE_TUNING_LOG O-001)."""
         match = quote_match(chat, script)
-        ok = quoted(chat, script) if kind == "chat" else match >= QUOTE_MATCH  # 낭독은 풀어 말하면 안 된다
+        ok = quoted(chat, script) if kind in ("chat", "candidate") else match >= QUOTE_MATCH  # 낭독은 풀어 말하면 안 된다
+        result = "ok" if ok else "unpicked" if kind == "candidate" else "missing"
         self.telemetry.log_quote(
             job_id=job.job_id, corner_type=job.corner_type, step=job.step,
             request_ref=request_ref,
-            kind=kind, result="ok" if ok else "missing", match=match, chat=chat, script=script, at=started)
-        self._log(job, "quote", started, time.time(), "ok" if ok else "missing")
+            kind=kind, result=result, match=match, chat=chat, script=script, at=started)
+        self._log(job, "quote", started, time.time(), result)
         return ok
 
     def _log(self, job: GenerationJob, stage: str, started: float, finished: float,

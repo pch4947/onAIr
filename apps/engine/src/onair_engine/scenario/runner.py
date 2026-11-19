@@ -28,6 +28,7 @@ import sqlite3
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
 
@@ -59,7 +60,17 @@ from .spec import (
 )
 
 ENGINE_ROOT = Path(__file__).resolve().parents[3]  # apps/engine
+_KST = timezone(timedelta(hours=9))
 CALLS_PER_MINUTE = 2.5  # 실제 LLM 확인 프롬프트의 추정치 — 2026-11-07 실측(호출 13회)과 말:곡 5:5 기준
+
+
+def clock_offset_sec(clock: str | None, now: float) -> float:
+    """시나리오가 정한 방송 시각(sim.clock, "04:10")이 되게 실제 시각에 더할 값. 날짜는 실행한 날 그대로다."""
+    if not clock:
+        return 0.0
+    hour, minute = (int(part) for part in clock.split(":"))
+    today = datetime.fromtimestamp(now, _KST)
+    return today.replace(hour=hour, minute=minute, second=0, microsecond=0).timestamp() - now
 
 
 def _clock(sec: float) -> str:
@@ -365,6 +376,7 @@ async def run_one(spec: ScenarioSpec, index: int, run_dir: Path, args: argparse.
     backend = SimBackend(sim=spec.sim, tracks=spec.tracks, rng=random.Random(seed * 7919))
     _unsynced_metrics_db(settings.sqlite_path)
     engine = StationEngine(config, settings, backend)
+    engine.scheduler.clock_offset_sec = clock_offset_sec(spec.sim.clock, time.time())
     engine.telemetry._db.execute("PRAGMA synchronous=OFF")
     backend.engine = engine
     # 더미 LLM이면 실측에 맞춘 지연을 넣는다 — 파이프라인·사연 판정·갈래 계획이 같은 객체를 쓴다
@@ -645,6 +657,8 @@ def _write_run(run_dir: Path, spec: ScenarioSpec, index: int, seed: int, args: a
         "llm": _llm_meta(args),
         "tts": args.tts, "persona": args.persona or spec.station.persona,
         "minutes": args.minutes or spec.station.broadcast_minutes,
+        # DJ가 안 방송 시각 = 실제 시각 + 이 값 (sim.clock). 심사 AI가 시간대 적합성을 볼 때 쓴다
+        "clock_offset_sec": backend.engine.scheduler.clock_offset_sec,
     }, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     read_events = getattr(telemetry_module, "read_events", None)  # 엔진 패널 이벤트(#208)가 있을 때만
     if read_events is not None and db.exists():

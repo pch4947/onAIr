@@ -12,6 +12,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from difflib import SequenceMatcher
 from pathlib import Path
 
 import yaml
@@ -176,7 +177,10 @@ def load_broadcast(path: str | Path) -> Broadcast:
     sim, generation = report.get("sim") or {}, report.get("generation") or {}
     return Broadcast(
         path=path, ments=ments, chats=chats, songs=songs, order=order, persona=_persona(run),
-        topic=report.get("topic") or station.get("topic") or "", started_at=report.get("started_at"),
+        topic=report.get("topic") or station.get("topic") or "",
+        # 시나리오가 방송 시각을 정했으면(sim.clock) DJ가 안 시각으로 본다
+        started_at=(report["started_at"] + float(run.get("clock_offset_sec") or 0)
+                    if report.get("started_at") else None),
         minutes=run.get("minutes") or station.get("broadcast_minutes"),
         music_taste=list(station.get("music_taste") or []),
         tracks=[f"{t['title']} - {t['artist']}" for t in scenario.get("tracks") or []],
@@ -278,11 +282,27 @@ def repeated_phrase(b: Broadcast, *, min_ments: int = 4, **_) -> list[Finding]:
     return out
 
 
+def _read_aloud(sentence: str, bodies: list[str], *, shared: int = 30) -> bool:
+    """청취자 글을 그대로 읽은 문장 — 글과 30자 넘게 겹친다."""
+    text = "".join(ch for ch in sentence if ch.isalnum())
+    for body in bodies:
+        other = "".join(ch for ch in body if ch.isalnum())
+        if SequenceMatcher(None, text, other, autojunk=False).find_longest_match().size >= shared:
+            return True
+    return False
+
+
 def long_sentence(b: Broadcast, *, max_chars: int = 60, **_) -> list[Finding]:
-    """A2 호흡 — 한 문장이 너무 길다 (띄어쓰기와 문장부호를 뺀 글자 수)."""
+    """A2 호흡 — 한 문장이 너무 길다 (띄어쓰기와 문장부호를 뺀 글자 수).
+
+    문자를 낭독한 문장은 세지 않는다 — DJ가 쓴 문장이 아니라 청취자의 글이다. 세던 때는 문자를 많이 읽은 방송일수록
+    호흡 문제가 늘었다 (T-016: 문제 11건 가운데 10건이 문자 낭독이었다).
+    """
     out = []
     for m in b.scripted:
-        long = [s for s in sentences(m.script) if sum(ch.isalnum() for ch in s) > max_chars]
+        bodies = [b.chat(cid).body for cid in m.takes if b.chat(cid) is not None]
+        long = [s for s in sentences(m.script)
+                if sum(ch.isalnum() for ch in s) > max_chars and not _read_aloud(s, bodies)]
         if long:
             out.append(Finding(m.id, f"한 문장이 {sum(ch.isalnum() for ch in long[0])}자다", long[0]))
     return out
