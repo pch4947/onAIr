@@ -1,0 +1,21 @@
+# 가상 청취자 평가 시나리오 — 청취자 1명
+# 청취자는 방송에 나간 멘트를 듣고 성격에 따라 채팅을 친다 (config/listeners.yaml, scenario/listeners.py).
+# 청취자 수와 유형만 다르고 방송 설정은 aud_* 시나리오가 모두 같다 — 상황끼리 견줄 수 있게 하려는 것이다.
+# 곡은 2분으로 줄였다 — 20분 방송에서 DJ의 말을 더 많이 보려는 것이다.
+name: aud_1
+description: 자기 얘기형 1명. 한 사람과의 대화가 이어지는지, 그 사람 글만 되풀이하지 않는지 본다.
+station:
+  format: talk
+  corners: [topic_talk]
+  intensity: mid
+  topic: 겨울 간식
+  broadcast_minutes: 20
+tracks:
+  - {title: 첫눈 오는 밤, artist: 가상의 가수, sec: 120}
+  - {title: 새벽 버스, artist: 모의 밴드, sec: 120}
+  - {title: 따뜻한 차 한 잔, artist: 시뮬레이션 트리오, sec: 120}
+listeners:
+  - {persona: own_story, count: 1}
+expect:
+  - {type: max_fallback, value: 0, note: 대체 멘트 없음}
+  - {type: max_silence_sec, value: 5, note: 긴 무음 없음}

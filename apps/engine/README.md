@@ -369,6 +369,13 @@ python -m onair_engine.scenario config/scenarios/sparse.yaml config/scenarios/fl
 - **시나리오 파일** (`config/scenarios/*.yaml`)
   - 방송 설정, 흉내 값(`sim`), 시각별 입력(`inputs`), 배경 채팅(`chatter`), 게시판 사연을 적습니다
   - 게시판 사연은 `id`를 붙여 `expect`에서 가리킬 수 있고, `at`을 적으면 방송 중에 올라온 글로 보냅니다
+  - **가상 청취자**(`listeners: [{persona, count}]`)는 `inputs`·`chatter`와 달리 방송에 나간 멘트를 듣고 반응합니다 (#320)
+    - 유형은 `config/listeners.yaml`에 12종이 있습니다. 평소 방송에 섞이는 기본 7종(활발한 소통형, 자기 얘기형, 일상 공유형, 호기심 질문형, 음악 애호가형, 소극적 참여형, 참여형)과 특정 상황을 시험하는 압박 5종(불만 및 항의형, 맥락 혼란형, 과도한 참여형, 장난 및 유머형, 부적절한 발언형)입니다
+    - 청취자는 재생 시작에서 방송 지연(`sim.broadcast_delay_sec`)이 지난 뒤부터 그 멘트를 들은 것으로 치고, 타이핑 시간을 더해 글을 보냅니다. 엔진이 미리 만들어 둔 멘트는 보지 못합니다
+    - 반응할지는 유형의 확률(`speech_rate`, `song_rate`)로 정해 같은 seed면 같은 멘트에서 반응하고, 무엇을 쓸지는 LLM이 씁니다(`sim.listener_llm`, `sim.listener_model` — 기본 `gemini-3.8-flash`, DJ와 다른 모델). 부적절한 발언형은 LLM이 순하게 바꾸지 못하게 정해 둔 글에서 고릅니다. `--llm dummy`면 청취자도 유형의 예시 글에서 골라 API 키 없이 돕니다
+    - 결과의 `report.json`의 `sim.audience`에 청취자마다 보낸 글, DJ가 방송에서 받았는지(`answered`), 그 글을 쓸 때 마지막으로 들은 것(`after`)이 남습니다
+    - `aud_0`·`aud_1`·`aud_3`·`aud_8`·`aud_20`이 청취자 수별 상황이고, `aud_3_complain`·`aud_3_confused`·`aud_3_spam`·`aud_3_joker`·`aud_3_inappropriate`가 3명 방송에 압박 유형을 하나씩 더한 상황입니다
+    - 가상 청취자는 실제 사람보다 얌전하고 글이 고릅니다. 사람이 듣는 확인을 대신하지 못하고 횟수를 줄여 줍니다
   - 운영자 조작(`controls`)은 테스트 화면의 버튼입니다. 코너 버튼(`{at, corner}`), 페르소나 버튼(`{at, type: persona_switch, persona: <persona 파일>}`), 스테이션 버튼(`{at, type: format_switch, format, corners?, news_sections?}`)이 있습니다. 가짜 백엔드가 실제 백엔드처럼 재생 중인 것과 미리 인코딩한 분량(`sim.buffer_low_sec`)을 뺀 멘트를 버리고 엔진에 알립니다
     - `demo_buttons.yaml`이 데모의 코너 버튼 구간, `demo_persona.yaml`이 페르소나 버튼 구간, `demo_format.yaml`이 스테이션 버튼 구간입니다
     - `demo_game.yaml`은 DJ 대 청취자 코너입니다. 가짜 백엔드가 고민을 소개하는 멘트의 재생 시작에 투표 창을 열고, 닫힐 때 가짜 표(`sim.vote_people`명, 투표마다 쏠림이 다름)를 세어 결과를 보냅니다. `sim.vote_result_delay_sec`로 결과를 늦출 수 있습니다
