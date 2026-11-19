@@ -347,7 +347,7 @@ class GenerationPipeline:
         try:
             duration_ms = await self._retry(
                 job, "tts", lambda: self.tts.synthesize(script.text, out_path),
-                hedge_after=tts_hedge_sec(script.text))
+                hedge_after=tts_hedge_sec(self._longest_part(script.text)))
         except Exception as exc:
             logger.exception("TTS_FAILED %s %s", job.job_id, job.corner_type)
             raise _TtsFailed from exc
@@ -370,6 +370,11 @@ class GenerationPipeline:
             music_ref=job.material.track_ref,
             input_refs=list(refs or []),
         )
+
+    def _longest_part(self, text: str) -> str:
+        """합성 시간을 정하는 글 — 나눠서 합성하면(CachedTts.parts) 가장 긴 조각이다."""
+        parts = getattr(self.tts, "parts", None)
+        return max(parts(text), key=len) if parts else text
 
     async def _fallback(self, job: GenerationJob) -> SegmentSubmission | None:
         """고정 filler 대본으로 대체한다. 여기서의 TTS 실패는 스케줄러까지 올라간다.
