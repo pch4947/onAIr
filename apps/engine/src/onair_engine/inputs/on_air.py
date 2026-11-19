@@ -124,6 +124,13 @@ class OnAirTimeline:
                 return entry.end
         return None
 
+    def track_heard_at(self, anchor_id: str | None) -> float | None:
+        """그 앵커의 곡이 청취자에게 들리기 시작한 시각. 백엔드가 확인해 준 값만 — 아직이면 None."""
+        for entry in reversed(self._entries):
+            if entry.anchor.id == anchor_id and entry.track_ms > 0:
+                return entry.track_start
+        return None
+
     def _shift_after(self, entry: _Entry, delta: float) -> None:
         """확인된 시각만큼 뒤 항목의 추정치를 옮긴다. 이미 확인한 항목은 그대로 둔다."""
         for later in self._entries[self._entries.index(entry) + 1:]:

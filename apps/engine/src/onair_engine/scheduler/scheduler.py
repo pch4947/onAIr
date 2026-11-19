@@ -105,6 +105,8 @@ _ANSWER_CANDIDATES = 6
 _ASKED_BEFORE = 5  # 곡 소개에 알려 주는 "이미 던진 질문"의 수
 # 질문을 던진 곡 소개가 제출되기를(앞 순번을) 기다리는 상한 — 넘으면 곡이 끝나는 때를 모르는 채로 진행한다
 _ASK_PUBLISH_WAIT_SEC = 30.0
+# 엔진이 아는 곡 끝이 이만큼 더 남았는데 실제 분량이 바닥나면 곡이 일찍 끝난 것으로 적는다 (방송 지연 12초보다 넉넉히)
+_EARLY_END_SLACK_SEC = 30.0
 _QUESTION_RE = re.compile(r"[^.!?…]*[?？]")
 # 차분한 말투의 DJ는 묻는 말도 마침표로 끝낸다("…느껴진 적 있으신가요.") — 물음표가 없으면 묻는 말끝으로 찾는다.
 # "~세요."는 넣지 않는다. "채팅으로 남겨 주세요."가 걸린다
@@ -237,6 +239,7 @@ class Scheduler:
         self._steer_pending = False  # 화제를 바꿀 인용을 생성 중 — 결과가 나와야 다음 단계의 화제가 정해진다
         # 곡 앞에서 묻고 곡 뒤에 답을 받는다 (CORNER_DESIGN 7.7.2절)
         self._ask_pending = False  # 질문을 던지는 곡 소개를 생성 중 — 곡 뒤 멘트를 미리 만들지 않는다
+        self._early_end_logged: str | None = None  # 일찍 끝났다고 이미 적은 곡의 앵커
         self._asked: Asked | None = None  # 던졌고 아직 받지 않은 질문
         self._song_hold: tuple[str, float] | None = None  # 가장 최근에 소개한 곡의 (앵커, 소개를 만든 때)
         self._song_before: tuple[str, float] | None = None  # 그 앞 곡 — 소개가 나가지 못하면 여기로 되돌린다
@@ -584,8 +587,8 @@ class Scheduler:
                 continue
             if (ctx.inflight_generations >= self.max_concurrent
                     or ctx.generated_buffer_sec >= self.target_buffer_sec
-                    or self._steer_pending or self._ask_pending or self._waits_for_answers(ctx.now)
-                    or self._waits_for_song(ctx.now)):
+                    or self._steer_pending or self._ask_pending
+                    or self._waits_for_answers(ctx.now, ctx) or self._waits_for_song(ctx.now, ctx)):
                 self.telemetry.log_decision(ctx, Decision(action="wait"))
                 await asyncio.sleep(_IDLE_SLEEP_SEC)
                 continue
@@ -1091,37 +1094,59 @@ class Scheduler:
             return self._talks(corner.corner_type)
         return False
 
-    def _waits_for_answers(self, now: float) -> bool:
+    def _waits_for_answers(self, now: float, ctx: ScheduleContext | None = None) -> bool:
         """질문을 던진 곡이 끝나 갈 때까지 곡 뒤 멘트를 만들지 않는다.
 
         두면 곡 소개를 만드는 동안 곡 뒤 멘트까지 만든다(동시 생성) — 답이 오기 전에 대본이 정해진다.
         곡이 끝나기 target_buffer_sec 전부터 만든다. 답을 여러 건 받는 멘트는 길어서 합성이 15초 넘게 걸린다 —
         20초 전에 만들기 시작했을 때는 곡 뒤에 무음이 8~12초 났다 (시험 실행 20261119-133632).
-        타임라인의 시각은 청취자가 듣는 시각이라 방송 지연만큼 뺀다.
         """
         asked = self._asked
         if asked is None:
             return False
-        end = self.timeline.track_end(asked.anchor_id)
+        return self._song_not_ending(now, asked.anchor_id, asked.at, ctx)
+
+    def _song_not_ending(self, now: float, anchor_id: str | None, since: float,
+                         ctx: ScheduleContext | None = None) -> bool:
+        """그 곡이 아직 끝나 가지 않는다 — 곡 뒤 멘트를 만들 때가 아니다.
+
+        곡이 들리기 시작한 뒤에는 백엔드가 잰 실제 남은 분량(backpressure)으로 정한다. 타임라인으로 세면 두 가지를
+        놓친다 (#337).
+        - 타임라인의 시각은 청취자가 듣는 시각이라 방송 지연만큼 빼야 하는데, 엔진은 그 지연을 시작 알림이 얼마나
+          일찍 오는지로 쟀다. 흉내 백엔드는 지연만큼 일찍 보내지만 실제 백엔드는 그 시각이 지난 뒤에 보낸다
+          (journal.flush) — 지연이 0으로 잡혀, 실제 방송에서는 곡이 18초 남았을 때에야 만들기 시작했다.
+        - 받은 음원이 짧거나 방송 도중에 곡을 끊으면 곡은 엔진이 아는 길이보다 일찍 끝난다. 그 시각까지
+          기다리는 동안 무음이 나간다. 백엔드의 남은 분량은 실제로 인코딩한 길이라 이것을 안다.
+        곡이 들리기 전에는 타임라인으로 센다 — 곡이 막 시작할 때는 남은 분량이 잠깐 낮게 잡힌다
+        (실행 20261119-221335: 곡 도중의 판단 36,196번 중 16번, 모두 곡 시작 6초 안).
+        """
+        end = self.timeline.track_end(anchor_id)
         if end is None:  # 아직 제출되지 않았다(앞 순번을 기다린다) — 잠깐만 기다린다
-            return now - asked.at < _ASK_PUBLISH_WAIT_SEC
+            return now - since < _ASK_PUBLISH_WAIT_SEC
+        heard_at = self.timeline.track_heard_at(anchor_id)
+        if ctx is not None and ctx.buffer_source == "backend" and heard_at is not None and now >= heard_at:
+            if ctx.generated_buffer_sec >= self.target_buffer_sec:
+                return True
+            left = end - now  # 엔진이 아는 곡 끝(청취자 시각)까지 — 평소에는 target_buffer_sec + 방송 지연쯤이다
+            if left > self.target_buffer_sec + _EARLY_END_SLACK_SEC and anchor_id != self._early_end_logged:
+                self._early_end_logged = anchor_id
+                logger.warning("SONG_ENDED_EARLY %s 실제 남은 분량 %.0f초, 엔진이 아는 곡 끝까지 %.0f초",
+                               anchor_id, ctx.generated_buffer_sec, left)
+            return False
         return now < end - self._air_delay_sec - self.target_buffer_sec
 
-    def _waits_for_song(self, now: float) -> bool:
+    def _waits_for_song(self, now: float, ctx: ScheduleContext | None = None) -> bool:
         """청취자가 있으면 곡 뒤 첫 이야기 멘트를 곡이 끝나 갈 때 만든다 — 곡이 나가는 동안 온 반응을 받는다.
 
         두면 곡 소개와 함께 미리 만들어, 곡 감상과 곡 직전의 말에 대한 반응이 곡 뒤 첫 멘트에 실리지 못한다.
         곡 뒤 차례가 이야기 코너일 때만 기다린다(문자 소개처럼 긴 낭독은 합성이 오래 걸린다). 조용한 방송은
-        받을 반응이 없으니 기다리지 않는다. 시각 계산은 _waits_for_answers와 같다.
+        받을 반응이 없으니 기다리지 않는다. 곡이 끝나 가는지는 _waits_for_answers와 같이 본다 (_song_not_ending).
         """
         hold = self._song_hold
         if hold is None or self._is_quiet(now) or not self._talk_comes_next():
             return False
         anchor_id, built_at = hold
-        end = self.timeline.track_end(anchor_id)
-        if end is None:  # 곡 소개가 아직 제출되지 않았다 — 잠깐만 기다린다
-            return now - built_at < _ASK_PUBLISH_WAIT_SEC
-        return now < end - self._air_delay_sec - self.target_buffer_sec
+        return self._song_not_ending(now, anchor_id, built_at, ctx)
 
     def _attach_asked(self, material: Material) -> None:
         """곡 전에 던진 질문이 있으면 이 멘트가 받는다. 너무 오래된 질문은 접는다."""

@@ -273,6 +273,26 @@ def test_ment_after_the_song_waits_for_the_song_when_listeners_are_chatting(tmp_
     assert not scheduler._waits_for_song(now + 60), "곡 뒤 차례가 이야기 코너가 아니면 기다리지 않는다"
 
 
+def test_ment_after_the_song_goes_by_what_the_backend_has_left(tmp_path):
+    """곡이 들리기 시작한 뒤에는 백엔드가 잰 남은 분량으로 정한다 — 곡이 일찍 끝나면 기다리지 않는다 (#337)."""
+    scheduler, _ = _asking(tmp_path)
+    scheduler.target_buffer_sec = 30
+    now = time.time()
+    scheduler._started_at, scheduler._last_chat_at = now - 300, now
+    spec = scheduler.fmt.corner("music_intro")
+    job = asyncio.run(scheduler._build_job(PlannedStep(spec, spec.steps[0], [dict(TRACK)], None)))
+    scheduler.timeline.append("seg_i", job.anchor, 10_000, now - 90, track_ref="yt:abc", track_ms=200_000)
+    scheduler.on_track_started("yt:abc", now - 60)
+
+    def waits(buffer_sec: float) -> bool:
+        scheduler.report_backpressure(buffer_sec * 1000, "normal", at=now)
+        ctx = scheduler._snapshot()
+        return scheduler._waits_for_song(ctx.now, ctx)
+
+    assert scheduler._waits_for_song(now), "타임라인으로는 곡이 140초 남았다"
+    assert waits(120) and not waits(12), "실제 남은 분량이 12초다 — 곡이 일찍 끝난다"
+
+
 def test_song_whose_intro_did_not_air_is_not_waited_for(tmp_path):
     """곡 소개를 LLM이 거부하면 곡도 나가지 않는다 — 기다리면 곡 뒤 멘트가 늦어 무음이 난다 (T-019 본 실행)."""
     scheduler, _ = _asking(tmp_path)

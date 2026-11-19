@@ -503,7 +503,17 @@ def _closing_lookback(m: Material) -> str:
 
 def _closing_farewell(m: Material) -> str:
     text = "마지막 곡을 소개하고 끝인사를 하는 멘트를 3문장 이내로 작성하라."
-    return text + ("\n" + data_block(TRACK, track_line(m.track)) if m.track else "")
+    if not m.track:
+        return text
+    info = track_line(m.track)
+    # 엔딩 곡이 된 신청곡은 신청자 없이 소개됐다 — 곡 소개로 나간 신청곡에는 모두 닉네임이 있었다 (O-008)
+    if nickname := m.track.get("requester_nickname"):
+        text += " 마지막 곡이 청취자의 신청곡임을 닉네임과 함께 소개한다."
+        info += "\n신청자: " + nickname
+        if comment := m.track.get("requester_comment"):
+            text += " 신청자가 남긴 한마디도 언급한다."
+            info += "\n한마디: " + comment
+    return text + "\n" + data_block(TRACK, info)
 
 
 def _filler(m: Material) -> str:
