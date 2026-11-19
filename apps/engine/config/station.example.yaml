@@ -36,7 +36,7 @@ pipeline:
                               # 엔진만 바뀌므로 백엔드 배포를 기다리지 않는다
   embedder: gemini            # dummy(글자 겹침 — 흐름 확인용, 사실상 찾지 못한다) | gemini(GEMINI_API_KEY 필요).
                               # 키가 없으면 경고만 남기고 데이터셋 없이 방송한다. 실행 시 --embedder로 바꿀 수 있다
-  # talk_bank_cache: var/talk_bank.sqlite  # 벡터 캐시. 지워도 된다 — 없는 것만 다시 임베딩한다 (2,664건에 1분쯤).
+  # talk_bank_cache: var/talk_bank.sqlite  # 벡터 캐시. 지워도 된다 — 없는 것만 다시 임베딩한다 (7,089건에 5분쯤).
                               # 운영(--serve)은 엔진을 띄울 때 미리 채운다. 손으로 채우기: onair-bank index --embedder gemini
   topic_usage: var/topic_usage.sqlite  # 방송별로 쓴 갈래의 기록 — 기간 안에 다른 방송이 쓴 갈래를 규칙으로 뺀다.
                               # 지우면 적지도 거르지도 않는다. 기록을 비우려면 파일을 지운다 (리허설을 여러 번 한 뒤 등)

@@ -220,19 +220,22 @@ onair-engine --tts cartesia --max-segments 15 --demo-request "요즘 잠이 안 
 주제 토크의 이야기 갈래를 빈손으로 짜지 않습니다. 미리 만들어 둔 이야깃거리에서 오늘 주제와 가까운 것을 임베딩으로 찾아(RAG) 갈래 계획의 참고 자료로 넣고, 다른 방송이 이미 쓴 갈래는 규칙으로 뺍니다. 설계와 근거는 [CORNER_DESIGN.md](../../docs/CORNER_DESIGN.md) 5.9절, 측정은 [ENGINE_TUNING_LOG.md](../../docs/ENGINE_TUNING_LOG.md) T-017입니다.
 
 ```powershell
-onair-bank build --llm gemini --llm-model gemini-3.8-flash    # 데이터셋 만들기 (config/talk_bank/themes.yaml → items/)
-onair-bank build --llm gemini --only talk.common              # 한 칸만 다시
+onair-bank build --llm gemini --llm-model gemini-3.8-flash --embedder gemini          # 데이터셋 만들기 (config/talk_bank/themes.yaml → items/)
+onair-bank build --llm gemini --llm-model gemini-3.8-flash --embedder gemini --fill   # 빈 자리만 (주제를 더한 뒤, 끊긴 뒤)
+onair-bank build --llm gemini --embedder gemini --only talk.common                    # 한 칸만 다시
 onair-bank index --embedder gemini                             # 벡터 캐시 채우기 (없는 것만 임베딩)
 onair-bank search "시험 기간을 버티는 나만의 방법" --embedder gemini --persona config/personas/saebyeok.yaml --points
 ```
 
-- **데이터셋** (`config/talk_bank`): 외부 글을 긁지 않고 LLM으로 만듭니다. 주제 74개 × 페르소나(프리셋 5 + 공통) × 형식(talk 4개씩, music 2개씩) = 2,664건이고, 한 건은 갈래와 같은 모양(제목 + 말할 거리 4~6개)입니다. 주제를 더하려면 `themes.yaml`을 고치고 다시 만듭니다. L2 안전 규칙에 걸린 것은 버립니다.
+- **데이터셋** (`config/talk_bank`): 외부 글을 긁지 않고 LLM으로 만듭니다. 주제 152개 × 페르소나(프리셋 5 + 공통) × 형식(talk·music 4개씩) = 7,296자리 가운데 7,089건이고, 한 건은 갈래와 같은 모양(제목 + 말할 거리 4~6개)입니다. 주제를 더하려면 `themes.yaml`을 고치고 `--fill`로 빈 자리만 만듭니다. L2 안전 규칙에 걸린 것은 버립니다.
+  - **이야기를 푸는 방식 여섯 가지**(장면·갈림·요령·달라짐·어긋남·사람, `themes.yaml`의 `kinds`)를 칸마다 나눠 맡깁니다. 방송 하나가 보는 공통 + 프리셋 하나에 여섯 방식이 다 들어갑니다. 방식 없이 물으면 거의 전부가 "~하는 순간" 꼴의 장면 묘사로 돌아옵니다.
+  - **같은 주제에 닮은 갈래를 두지 않습니다.** 같은 주제를 페르소나마다 따로 물으면 같은 이야기가 돌아옵니다(처음 만든 2,664건에서는 한 주제의 토크 24건 중 서로 다른 이야기가 14건). 이미 만든 갈래의 제목을 프롬프트에 보여 주고, `--embedder`를 주면 이미 있는 갈래와 유사도 0.92 이상인 것을 버리고 그 자리만 세 번까지 다시 묻습니다. 그래도 겹치면 비워 둡니다 — 207자리가 비어 있습니다.
 - **검색** (`inputs/talk_bank.py`): 호스트의 페르소나(컨셉과 말투)와 가장 닮은 프리셋을 고르고, 그 프리셋 것과 공통 것 가운데 주제와의 유사도가 0.66 이상인 것을 가까운 순으로 갈래 수의 두 배(최대 12건)까지 찾습니다. 벡터 DB는 쓰지 않습니다 — 벡터를 `var/talk_bank.sqlite`에 캐시하고 전수 비교합니다.
 - **갈래 계획** (`inputs/topic_plan.py`): 찾은 것을 프롬프트에 "참고 이야깃거리"로 넣습니다. LLM은 주제에 맞는 것을 골라 다듬고 출처 번호를 적으며, 모자라면 새로 짭니다. LLM이 실패하면 찾은 것을 그대로 갈래로 씁니다. 검색이 실패하거나 20초를 넘기면 예전처럼 LLM만으로 짭니다.
 - **방송 간 재사용** (`inputs/topic_usage.py`, `var/topic_usage.sqlite`): 주제 토크가 꺼낸 갈래를 방송별로 적습니다. 30일 안에 다른 방송이 쓴 데이터셋 항목은 검색에서 빼고, 새로 짠 갈래도 다른 방송이 쓴 갈래와 유사도 0.92 이상이면 뺍니다. 빠진 만큼은 한 번 다시 짜고, 그래도 2개가 안 되면 덜 겹치는 것부터 되살립니다.
   - "다른 방송"은 엔진이 방송마다 만든 id로 가립니다. 스테이션 id는 고정 채널이라 방송이 바뀌어도 같습니다. 호스트가 달라도 다른 방송으로 봅니다.
   - **같은 주제로 리허설을 거듭하면 뒤로 갈수록 주제의 가장자리 이야기가 나옵니다.** 기록을 비우려면 `var/topic_usage.sqlite`를 지웁니다.
-- **설정** (`pipeline.talk_bank`, `embedder`, `topic_usage`, `topic_reuse_days`): `talk_bank`나 `topic_usage`를 지우면 그 기능만 꺼집니다. `embedder: gemini`는 `GEMINI_API_KEY`가 필요하고, 없으면 경고(`TALK_BANK_OFF`)만 남기고 방송합니다. 운영(`--serve`)은 엔진을 띄울 때 벡터 캐시를 미리 채웁니다(2,664건에 1분쯤).
+- **설정** (`pipeline.talk_bank`, `embedder`, `topic_usage`, `topic_reuse_days`): `talk_bank`나 `topic_usage`를 지우면 그 기능만 꺼집니다. `embedder: gemini`는 `GEMINI_API_KEY`가 필요하고, 없으면 경고(`TALK_BANK_OFF`)만 남기고 방송합니다. 운영(`--serve`)은 엔진을 띄울 때 벡터 캐시를 미리 채웁니다(7,089건에 5분쯤). 채우는 동안 시작한 방송은 데이터셋 없이 갑니다.
 - **엔진 패널**: `이야깃거리 8건 찾음 (다른 방송이 써서 3건 제외)`, `이야기 갈래 6개 준비 (데이터셋에서 5개, 다른 방송과 겹쳐 1개 제외)`. 검색 후보와 유사도는 `talk_bank_log`에, 갈래의 출처는 `topic_plan_log`에 남습니다.
 - 시나리오 실행기는 기본으로 끕니다. 켜고 견줄 때: `--variant bank:engine.talk_bank_dir=1,engine.embedder=gemini`. 방송별 사용 기록은 실행기에서 열지 않습니다(회차끼리 영향을 주면 견줄 수 없습니다).
 
