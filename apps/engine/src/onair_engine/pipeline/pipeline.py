@@ -39,6 +39,17 @@ _ATTEMPTS = 2  # 최초 1회 + 재시도 1회
 # 앞 멘트의 대본이 나올 때까지 기다리는 상한 — 넘으면 앞 멘트를 모르는 채로 쓴다. 앞 호출이 느릴 때
 # 뒤 멘트까지 늦어져 무음이 되는 것보다 낫다 (LLM 호출은 보통 1.5초, 드물게 20초)
 _CONTEXT_WAIT_SEC = 3.0
+# 예비 호출을 겹쳐 보내는 기준 [임시값] (#340). 서버 기록(2026-11-20)의 평소 분포보다 뚜렷이 늦은 때다 —
+# 이야기 멘트의 LLM은 중앙값 3.8초·95% 7.3초, TTS는 중앙값 7.1초·95% 8.9초, 문자 소개의 TTS는 12.0초·14.2초
+HEDGE_LLM_SEC = 8.0
+HEDGE_LLM_BLOCK_SEC = 12.0  # 덩어리 대본은 문단 여러 개를 한 번에 쓴다
+_HEDGE_TTS_BASE_SEC, _HEDGE_TTS_PER_CHAR_SEC = 6.5, 0.07
+_HEDGE_TTS_MIN_SEC, _HEDGE_TTS_MAX_SEC = 10.0, 22.0
+
+
+def tts_hedge_sec(text: str) -> float:
+    """이 대본의 합성이 이만큼 지나도 끝나지 않으면 늦은 것이다 — 합성 시간은 대본 길이에 비례한다."""
+    return min(_HEDGE_TTS_MAX_SEC, max(_HEDGE_TTS_MIN_SEC, _HEDGE_TTS_BASE_SEC + _HEDGE_TTS_PER_CHAR_SEC * len(text)))
 BLOCK_MAX_TOKENS = 1500  # 덩어리는 멘트 서너 개 분량이다. 추론 모델은 생각하는 데도 출력 한도를 쓴다
 _FAILED = object()  # _write: LLM이 재시도까지 실패했다
 # 뉴스 내용을 전하는 단계 — 주관 표현 규칙은 여기에만 건다. 뉴스 형식의 오프닝·엔딩 인사에는 걸지 않는다
@@ -96,7 +107,7 @@ logger = logging.getLogger(__name__)
 class GenerationPipeline:
     def __init__(self, *, station_id: str, profile: StationProfile,
                  llm: LlmClient, tts: TtsClient, safety: SafetyChecker,
-                 telemetry: Telemetry, audio_root: Path, recent_segments: int = 8):
+                 telemetry: Telemetry, audio_root: Path, recent_segments: int = 8, hedge: bool = True):
         self.station_id = station_id
         self.profile = profile
         self.llm = llm
@@ -108,6 +119,8 @@ class GenerationPipeline:
         self.audio_dir = self.audio_root / station_id
         # 제공자 장애 시 대체 대본 — 네트워크 없이 즉시 나온다
         self._fallback_llm = DummyLlmClient(delay_sec=0)
+        self._hedge = hedge  # 느린 호출에 예비 호출을 겹쳐 보낸다 (_retry)
+        self._hedging: set[str] = set()  # 예비 호출이 나가 있는 단계 — 단계마다 한 번에 하나만
         # 방송 맥락 = 최근 N개 대본 (확인 10). 실 LLM이 매번 같은 인사로 시작하지 않게 한다
         self._recent: deque[str] = deque(maxlen=recent_segments)
         # 방송 전체에서 여러 멘트에 나온 구절 — 직전 멘트 창 밖에서 되풀이되는 말을 잡는다 (repeats.py)
@@ -189,10 +202,12 @@ class GenerationPipeline:
         # [2] LLM 호출
         try:
             if job.block is not None:
-                texts = await self._retry(job, "llm", lambda: self._write_block(prompt, job.block.parts))
+                texts = await self._retry(job, "llm", lambda: self._write_block(prompt, job.block.parts),
+                                          hedge_after=HEDGE_LLM_BLOCK_SEC)
                 script = Script(text=texts[0])
             else:
-                script = await self._retry(job, "llm", lambda: self.llm.generate(prompt))
+                script = await self._retry(job, "llm", lambda: self.llm.generate(prompt),
+                                           hedge_after=HEDGE_LLM_SEC)
                 texts = [script.text]
         except Exception:
             logger.exception("LLM_FAILED %s %s", job.job_id, job.corner_type)
@@ -310,7 +325,8 @@ class GenerationPipeline:
         out_path = self.audio_dir / f"{seg_id}{self.tts.file_ext}"
         try:
             duration_ms = await self._retry(
-                job, "tts", lambda: self.tts.synthesize(script.text, out_path))
+                job, "tts", lambda: self.tts.synthesize(script.text, out_path),
+                hedge_after=tts_hedge_sec(script.text))
         except Exception as exc:
             logger.exception("TTS_FAILED %s %s", job.job_id, job.corner_type)
             raise _TtsFailed from exc
@@ -353,18 +369,62 @@ class GenerationPipeline:
         except _TtsFailed as exc:
             raise RuntimeError(f"filler 대체도 TTS에서 실패: {job.job_id}") from exc.__cause__
 
-    async def _retry(self, job: GenerationJob, stage: str,
-                     call: Callable[[], Awaitable[T]]) -> T:
-        for attempt in range(_ATTEMPTS):
-            started = time.time()
-            try:
-                return await call()
-            except Exception as exc:
-                self._log(job, stage, started, time.time(), "error")
-                if attempt == _ATTEMPTS - 1 or isinstance(exc, TtsQuotaError):  # 한도는 재시도해도 같다
-                    raise
-                logger.warning("RETRY %s %s %s: %r", stage, job.job_id, job.corner_type, exc)
-        raise AssertionError("unreachable")
+    async def _retry(self, job: GenerationJob, stage: str, call: Callable[[], Awaitable[T]],
+                     *, hedge_after: float | None = None) -> T:
+        """call을 부른다. 실패하면 한 번 더 부르고(_ATTEMPTS), 늦으면 기다리지 않고 둘째 호출을 겹쳐 보낸다.
+
+        hedge_after초가 지나도 답이 없으면 같은 호출을 하나 더 보내고 먼저 성공한 것을 쓴다 (#340). 엔진은
+        방송 30초 분량만 쌓아 두는데 호출 하나의 상한이 LLM 20초, TTS 30초라 — 실패한 뒤에야 다시 부르면 느린
+        호출 하나가 그대로 무음이 된다 (2026-11-20 실제 방송: TTS가 30초에 실패하고 다시 부른 것까지 62초).
+        - 호출 횟수의 상한은 그대로다(_ATTEMPTS). 겹쳐 보냈으면 실패해도 더 부르지 않는다.
+        - 예비 호출은 단계마다 한 번에 하나만 나간다 — 제공자가 통째로 느릴 때 호출이 두 배로 불어나지 않게.
+        - 늦은 쪽은 결과를 쓰기 전에 그만둔다(취소). 이미 나간 요청은 끊을 수 없어 끝까지 가고 비용도 든다.
+        """
+        tasks: dict[asyncio.Task, float] = {}
+
+        def launch() -> None:
+            tasks[asyncio.ensure_future(call())] = time.time()
+
+        first = time.time()
+        launch()
+        launched, hedged, failed = 1, False, None
+        try:
+            while tasks:
+                timeout = None
+                if self._hedge and hedge_after is not None and launched < _ATTEMPTS:
+                    timeout = max(0.0, first + hedge_after - time.time())
+                done, _ = await asyncio.wait(tasks, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+                if not done:  # 늦다
+                    hedge_after = None  # 한 번만 본다
+                    if stage in self._hedging:
+                        continue
+                    self._hedging.add(stage)
+                    hedged = True
+                    self._log(job, stage, first, time.time(), "hedge")
+                    logger.warning("HEDGE %s %s %s %.1fs", stage, job.job_id, job.corner_type, time.time() - first)
+                    launch()
+                    launched += 1
+                    continue
+                for task in sorted(done, key=tasks.get):
+                    started = tasks.pop(task)
+                    exc = task.exception()
+                    if exc is None:
+                        return task.result()
+                    self._log(job, stage, started, time.time(), "error")
+                    failed = exc
+                    if isinstance(exc, TtsQuotaError):  # 한도는 다시 불러도 같다 — 먼저 나간 호출만 기다린다
+                        launched = _ATTEMPTS
+                    elif launched < _ATTEMPTS:
+                        logger.warning("RETRY %s %s %s: %r", stage, job.job_id, job.corner_type, exc)
+                        launch()
+                        launched += 1
+            assert failed is not None
+            raise failed
+        finally:
+            for task in tasks:
+                task.cancel()
+            if hedged:
+                self._hedging.discard(stage)
 
     def _with_context(self, prompt: Prompt, *, plain: bool = False) -> Prompt:
         if not self._recent:

@@ -69,6 +69,7 @@ class EngineSettings:
     tts_voice: str | None = None  # None이면 어댑터 기본 보이스
     tts_cache_dir: Path | None = None  # None이면 캐시 없이 매번 합성. 공유 오디오 루트 밖에 둔다
     pause_ms: int = 0  # 멘트 끝에 붙이는 쉬는 시간(무음). WAV를 내는 TTS(gemini·dummy)에만 붙는다
+    hedge: bool = True  # 느린 LLM·TTS 호출에 예비 호출을 겹쳐 보낸다 (#340)
     max_concurrent_generations: int = 2
     # 백엔드가 track.queued를 보내기 전에 더미 곡 이름으로 곡 소개를 만들지. 로컬 실행용이다 —
     # 운영(--serve)에서는 끈다: 실제로 나오지 않는 곡을 소개하게 된다
@@ -207,7 +208,7 @@ class StationEngine:
             station_id=config.station_id, profile=config.profile,
             llm=llm, tts=tts, safety=safety,
             telemetry=self.telemetry, audio_root=audio_root,
-            recent_segments=config.recent_segments,
+            recent_segments=config.recent_segments, hedge=settings.hedge,
         )
         self.tracks = TrackSource(Catalog(), dummy=settings.dummy_tracks)
         self._safety = safety

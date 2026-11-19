@@ -95,6 +95,7 @@ def load_config(path: Path) -> tuple[StationConfig, EngineSettings]:
         tts_voice=pipe.get("tts_voice"),
         tts_cache_dir=Path(pipe["tts_cache_dir"]) if pipe.get("tts_cache_dir") else None,
         pause_ms=int(pipe.get("pause_ms", 0)),
+        hedge=bool(pipe.get("hedge", True)),
         max_concurrent_generations=int(pipe.get("max_concurrent_generations", 2)),
         dummy_tracks=bool(pipe.get("dummy_tracks", True)),
         target_buffer_sec=float(pipe.get("target_buffer_sec", 30)),

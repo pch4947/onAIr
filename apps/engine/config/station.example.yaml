@@ -50,6 +50,9 @@ pipeline:
   # tts_voice: kore           # gemini 기본값: kore — 목록: onair-engine --list-voices
                               # cartesia는 필수, google 기본값: ko-KR-Chirp3-HD-Aoede, edge 기본값: ko-KR-SunHiNeural
   tts_cache_dir: var/tts_cache  # 같은 문장 재합성 방지 캐시 — 엔진 전용, audio_dir 밖에 둔다
+  hedge: true                 # 느린 LLM·TTS 호출에 예비 호출을 겹쳐 보내고 먼저 온 답을 쓴다 (#340). 기준은 LLM 8초,
+                              # TTS는 대본 길이에 따라 10~22초 [임시값]. 느린 호출에서만 비용이 한 번 더 든다.
+                              # 문제가 생기면 false — 예전처럼 실패한 뒤에만 다시 부른다
   pause_ms: 700               # [임시값] 멘트 끝에 붙이는 쉬는 시간(무음, ms). 멘트가 숨 쉴 틈 없이 이어 붙는다는
                               # 2026-11-15 실제 방송 피드백으로 넣었다. 0이면 붙이지 않는다. WAV를 내는 TTS(gemini)에만 붙는다
   max_concurrent_generations: 2
