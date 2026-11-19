@@ -112,7 +112,7 @@ def test_only_one_backup_per_stage_at_a_time(tmp_path):
 
 
 def test_quota_error_stops_new_calls_but_waits_for_the_one_in_flight(tmp_path):
-    pipeline, stages = _pipeline(tmp_path)
+    pipeline, _ = _pipeline(tmp_path)
     calls = Calls((0.2, "first"), (0.0, TtsQuotaError("429", 60)))
     assert _run(pipeline, calls) == "first"
     with pytest.raises(TtsQuotaError):
