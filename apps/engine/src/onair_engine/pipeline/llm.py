@@ -247,8 +247,33 @@ class LlmError(RuntimeError):
 _MARKUP_RE = re.compile(r"[*_#`>]+")
 _STAGE_RE = re.compile(r"\[[^\]]*\]|\([^)]*(?:음악|BGM|웃음|효과음|잠시|멈춤)[^)]*\)")
 _SPEAKER_RE = re.compile(r"^\s*(?:DJ\s*[^\s:：]{0,10}|진행자|앵커)\s*[:：]\s*", re.MULTILINE)
-_QUOTES = "\"'“”‘’「」『』"
 _SENTENCE_END_RE = re.compile(r"[.!?…~]|[요다죠까네]\s")
+
+
+_QUOTE_PAIRS = {'"': '"', "'": "'", "“": "”", "‘": "’", "「": "」", "『": "』"}
+_OPENERS = {close: open_ for open_, close in _QUOTE_PAIRS.items()}
+
+
+def _unwrap(text: str) -> str:
+    """대본 전체를 감싼 따옴표와 짝 없이 끝에 남은 따옴표를 벗긴다.
+
+    양끝의 따옴표를 짝을 보지 않고 벗겼을 때는, 인용으로 시작하는 대본에서 여는 따옴표만 지워져
+    "저도 퇴근 중이에요”라고 하신 분"처럼 닫는 따옴표가 남았다 (채팅 멘트 368건 중 5건, ENGINE_TUNING_LOG O-007).
+    """
+    text = text.strip()
+    while len(text) >= 2:
+        close = _QUOTE_PAIRS.get(text[0])
+        inner = text[1:-1]
+        if close is None or text[-1] != close or close in inner or text[0] in inner:
+            break
+        text = inner.strip()  # 대본 전체를 한 쌍이 감쌌다
+    if text and (close := _QUOTE_PAIRS.get(text[0])) and (
+            text.count(close) == 1 if close == text[0] else close not in text):
+        text = text[1:].strip()  # 닫는 짝이 없는 여는 따옴표
+    if text and (open_ := _OPENERS.get(text[-1])) and (
+            text.count(open_) == 1 if open_ == text[-1] else open_ not in text):
+        text = text[:-1].strip()  # 여는 짝이 없는 닫는 따옴표
+    return text
 
 
 def clean_script(text: str, *, truncated: bool = False) -> str:
@@ -259,7 +284,7 @@ def clean_script(text: str, *, truncated: bool = False) -> str:
     text = _STAGE_RE.sub(" ", text)
     text = _MARKUP_RE.sub("", text)  # 화자 표기가 **DJ 새벽:**처럼 감싸여 올 수 있어 먼저 벗긴다
     text = _SPEAKER_RE.sub("", text)
-    text = " ".join(text.split()).strip(_QUOTES + " ")
+    text = _unwrap(" ".join(text.split()))
     if text.rstrip(".!").upper() == REJECT:
         return REJECT
     if truncated:
