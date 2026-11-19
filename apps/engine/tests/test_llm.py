@@ -147,6 +147,20 @@ def test_clean_script_normalizes_reject_and_rejects_empty():
         clean_script("  **  ")
 
 
+def test_clean_script_unwraps_quotes_only_as_a_pair():
+    """인용으로 시작하는 대본에서 여는 따옴표만 지워져 닫는 따옴표가 남았다 (ENGINE_TUNING_LOG O-007)."""
+    quoted = "“저도 퇴근 중이에요”라고 하신 분, 조심히 들어가세요."
+    assert clean_script(quoted) == quoted
+    straight = '"저도요"라고 하신 분, "좋네요"라고 하신 분도 계시네요.'
+    assert clean_script(straight) == straight
+    assert clean_script('"안녕하세요, 새벽입니다."') == "안녕하세요, 새벽입니다."
+    assert clean_script("“ ‘안녕하세요.’ ”") == "안녕하세요."
+    assert clean_script("“안녕하세요, 새벽입니다.") == "안녕하세요, 새벽입니다.", "짝 없는 따옴표는 벗긴다"
+    assert clean_script("안녕하세요, 새벽입니다.”") == "안녕하세요, 새벽입니다."
+    ends = "오늘의 한마디는 “천천히 가요”"
+    assert clean_script(ends) == ends
+
+
 def test_make_llm_requires_api_key(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)

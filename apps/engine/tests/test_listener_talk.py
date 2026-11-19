@@ -374,6 +374,54 @@ def test_ment_after_the_song_waits_until_the_song_is_almost_over(tmp_path):
     assert scheduler._waits_for_answers(end - 43) and not scheduler._waits_for_answers(end - 41)
 
 
+def test_ment_after_the_song_goes_by_what_the_backend_has_left(tmp_path, caplog):
+    """곡이 들리기 시작한 뒤에는 백엔드가 잰 남은 분량으로 정한다 (#337).
+
+    실제 백엔드는 시작 알림을 그 시각이 지난 뒤에 보내 방송 지연이 0으로 잡힌다 — 타임라인으로 세면 12초 늦는다.
+    받은 음원이 짧거나 곡을 도중에 끊으면 엔진이 아는 끝 시각까지 기다리는 동안 무음이 나간다.
+    """
+    scheduler, _ = _asking(tmp_path)
+    scheduler.target_buffer_sec = 30
+    now = time.time()
+    scheduler._started_at = now - 300
+    anchor = scheduler.timeline.new_anchor("track:1", "track", [])
+    scheduler._asked = Asked("seg_q", QUESTION, now - 90, anchor.id)
+    scheduler.timeline.append("seg_q", anchor, 10_000, now - 90, track_ref="yt:abc", track_ms=200_000)
+
+    def waits(buffer_sec: float | None) -> bool:
+        if buffer_sec is None:
+            scheduler._backend_report = None
+        else:
+            scheduler.report_backpressure(buffer_sec * 1000, "normal", at=now)
+        ctx = scheduler._snapshot()
+        return scheduler._waits_for_answers(ctx.now, ctx)
+
+    assert waits(12), "곡이 들리기 시작했는지 모른다 — 곡 소개가 큐에 들기 전에는 남은 분량이 모자라 보인다"
+    scheduler.on_track_started("yt:abc", now - 60)  # 실제 백엔드처럼 그 시각이 지난 뒤에 온다
+    assert scheduler._air_delay_sec == 0
+    assert waits(120), "남은 분량이 넉넉하다 — 곡이 나가는 중이다"
+    assert not caplog.records
+    assert not waits(12), "엔진이 아는 곡은 140초 남았지만 실제 남은 분량은 12초다 — 곡이 일찍 끝난다"
+    assert "SONG_ENDED_EARLY" in caplog.text
+    assert waits(None), "백엔드가 잰 값이 없으면 타임라인으로 센다"
+
+    # 제 길이대로 끝나는 곡: 타임라인(청취자 시각)으로는 42초 남았을 때 실제 남은 분량이 30초다
+    caplog.clear()
+    scheduler._early_end_logged = None
+    scheduler.timeline._entries[-1].track_start = now - 158
+    assert waits(31) and not waits(29), "실제 남은 분량이 30초(target_buffer_sec) 아래로 내려가면 만든다"
+    assert "SONG_ENDED_EARLY" not in caplog.text, "평소의 차이(방송 지연)는 일찍 끝난 것이 아니다"
+
+
+def test_closing_song_names_the_listener_who_requested_it():
+    """엔딩 곡이 된 신청곡은 신청자 이름 없이 소개됐다 (ENGINE_TUNING_LOG O-008)."""
+    track = {**TRACK, "requester_nickname": "막차", "requester_comment": "집에 가는 길이에요"}
+    user = build_prompt("closing_farewell", Material(topic="겨울 간식", track=track), PROFILE).user
+    assert "신청자: 막차" in user and "한마디: 집에 가는 길이에요" in user and "닉네임과 함께 소개한다" in user
+    plain = build_prompt("closing_farewell", Material(topic="겨울 간식", track=dict(TRACK)), PROFILE).user
+    assert "신청자" not in plain and "신청곡" not in plain
+
+
 @pytest.mark.parametrize(("asked", "contract", "taken"), [
     (True, 2, 6),  # 질문 뒤에 온 글을 후보로 넉넉히 준다 — 답인 것만 대본이 고른다
     (False, 2, 1),  # 평소에는 참여 강도대로
