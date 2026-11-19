@@ -12,6 +12,9 @@ import {
 } from '@/shared/api'
 import { useCurrentUser } from '@/shared/useCurrentUser'
 import { randomId } from '@/shared/randomId'
+import { updateSettings, useSettings, type ChatFontSize } from '@/shared/settings'
+import { AiredToasts } from '@/routes/listen/AiredToasts'
+import { useAiredToasts } from '@/routes/listen/useAiredToasts'
 import { CornerGuide } from '@/routes/listen/CornerGuide'
 import { VoteCard } from '@/routes/listen/VoteCard'
 import { isUnauthorizedError, LoginExpiredNotice } from '@/routes/listen/LoginExpiredNotice'
@@ -30,6 +33,12 @@ import type { StreamStatus } from '@/shared/types'
 
 const REQUESTS_POLL_INTERVAL_MS = 3000
 const CHAT_MAX_LENGTH = 200
+// 채팅 글자 크기 설정(#324). 보통은 설정이 생기기 전 크기 그대로다
+const CHAT_FONT_CLASS: Record<ChatFontSize, string> = {
+  small: 'text-[10px]',
+  normal: 'text-[11px]',
+  large: 'text-[13px]',
+}
 const EMOJI_OPTIONS = ['😀', '😂', '😍', '😢', '😮', '👍', '🎉', '🔥', '❤️', '🙏']
 
 const CONNECTION_STATUS_LABEL: Record<ConnectionStatus, string> = {
@@ -79,7 +88,10 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
   const [isEmojiPickerOpen, setIsEmojiPickerOpen] = useState(false)
   const [isQueueOpen, setIsQueueOpen] = useState(false)
   const [isVolumeOpen, setIsVolumeOpen] = useState(false)
-  const [volume, setVolume] = useState(1)
+  // 음량·자동 재생·채팅 표시·방송됨 알림은 화면 설정(#324)을 따르고, 여기서 바꾼 음량도 기억한다
+  const settings = useSettings()
+  const volume = settings.volume
+  const setVolume = (next: number) => updateSettings({ volume: next })
   const [chatInput, setChatInput] = useState('')
   const [presenceClientId] = useState(getOrCreatePresenceClientId)
   useRealtimeConnection(stationId)
@@ -131,7 +143,7 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
   const apiBase = import.meta.env.VITE_API_BASE_URL || window.location.origin
   const hlsPath = import.meta.env.VITE_HLS_URL || stream?.hlsUrl
   const hlsUrl = stream?.status === 'ready' && hlsPath ? new URL(hlsPath, apiBase).href : null
-  const { audioRef, isPlaying, error: playbackError, togglePlay } = useLivePlayback(hlsUrl)
+  const { audioRef, isPlaying, error: playbackError, togglePlay } = useLivePlayback(hlsUrl, { autoplay: settings.autoplay })
 
   useEffect(() => {
     if (audioRef.current) audioRef.current.volume = volume
@@ -155,6 +167,7 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
   }))
   const musicQueue = musicQueueQuery.data?.queue ?? []
   const nowPlaying = musicQueueQuery.data?.nowPlaying ?? null
+  const airedToasts = useAiredToasts(requestsQuery.data?.requests, settings.airedToast)
 
   const chatListRef = useRef<HTMLUListElement>(null)
 
@@ -212,6 +225,15 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
     }
   }, [chatMessages.length])
 
+  // 숨겼던 채팅을 다시 열면 최신 채팅부터 보이게 한다
+  useEffect(() => {
+    const el = chatListRef.current
+    if (!settings.chatHidden && el) {
+      isNearBottomRef.current = true
+      el.scrollTop = el.scrollHeight
+    }
+  }, [settings.chatHidden])
+
   const handleSendChat = (event: React.FormEvent) => {
     event.preventDefault()
     const trimmed = chatInput.trim()
@@ -245,6 +267,24 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
 
   // 방송 이름·다시듣기 저장 — 데스크톱은 방송 화면 위, 모바일은 뒤로가기 오른쪽에 같은 것을 둔다
   const stationTitle = djName ? `${djName}의 방송` : STATION_INFO.name
+  // 채팅 숨기기(#324): 채팅 칸만 뺀다. 데스크톱은 방송 화면이 그 자리까지 넓어지고, 모바일은 방송 화면 모양을 그대로 둔다.
+  // 토글은 설정의 "채팅 숨기기"와 같은 값이다
+  const chatHidden = settings.chatHidden
+  const chatToggle = (onDark: boolean) => (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={!chatHidden}
+      aria-label="채팅 보기"
+      onClick={() => updateSettings({ chatHidden: !chatHidden })}
+      className={`flex shrink-0 items-center gap-1.5 text-[11px] font-semibold ${onDark ? 'text-white' : 'text-text'}`}
+    >
+      채팅
+      <span className={`relative h-4 w-7 rounded-full transition-colors ${chatHidden ? (onDark ? 'bg-white/30' : 'bg-field-border') : 'bg-primary'}`}>
+        <span className={`absolute top-0.5 size-3 rounded-full bg-white shadow transition-[left] ${chatHidden ? 'left-0.5' : 'left-3.5'}`} />
+      </span>
+    </button>
+  )
   // 테스트 방송은 다시듣기를 남기지 않는다
   const replaySave = !testPanel && (
     <>
@@ -299,7 +339,10 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
                 <span className="truncate text-[13px] font-semibold text-text">{stationTitle}</span>
                 {replaySave}
               </div>
-              <StationStopButton stationId={stationId} userId={currentUser?.id} />
+              <div className="flex shrink-0 items-center gap-2">
+                {chatToggle(false)}
+                <StationStopButton stationId={stationId} userId={currentUser?.id} />
+              </div>
             </div>
           </div>
           {testPanel && (
@@ -321,13 +364,15 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
           )}
           {testPanel && playbackError && <p role="alert" className="text-xs text-danger md:hidden">{playbackError}</p>}
           {/* 모바일은 채팅 칸을 넓히려고 방송 화면 없이 컨트롤 띠(재생·볼륨·재생 바·LIVE·방송 상태)만 둔다 (#308) */}
-          <div className={`relative h-auto overflow-hidden rounded-lg bg-thumbnail md:block md:h-full md:flex-1 ${testPanel ? 'hidden' : ''}`}>
+          {/* 채팅을 끄면 모바일도 컨트롤 띠 대신 방송 화면(앨범·컨트롤)을 보인다. 높이는 #308 전 모바일 방송 화면과 같게 고정한다 */}
+          <div className={`relative overflow-hidden rounded-lg bg-thumbnail md:block md:h-full md:flex-1 ${testPanel ? 'hidden' : chatHidden ? 'h-72' : 'h-auto'}`}>
             <div className="absolute inset-x-4 top-4 hidden flex-wrap items-center justify-between gap-y-2 md:flex">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[13px] font-semibold text-white">{stationTitle}</span>
                 {replaySave}
               </div>
               <div className="flex items-center gap-2 text-[11px] text-nav-inactive">
+                {chatToggle(true)}
                 <StationStopButton stationId={stationId} userId={currentUser?.id} />
                 <span className="hidden sm:inline">{CONNECTION_STATUS_LABEL[connectionStatus]}</span>
                 <span className="flex items-center gap-1">
@@ -346,7 +391,7 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
               </div>
             )}
 
-            <div className="pointer-events-none absolute inset-0 hidden items-center justify-center md:flex">
+            <div className={`pointer-events-none absolute inset-0 items-center justify-center md:flex ${chatHidden ? 'flex' : 'hidden'}`}>
               <div className="flex size-20 items-center justify-center rounded-xl bg-album md:size-30">
                 <span className="text-2xl text-thumbnail-icon md:text-4xl">♪</span>
               </div>
@@ -355,7 +400,7 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
             <audio ref={audioRef} />
             {playbackError && <p role="alert" className="px-4 pt-2 text-sm text-red-300 md:absolute md:bottom-36 md:left-4 md:p-0">{playbackError}</p>}
 
-            <div className="flex flex-col gap-1.5 bg-black/35 px-4 py-3.5 md:absolute md:inset-x-0 md:bottom-0">
+            <div className={`flex flex-col gap-1.5 bg-black/35 px-4 py-3.5 md:absolute md:inset-x-0 md:bottom-0 ${chatHidden ? 'absolute inset-x-0 bottom-0' : ''}`}>
               <p className="hidden text-base font-semibold text-white md:block">
                 {ended ? '방송이 종료되었습니다' : ending ? '방송 종료 후 정리 중입니다' : isPlaying ? '라이브 방송 청취 중' : hlsUrl ? '' : '방송 준비 중…'}
               </p>
@@ -416,7 +461,10 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
           {testPanel && <div className={collapsed ? 'hidden md:contents' : 'contents'}>{testPanel}</div>}
         </section>
 
-        <section className={`flex min-h-0 w-full flex-col gap-3 rounded-md border border-border bg-surface p-4 md:h-full md:w-[clamp(300px,28vw,360px)] md:flex-none ${testPanel ? 'flex-[2] basis-0 md:basis-auto' : 'flex-1'}`}>
+        <section
+          hidden={chatHidden}
+          className={`flex min-h-0 w-full flex-col gap-3 rounded-md border border-border bg-surface p-4 md:h-full md:w-[clamp(300px,28vw,360px)] md:flex-none ${testPanel ? 'flex-[2] basis-0 md:basis-auto' : 'flex-1'}`}
+        >
           <header className="flex items-center justify-between">
             <p className="text-sm font-semibold text-text">채팅</p>
             <div className="flex items-center gap-2">
@@ -445,7 +493,7 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
             <ul
               ref={chatListRef}
               onScroll={handleChatScroll}
-              className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3 text-[11px] text-text"
+              className={`flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3 text-text ${CHAT_FONT_CLASS[settings.chatFontSize]}`}
             >
               {chatMessages.map((message) =>
                 message.kind === 'song_request' ? (
@@ -639,6 +687,7 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
           onSubmitted={() => { void requestsQuery.refetch() }}
         />
       )}
+      <AiredToasts toasts={airedToasts.toasts} onDismiss={airedToasts.dismiss} />
       {isQueueOpen && (
         <SongQueueModal
           queue={musicQueue}

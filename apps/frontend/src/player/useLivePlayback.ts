@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Hls from 'hls.js'
 
-export function useLivePlayback(url: string | null) {
+export function useLivePlayback(url: string | null, { autoplay = true }: { autoplay?: boolean } = {}) {
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // 설정을 바꿔도 연결을 다시 맺지 않는다 — 다음에 방송을 열 때부터 적용된다
+  const autoplayRef = useRef(autoplay)
+  useEffect(() => { autoplayRef.current = autoplay }, [autoplay])
 
   useEffect(() => {
     const audio = audioRef.current
@@ -19,7 +22,8 @@ export function useLivePlayback(url: string | null) {
     audio.addEventListener('pause', onPause)
     audio.addEventListener('error', onError)
     // 브라우저 autoplay 정책으로 거부될 수 있어 실패는 무시하고 기존 재생 버튼으로 폴백한다.
-    const attemptAutoplay = () => { audio.play().catch(() => {}) }
+    // 자동 재생을 끈 설정(#324)이면 재생 버튼을 누를 때까지 기다린다.
+    const attemptAutoplay = () => { if (autoplayRef.current) audio.play().catch(() => {}) }
     if (Hls.isSupported()) {
       const hls = new Hls({ liveSyncDurationCount: 3, liveMaxLatencyDurationCount: 6 })
       hlsRef.current = hls

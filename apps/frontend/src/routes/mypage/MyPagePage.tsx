@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Sidebar } from '@/app/Sidebar'
-import { AlertIcon, HistoryIcon, BoardIcon, FlaskIcon } from '@/app/icons'
+import { AlertIcon, HistoryIcon, BoardIcon, FlaskIcon, SettingsIcon } from '@/app/icons'
 import { HeartIcon } from '@/routes/board/LikeButton'
 import { MyPageTabContent } from '@/routes/mypage/MyPageTabContent'
 import { ReplaySaveIcon } from '@/routes/listen/icons'
@@ -61,6 +61,13 @@ export function MyPagePage() {
                 </button>
               )
             })}
+            {/* 데스크톱은 사이드바 맨 아래, 모바일은 왼쪽 메뉴가 없어 여기서 들어간다 */}
+            <button type="button" onClick={() => navigate('/settings')} className="flex flex-col items-center gap-2">
+              <span className="flex size-16 items-center justify-center rounded-full bg-field-bg">
+                <SettingsIcon className="size-7 text-text" />
+              </span>
+              <span className="text-center text-xs font-medium text-text">설정</span>
+            </button>
             {currentUser?.isAdmin && (
               <button type="button" onClick={() => navigate('/test')} className="flex flex-col items-center gap-2">
                 <span className="flex size-16 items-center justify-center rounded-full bg-field-bg">
