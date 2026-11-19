@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { getNotifications, markNotificationRead } from '@/shared/api'
 import { getNotificationPath } from '@/shared/notificationLink'
 import { useCurrentUser } from '@/shared/useCurrentUser'
-import { BoardIcon, ChevronRightIcon, FlaskIcon, HomeIcon, UserIcon } from '@/app/icons'
+import { BoardIcon, ChevronRightIcon, FlaskIcon, HomeIcon, SettingsIcon, UserIcon } from '@/app/icons'
 import type { NotificationItem } from '@/shared/types'
 import type { ComponentType } from 'react'
 
@@ -47,7 +47,7 @@ function NotificationToast({ notification, onClick, onExpire }: NotificationToas
   )
 }
 
-export type NavKey = 'main' | 'board' | 'mypage' | 'test'
+export type NavKey = 'main' | 'board' | 'mypage' | 'test' | 'settings'
 
 interface SidebarProps {
   active?: NavKey
@@ -63,7 +63,10 @@ const NAV_ITEMS: NavItem[] = [
   { key: 'test', label: '테스트', icon: FlaskIcon, path: '/test' },
 ]
 
-// 모바일 하단 탭은 홈 로고가 가운데 오도록 3개로 두고, 테스트는 마이페이지 메뉴에 둔다
+// 데스크톱 사이드바 맨 아래에 따로 둔다. 모바일은 마이페이지에서 들어간다
+const SETTINGS_ITEM: NavItem = { key: 'settings', label: '설정', icon: SettingsIcon, path: '/settings' }
+
+// 모바일 하단 탭은 홈 로고가 가운데 오도록 3개로 두고, 테스트·설정은 마이페이지 메뉴에 둔다
 const MOBILE_NAV_ITEMS: NavItem[] = [
   { key: 'board', label: '게시판', icon: BoardIcon, path: '/board' },
   { key: 'main', label: '홈', icon: HomeIcon, path: '/main' },
@@ -99,6 +102,24 @@ export function Sidebar({ active, hideMobileNav = false }: SidebarProps) {
   }, [notificationsQuery.data])
 
   const dismissToast = (id: string) => setToasts((prev) => prev.filter((toast) => toast.id !== id))
+  // 모바일에서 설정은 마이페이지 안에서 들어가는 화면이라 하단 탭은 마이페이지를 선택으로 보인다
+  const mobileActive: NavKey | undefined = active === 'settings' ? 'mypage' : active
+
+  const renderNavButton = (item: NavItem) => (
+    <button
+      key={item.key}
+      type="button"
+      onClick={() => navigate(item.path)}
+      className={
+        active === item.key
+          ? 'flex items-center gap-2 rounded-lg bg-primary px-3 py-2.5 text-left text-xs font-semibold text-white'
+          : 'flex items-center gap-2 rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-nav-inactive'
+      }
+    >
+      <item.icon className="size-4.5" />
+      {item.label}
+    </button>
+  )
 
   const handleToastClick = (notification: NotificationItem) => {
     dismissToast(notification.id)
@@ -119,8 +140,8 @@ export function Sidebar({ active, hideMobileNav = false }: SidebarProps) {
         ))}
       </div>
 
-      {/* 데스크톱: 고정폭 좌측 사이드바 */}
-      <aside className="hidden w-50 shrink-0 flex-col gap-7 bg-sidebar px-4 py-6 md:flex">
+      {/* 데스크톱: 고정폭 좌측 사이드바. 설정이 맨 아래에 있으므로 긴 페이지에서도 화면 높이에 붙여 둔다 */}
+      <aside className="sticky top-0 hidden h-screen w-50 shrink-0 flex-col gap-7 self-start bg-sidebar px-4 py-6 md:flex">
         <button
           type="button"
           onClick={() => navigate('/mypage')}
@@ -140,21 +161,11 @@ export function Sidebar({ active, hideMobileNav = false }: SidebarProps) {
         </button>
 
         <nav className="flex flex-col gap-1">
-          {NAV_ITEMS.filter((item) => item.key !== 'test' || user?.isAdmin).map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              onClick={() => navigate(item.path)}
-              className={
-                active === item.key
-                  ? 'flex items-center gap-2 rounded-lg bg-primary px-3 py-2.5 text-left text-xs font-semibold text-white'
-                  : 'flex items-center gap-2 rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-nav-inactive'
-              }
-            >
-              <item.icon className="size-4.5" />
-              {item.label}
-            </button>
-          ))}
+          {NAV_ITEMS.filter((item) => item.key !== 'test' || user?.isAdmin).map(renderNavButton)}
+        </nav>
+
+        <nav aria-label="설정" className="mt-auto flex flex-col gap-1">
+          {renderNavButton(SETTINGS_ITEM)}
         </nav>
       </aside>
 
@@ -172,10 +183,10 @@ export function Sidebar({ active, hideMobileNav = false }: SidebarProps) {
               {item.key === 'main' ? (
                 <img src="/logo_icon.png" alt="" className="size-12 shrink-0" />
               ) : (
-                <item.icon className={active === item.key ? 'size-5 text-white' : 'size-5 text-nav-inactive'} />
+                <item.icon className={mobileActive === item.key ? 'size-5 text-white' : 'size-5 text-nav-inactive'} />
               )}
             </span>
-            <span className={active === item.key ? 'text-[10px] font-semibold text-white' : 'text-[10px] font-medium text-nav-inactive'}>
+            <span className={mobileActive === item.key ? 'text-[10px] font-semibold text-white' : 'text-[10px] font-medium text-nav-inactive'}>
               {item.label}
             </span>
             {item.key === 'mypage' && unreadCount > 0 && (
