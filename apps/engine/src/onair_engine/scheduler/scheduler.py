@@ -950,7 +950,7 @@ class Scheduler:
             self._attach_asked(material)
         material.quotes = self._take_quotes(corner.mode("chat"), step_kind, anchor, material)
         # 반응을 뭉쳐서 전하는 자리는 곡 뒤 첫 멘트 하나다 — 이야기를 새로 여는 자리라 끊을 흐름이 없다.
-        # 그 멘트가 질문의 답을 받는 차례면 답만 받는다. 이 자리를 놓친 반응은 받지 않는다 (5.1.5절, T-017)
+        # 그 멘트가 질문의 답을 받는 차례면 답만 받는다. 이 자리를 놓친 반응은 받지 않는다 (5.1.5절, T-019)
         if material.extra.get("after_song"):
             if not material.extra.get("asked"):
                 self._take_mood(corner.mode("chat"), step_kind, material)

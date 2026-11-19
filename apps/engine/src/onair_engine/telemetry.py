@@ -55,6 +55,9 @@ CREATE TABLE IF NOT EXISTS story_judge_log (
 CREATE TABLE IF NOT EXISTS topic_plan_log (
     station_id TEXT, at REAL, method TEXT, dropped INTEGER, angles_json TEXT
 );
+CREATE TABLE IF NOT EXISTS talk_bank_log (
+    station_id TEXT, at REAL, topic TEXT, persona TEXT, skipped INTEGER, hits_json TEXT, error TEXT
+);
 CREATE TABLE IF NOT EXISTS aired_log (
     station_id TEXT, segment_id TEXT, at REAL, script TEXT
 );
@@ -433,17 +436,45 @@ class Telemetry:
                     relevant=relevant, method=method)
         self._db.commit()
 
-    def log_topic_plan(self, angles: list, method: str, dropped: int = 0) -> None:
-        """이야기 갈래 계획 — method는 llm 또는 failed(주제 한 줄로 진행). dropped는 L2에 걸려 뺀 갈래 수."""
+    def log_talk_bank(self, topic: str, found, error: str | None = None) -> None:
+        """이야깃거리 검색 (#332) — 찾은 후보와 유사도, 닮은 프리셋, 다른 방송이 써서 뺀 수. 실패하면 error만."""
+        hits = [{"id": h.item.id, "title": h.item.title, "score": round(h.score, 3)}
+                for h in found.hits] if found else []
+        persona = found.persona if found else None
+        skipped = found.skipped if found else 0
+        self._db.execute("INSERT INTO talk_bank_log VALUES (?,?,?,?,?,?,?)",
+                         (self.station_id, time.time(), topic, persona, skipped,
+                          json.dumps(hits, ensure_ascii=False), error))
+        if error:
+            summary = "이야깃거리 검색 실패 → 참고 자료 없이 갈래를 짠다"
+        else:
+            summary = f"이야깃거리 {len(hits)}건 찾음" + (f" (다른 방송이 써서 {skipped}건 제외)" if skipped else "")
+        # 패널은 topic_plan 종류로 묶어 보여 준다 — 새 종류를 만들면 프론트가 색을 모른다
+        self._event("topic_plan", summary, persona=persona, skipped=skipped, hits=hits, error=error)
+        self._db.commit()
+
+    def log_topic_plan(self, angles: list, method: str, dropped: int = 0,
+                       reused: list[str] | None = None) -> None:
+        """이야기 갈래 계획 — method는 llm, bank(LLM 실패 → 찾아 둔 이야깃거리 그대로), failed(주제 한 줄로 진행).
+
+        dropped는 L2에 걸려 뺀 갈래 수, reused는 다른 방송과 겹쳐 뺀 갈래의 제목 (#332).
+        """
+        reused = reused or []
         self._db.execute("INSERT INTO topic_plan_log VALUES (?,?,?,?,?)",
                          (self.station_id, time.time(), method, dropped,
                           json.dumps([dataclasses.asdict(a) for a in angles], ensure_ascii=False)))
-        if method == "llm":
-            summary = f"이야기 갈래 {len(angles)}개 준비" + (f" (안전 검사로 {dropped}개 제외)" if dropped else "")
-        else:
+        sourced = sum(1 for a in angles if a.source)
+        if method == "failed":
             summary = "이야기 갈래 생성 실패 → 주제만으로 진행"
+        else:
+            notes = [f"데이터셋에서 {sourced}개"] if sourced else []
+            notes += [f"안전 검사로 {dropped}개 제외"] if dropped else []
+            notes += [f"다른 방송과 겹쳐 {len(reused)}개 제외"] if reused else []
+            summary = f"이야기 갈래 {len(angles)}개 준비" + (f" ({', '.join(notes)})" if notes else "")
+            if method == "bank":
+                summary += " — 갈래 생성 실패, 찾아 둔 이야깃거리를 그대로 쓴다"
         self._event("topic_plan", summary, method=method, angles=[a.title for a in angles],
-                    dropped=dropped)
+                    dropped=dropped, sourced=sourced, reused=reused)
         self._db.commit()
 
     def log_angle(self, angle, index: int, total: int) -> None:

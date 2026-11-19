@@ -1,4 +1,4 @@
-"""때를 놓친 반응 (2026-11-19 결정, ENGINE_TUNING_LOG T-017).
+"""때를 놓친 반응 (2026-11-19 결정, ENGINE_TUNING_LOG T-019).
 
 방금 들은 말에 기대는 글("완전 공감이에요")은 곡을 넘기면 한 건씩 받지 않는다. 반응을 뭉쳐서 전하는 자리는
 곡 뒤 첫 멘트 하나이고, 그 멘트가 질문의 답을 받는 차례면 답만 받는다. 그 자리를 놓친 반응은 받지 않는다.
@@ -195,7 +195,7 @@ def test_first_ment_after_the_song_carries_the_reactions_as_mood(tmp_path):
 
 
 def test_talk_that_does_not_follow_a_song_leaves_the_reactions_alone(tmp_path):
-    """이야기 도중에 전하면 하던 이야기에 끼어든다 — 방송 40개에서 30번 중 13번이 지적됐다 (T-017)."""
+    """이야기 도중에 전하면 하던 이야기에 끼어든다 — 방송 40개에서 30번 중 13번이 지적됐다 (T-019)."""
     scheduler, _ = _with_reactions(tmp_path)
     job = _opener(scheduler, after_song=False)
     assert job.material.mood == [] and len(scheduler.pool.reactions()) == 2
@@ -274,7 +274,7 @@ def test_ment_after_the_song_waits_for_the_song_when_listeners_are_chatting(tmp_
 
 
 def test_song_whose_intro_did_not_air_is_not_waited_for(tmp_path):
-    """곡 소개를 LLM이 거부하면 곡도 나가지 않는다 — 기다리면 곡 뒤 멘트가 늦어 무음이 난다 (T-017 본 실행)."""
+    """곡 소개를 LLM이 거부하면 곡도 나가지 않는다 — 기다리면 곡 뒤 멘트가 늦어 무음이 난다 (T-019 본 실행)."""
     scheduler, _ = _asking(tmp_path)
     scheduler._last_chat_at = time.time()
     spec = scheduler.fmt.corner("music_intro")
@@ -313,7 +313,7 @@ def test_reactions_cross_one_song_only(tmp_path):
 # ── 프롬프트와 인용 검사 ───────────────────────────────────────────────
 
 def test_mood_prompt_names_what_the_reactions_were_about():
-    """ "그때 나간 말에는…", "그 노래를 들으며…"는 무엇에 대한 반응인지 알 수 없다 (T-017)."""
+    """ "그때 나간 말에는…", "그 노래를 들으며…"는 무엇에 대한 반응인지 알 수 없다 (T-019)."""
     agree = _chat(AGREE, about=ABOUT_TALK)
     agree.heard = "곡: 새벽 버스 - 모의 밴드\n곡 전에 한 말: 오늘 밤의 간식도 서두르지 않고 천천히 가요."
     extra = {"after_song": dict(TRACK), "no_question": True}
@@ -329,7 +329,7 @@ def test_question_is_quoted_with_what_it_is_about():
 
 
 def test_paraphrased_candidate_counts_as_taken():
-    """풀어서 받은 답을 받지 않은 것으로 보고 되돌려, 다음 멘트가 같은 글을 또 받았다 (T-017)."""
+    """풀어서 받은 답을 받지 않은 것으로 보고 되돌려, 다음 멘트가 같은 글을 또 받았다 (T-019)."""
     chat = "저는 무조건 야채요ㅋㅋ 종이 껍질 뜯을 때 붙은 만두피 갉아먹는 게 찐맛이에요 ㅠㅠ"
     script = "곡 전에는 호빵 속 취향을 여쭤봤습니다. 무조건 야채라고 하신 분, 만두피까지 챙겨 드시는 재미가 있겠네요."
     assert not quoted(chat, script) and mentioned(chat, script)
@@ -339,7 +339,7 @@ def test_paraphrased_candidate_counts_as_taken():
 
 
 def test_words_of_the_question_do_not_count_as_a_mention():
-    """답 후보와 대본은 질문의 낱말을 어차피 함께 쓴다 (본 실행 20261119-221335, T-017)."""
+    """답 후보와 대본은 질문의 낱말을 어차피 함께 쓴다 (본 실행 20261119-221335, T-019)."""
     question = "군고구마는 손에 쥐고 먹기 좋은 작은 쪽을 고르시나요, 나눠 먹기 좋은 큰 쪽을 고르시나요?"
     chat = "전 무조건 큰 거 골라서 집에 가자마자 엄마랑 반 갈라서 김치 올려 먹어요 ㅋㅋ"
     script = ("아까는 군고구마 크기를 어떻게 고르는지 나눴죠. 작은 게 편하다고 하신 분, 걷는 길에도 잘 어울리겠어요. "

@@ -162,7 +162,7 @@ def test_v2_broadcast_reports_pooled_selected_reflected(tmp_path):
 def test_v2_reaction_told_as_mood_is_level_one(tmp_path):
     """반응형 채팅은 분위기로만 전한다 — 한 건씩 언급하지 않았으므로 반영 단계 1이다."""
     engine, transport = _engine(tmp_path, 2, first_song=SONG)
-    req = _quote_a_chat(engine, "이 노래 진짜 좋아요", max_segments=20)  # 분위기는 곡 뒤 첫 멘트가 전한다 (T-017)
+    req = _quote_a_chat(engine, "이 노래 진짜 좋아요", max_segments=20)  # 분위기는 곡 뒤 첫 멘트가 전한다 (T-019)
     segment = next(s for s in transport.segments if req.request_id in s.input_refs)
     assert segment.reflection_levels == {req.request_id: 1}
     states = [s for rid, s, _ in transport.states if rid == req.request_id]

@@ -21,6 +21,7 @@ onair-compare = "onair_engine.scenario.compare:cli"
 onair-pairwise = "onair_engine.eval.pairwise:cli"
 onair-judge = "onair_engine.eval.judge:cli"
 onair-judge-defects = "onair_engine.eval.judge_defects:cli"
+onair-bank = "onair_engine.bank:cli"
 
 [build-system]
 requires = ["setuptools>=69"]

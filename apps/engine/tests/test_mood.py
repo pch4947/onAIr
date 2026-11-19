@@ -146,7 +146,7 @@ def _talk_job(scheduler, run) -> GenerationJob:
 
 
 def _after_song_job(scheduler, run) -> GenerationJob:
-    """곡 뒤 첫 멘트 — 반응 분위기는 이 자리에서만 전한다 (T-017)."""
+    """곡 뒤 첫 멘트 — 반응 분위기는 이 자리에서만 전한다 (T-019)."""
     corner = scheduler.fmt.corner("topic_talk")
     step = next(s for s in corner.steps if s.kind in ("talk_open", "talk_resume"))
     run.after_song = True

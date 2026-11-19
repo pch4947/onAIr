@@ -101,7 +101,7 @@ def mentioned(chat: str, script: str, question: str = "") -> bool:
 
     질문에 있는 낱말은 세지 않는다 — 답 후보와 대본은 질문의 낱말을 어차피 함께 쓴다. 질문의 낱말까지 세어
     셋을 요구했을 때는 "큰 걸 골라 어머니와 나눠 먹는다고 하신 분, 김치까지…"를 놓쳐 또 받았고, DJ가 자기 답만
-    한 멘트를 받은 것으로 보기도 했다 (기록된 후보 324건: 놓친 것 5건, 잘못 받은 것으로 본 것 2건 — T-017).
+    한 멘트를 받은 것으로 보기도 했다 (기록된 후보 324건: 놓친 것 5건, 잘못 받은 것으로 본 것 2건 — T-019).
     """
     def stems(text: str) -> set[str]:
         return {word[:2] for word in _WORD.findall(_ADDRESS.sub("", text))}
