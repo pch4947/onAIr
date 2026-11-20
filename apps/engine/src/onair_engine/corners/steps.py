@@ -39,10 +39,16 @@ from .base import system_prompt
 # 예시에 문장 끝을 넣지 않는다 — 넣으면 그 말끝을 그대로 따라 쓴다. 2026-11-12 평가에서 '~분이 있네요'는
 # 반말 DJ의 채팅 멘트 60건 모두에, '~분이 있다'는 존댓말 DJ의 60건 중 20건에 그대로 나왔다 (T-007)
 # 질문을 옮기며 무엇에 대한 질문인지를 빼면("저도 꼬리부터 먹느냐고 물어보신 분") 듣는 사람이 알 수 없다 (T-019)
-QUOTE_RULE = ("아래 청취자 채팅을 짧게 인용하고 한 문장으로 반응한다. 인용은 '~라고 하신 분'처럼 청취자의 말임을 밝힌다. "
-              "채팅이 질문이면 '~냐고 물어보신 분'처럼 청취자가 물었다는 것부터 말하고 짧게 답한다. "
-              "질문을 옮길 때는 무엇을 두고 묻는지(음식이나 곡의 이름)를 빼지 않는다. "
-              "문장 끝은 DJ의 말투로 맺는다. 닉네임이나 아이디는 말하지 않는다.")
+# 예시가 하나뿐이면 채팅을 받는 멘트가 모두 그 꼴이 된다 — 방송 40개의 채팅 멘트 230건 가운데 82%가 "~라고 하신 분"
+# 이나 "~냐고 물어보신 분"이었다(실행 20261119-221335). 예시는 대본에 그대로 나오므로, 예시를 멘트마다 돌린다 (T-021)
+SAID_FORM, ASKED_FORM = "~라고 하신 분", "~냐고 물어보신 분"
+_QUOTE_RULE = ("아래 청취자 채팅을 짧게 인용하고 한 문장으로 반응한다. 인용은 '{said}'처럼 청취자의 말임을 밝힌다. "
+               "채팅이 질문이면 '{asked}'처럼 청취자가 물었다는 것부터 말하고 짧게 답한다. "
+               "질문을 옮길 때는 무엇을 두고 묻는지(음식이나 곡의 이름)를 빼지 않는다. "
+               "문장 끝은 DJ의 말투로 맺는다. 닉네임이나 아이디는 말하지 않는다.")
+QUOTE_RULE = _QUOTE_RULE.format(said=SAID_FORM, asked=ASKED_FORM)
+# 한 멘트에서 여러 건을 받을 때 건마다 같은 말로 밝히면 "~라고 하신 분, … ~라고 하신 분, …"이 된다
+VARY_FORM_RULE = "여러 건을 받을 때는 건마다 밝히는 말을 달리한다 — 다음 건은 '{other}'처럼 밝힌다."
 # 다음 멘트가 이 채팅을 화제로 이어 간다 (CORNER_DESIGN 5.2절). 예전에는 "이 얘기를 조금 더 해 보겠다"고 말하게
 # 했는데, 그 말이 "겨울 간식 이야기를 더 나눠볼게요"처럼 오늘 주제를 예고하는 말로 나오고 다음 멘트는 채팅 이야기를
 # 이어 가서 예고와 어긋났다 — 가상 청취자 방송 40개에서 이어 말하기 문제 51건 중 28건이 이것이었다 (T-016)
@@ -132,10 +138,11 @@ ASKED_REPLIES_RULE = ("아래 채팅 가운데 그 질문의 답인 것은 질�
                       "DJ 자신의 답을 한 문장으로 말한다. 답을 받는 말에 다른 이야기를 섞지 않는다.")
 # 질문 뒤에 온 글을 후보로 넉넉히 주고 답인 것만 고르게 한다. 고른 대로 다 받게 했을 때는 "답을 읽어 볼게요" 하고
 # "가방 챙기기 귀찮다"는 글을 읽었다 (본 실행 20261119-143036). 받지 않은 글은 되돌아가 다음 멘트가 받는다
-ANSWER_QUOTE_RULE = ("아래 청취자 채팅은 질문을 던진 뒤에 온 글이다. 이 가운데 질문의 답인 글만 골라 세 건까지 받는다. "
-                     "한 건씩 '~라고 하신 분'처럼 청취자의 말임을 밝혀 짧게 인용하고 한마디로 반응한다. "
-                     "답이 아닌 글은 이 멘트에서 받지 않는다 — 다음 멘트가 따로 받는다. "
-                     "문장 끝은 DJ의 말투로 맺는다. 닉네임이나 아이디는 말하지 않는다.")
+_ANSWER_QUOTE_RULE = ("아래 청취자 채팅은 질문을 던진 뒤에 온 글이다. 이 가운데 질문의 답인 글만 골라 세 건까지 받는다. "
+                      "한 건씩 '{said}'처럼 청취자의 말임을 밝혀 짧게 인용하고 한마디로 반응한다. "
+                      "답이 아닌 글은 이 멘트에서 받지 않는다 — 다음 멘트가 따로 받는다. "
+                      "문장 끝은 DJ의 말투로 맺는다. 닉네임이나 아이디는 말하지 않는다.")
+ANSWER_QUOTE_RULE = _ANSWER_QUOTE_RULE.format(said=SAID_FORM)
 ASKED_ALONE_RULE = ("받은 답은 아직 없다. 답이 없다는 말은 하지 않고, DJ 자신의 답을 한두 문장으로 말한 뒤 "
                     "이야기를 잇는다. 청취자의 답을 지어내지 않는다.")
 # 답은 곡 뒤 첫 멘트가 다 받지 못한다(한 멘트에 인용 한두 건) — 뒤 멘트가 받는 답도 질문과 함께 받는다
@@ -599,7 +606,11 @@ def build_prompt(step: str, material: Material, profile: StationProfile, *,
             raise ValueError(f"{step} 단계는 채팅을 인용하지 않는다")
         quotes, steer = list(material.quotes), material.extra.get("steer")
         answers = bool(material.extra.get("optional_quotes"))  # 답인 글만 골라 받는다 — 다 받으라고 하지 않는다
-        rule = ANSWER_QUOTE_RULE if answers else QUOTE_RULE
+        said, other, asked_form = material.extra.get("quote_forms") or (SAID_FORM, None, ASKED_FORM)
+        rule = (_ANSWER_QUOTE_RULE.format(said=said) if answers
+                else _QUOTE_RULE.format(said=said, asked=asked_form))
+        if other and (answers or len(quotes) > 1):
+            rule += " " + VARY_FORM_RULE.format(other=other)
         if len(quotes) > 1 and not answers:
             rule += f" {MULTI_QUOTE_RULE}"
             if steer:  # 화제가 될 채팅(첫 건)을 마지막에 인용해야 "이 얘기를 더"로 이어진다

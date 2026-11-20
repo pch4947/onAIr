@@ -42,6 +42,10 @@ class ChatRules(BaseModel):
     block_points: int = Field(default=3, ge=1, le=6)
     song_story_every: int = Field(default=3, ge=0)
     back_announce_every: int = Field(default=1, ge=0)  # 곡 뒤 첫 멘트가 방금 나간 곡을 알려 주는 간격. 0이면 알리지 않는다
+    # 청취자의 말임을 밝히는 꼴을 멘트마다 돌려 쓴다 (T-021). 끄면 늘 첫 꼴만 쓴다
+    quote_rotation: bool = False
+    quote_forms: list[str] = Field(default_factory=lambda: ["~라고 하신 분"], min_length=1)
+    ask_forms: list[str] = Field(default_factory=lambda: ["~냐고 물어보신 분"], min_length=1)
     callbacks: bool = True  # 방송 도중에 앞서 나온 청취자 이야기를 다시 꺼낸다. 엔딩 돌아보기는 이 값과 상관없다
     callback_gap_sec: float = Field(default=600.0, ge=0)
     tone_judge: bool = False  # 채팅이 들어올 때 불만·농담인지 LLM에 묻는다 (inputs/chat_tone.py)

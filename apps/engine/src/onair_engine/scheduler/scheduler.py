@@ -272,6 +272,7 @@ class Scheduler:
         self._songs_held = 0
         self._skip_logged: set[tuple[str, str | None]] = set()  # 기다리는 동안 skip 로그를 반복하지 않는다
         self._last_quote_at = float("-inf")
+        self._quote_ments = 0  # 채팅을 받은 멘트 수 — 청취자의 말임을 밝히는 꼴을 돌려 쓴다 (T-021)
         # 순서 보장 제출 — 순번 발급, 다음에 낼 순번, 끝났지만 앞 순번을 기다리는 결과
         self._seq = 0
         self._next_pub = 0
@@ -952,6 +953,7 @@ class Scheduler:
         if step_kind == "talk":
             self._attach_asked(material)
         material.quotes = self._take_quotes(corner.mode("chat"), step_kind, anchor, material)
+        self._rotate_quote_form(material)
         # 반응을 뭉쳐서 전하는 자리는 곡 뒤 첫 멘트 하나다 — 이야기를 새로 여는 자리라 끊을 흐름이 없다.
         # 그 멘트가 질문의 답을 받는 차례면 답만 받는다. 이 자리를 놓친 반응은 받지 않는다 (5.1.5절, T-019)
         if material.extra.get("after_song"):
@@ -1308,6 +1310,21 @@ class Scheduler:
         for req in selection.picked:
             self.pool.remove(req)
         return selection.picked
+
+    def _rotate_quote_form(self, material: Material) -> None:
+        """채팅을 받는 멘트마다 청취자의 말임을 밝히는 꼴을 바꾼다 (T-021).
+
+        프롬프트의 예시가 "~라고 하신 분" 하나뿐이면 채팅 멘트가 모두 그 꼴로 시작한다. 예시는 대본에 그대로
+        나오므로(T-007) 다양하게 쓰라고 시키지 않고 예시를 돌린다. 여러 건을 받는 멘트에는 다음 꼴도 함께 준다.
+        """
+        rules = self.chat_rules
+        if not material.quotes or not rules.quote_rotation:
+            return
+        n = self._quote_ments
+        self._quote_ments += 1
+        said, asks = rules.quote_forms, rules.ask_forms
+        other = said[(n + 1) % len(said)] if len(said) > 1 else None
+        material.extra["quote_forms"] = (said[n % len(said)], other, asks[n % len(asks)])
 
     def _mood_ready(self, chat_mode, step_kind: str, with_feature: bool = False) -> bool:
         """지금 이 단계에 반응 분위기를 전할 수 있다 — 반응이 와 있고 코너 계약·참여 강도·간격이 허용한다.

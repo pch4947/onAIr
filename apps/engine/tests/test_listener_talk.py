@@ -600,7 +600,8 @@ def test_candidates_that_are_not_answers_go_back_without_a_failure(tmp_path):
     results = dict(db.execute("SELECT request_ref, result FROM quote_log WHERE kind = 'candidate'"))
     assert results == {"in_answer": "ok", "in_other": "unpicked"}
     later = [p.user for p in llm.generated if "내일 출근하기 싫어요" in p.user and ANSWER_QUOTE_RULE not in p.user]
-    assert later and QUOTE_RULE in later[0], "받지 않은 글은 다음 멘트가 평소처럼 받는다"
+    # 밝히는 꼴은 멘트마다 돌려 쓴다(T-021) — 꼴 앞까지의 지시로 본다
+    assert later and QUOTE_RULE.split("'")[0] in later[0], "받지 않은 글은 다음 멘트가 평소처럼 받는다"
 
 
 def test_dj_answers_the_question_when_nobody_does(tmp_path):
