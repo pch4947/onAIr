@@ -37,6 +37,12 @@ export function voiceChoiceGroups(voices: Voice[]): VoiceChoiceGroup[] {
     .filter((group) => group.choices.length > 0)
 }
 
+// 청취 화면의 DJ 정보 창(#353)에 보여 줄 목소리 이름 — 추천 목록에 없는 목소리면 null (영어 이름은 보이지 않는다)
+export function curatedVoiceLabel(id: string | null | undefined): string | null {
+  const item = CURATED.find((voice) => voice.id === id)
+  return item ? `${item.label} (${item.gender} ${item.age})` : null
+}
+
 // 폼을 처음 열 때 고를 목소리 — 추천 목록의 첫 번째 (없으면 엔진 목록의 첫 번째)
 export function defaultVoiceId(voices: Voice[]): string {
   return voiceChoiceGroups(voices)[0]?.choices[0]?.id ?? ''

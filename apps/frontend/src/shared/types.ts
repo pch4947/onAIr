@@ -116,6 +116,21 @@ export interface PersonaStyle {
   humor: Humor
 }
 
+// 청취 화면의 DJ 정보 창 (#353, GET /api/stations/{id}/dj) — 청취자에게 보여 줄 필드만 온다
+export interface StationDjInfo {
+  dj: {
+    name: string
+    concept: string | null
+    tone: string | null
+    style: Partial<PersonaStyle>
+    musicTaste: string[]
+    signaturePhrases: string[]
+    voice: string | null
+  }
+  format: StationFormat
+  topic: string | null
+}
+
 export interface PersonaForm {
   style: PersonaStyle
   musicTaste: string[]

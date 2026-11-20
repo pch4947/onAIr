@@ -23,9 +23,10 @@ import { SongRequestModal } from '@/routes/listen/SongRequestModal'
 import { SongQueueModal } from '@/routes/listen/SongQueueModal'
 import { StationStopButton } from '@/routes/listen/StationStopButton'
 import {
-  BackIcon, EmojiIcon, MessageIcon, MusicNoteIcon, PauseIcon, PlayIcon, ReplaySaveIcon, SendIcon, SongRequestAddIcon,
-  ViewIcon, VolumeIcon,
+  BackIcon, EmojiIcon, InfoIcon, MessageIcon, MusicNoteIcon, PauseIcon, PlayIcon, ReplaySaveIcon, SendIcon,
+  SongRequestAddIcon, ViewIcon, VolumeIcon,
 } from '@/routes/listen/icons'
+import { DjInfoModal } from '@/routes/listen/DjInfoModal'
 import { STATUS_VARIANT_CLASS, statusLabel, statusNote, statusVariant } from '@/routes/listen/requestStatus'
 import { STATION_INFO } from '@/routes/listen/mock'
 import type { ConnectionStatus } from '@/realtime/client'
@@ -87,6 +88,7 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
   const [isMessageOpen, setIsMessageOpen] = useState(false)
   const [isEmojiPickerOpen, setIsEmojiPickerOpen] = useState(false)
   const [isQueueOpen, setIsQueueOpen] = useState(false)
+  const [isDjInfoOpen, setIsDjInfoOpen] = useState(false)
   const [isVolumeOpen, setIsVolumeOpen] = useState(false)
   // 음량·자동 재생·채팅 표시·방송됨 알림은 화면 설정(#324)을 따르고, 여기서 바꾼 음량도 기억한다
   const settings = useSettings()
@@ -285,6 +287,18 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
       </span>
     </button>
   )
+  // DJ 정보 창 (#353) — 방송 이름 바로 오른쪽. DJ가 정해진 방송에만 둔다
+  const djInfoButton = (onDark: boolean) => djName && (
+    <button
+      type="button"
+      onClick={() => setIsDjInfoOpen(true)}
+      aria-label="DJ 정보"
+      title="DJ 정보"
+      className={`flex shrink-0 items-center transition-colors ${onDark ? 'text-white/75 hover:text-white' : 'text-text-muted hover:text-text'}`}
+    >
+      <InfoIcon className="size-3.5" />
+    </button>
+  )
   // 테스트 방송은 다시듣기를 남기지 않는다
   const replaySave = !testPanel && (
     <>
@@ -337,6 +351,7 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
             <div className="flex min-w-0 flex-1 items-center justify-between gap-2 md:hidden">
               <div className="flex min-w-0 items-center gap-2">
                 <span className="truncate text-[13px] font-semibold text-text">{stationTitle}</span>
+                {djInfoButton(false)}
                 {replaySave}
               </div>
               <div className="flex shrink-0 items-center gap-2">
@@ -369,6 +384,7 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
             <div className="absolute inset-x-4 top-4 hidden flex-wrap items-center justify-between gap-y-2 md:flex">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[13px] font-semibold text-white">{stationTitle}</span>
+                {djInfoButton(true)}
                 {replaySave}
               </div>
               <div className="flex items-center gap-2 text-[11px] text-nav-inactive">
@@ -688,6 +704,9 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
         />
       )}
       <AiredToasts toasts={airedToasts.toasts} onDismiss={airedToasts.dismiss} />
+      {isDjInfoOpen && (
+        <DjInfoModal stationId={stationId} djName={djName} onClose={() => setIsDjInfoOpen(false)} />
+      )}
       {isQueueOpen && (
         <SongQueueModal
           queue={musicQueue}

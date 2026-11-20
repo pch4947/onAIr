@@ -11,6 +11,7 @@ import type {
   NotificationItem,
   ReplaySession,
   RequestRecord,
+  StationDjInfo,
   StationListItem,
   SubmitRequestResponse,
 } from '@/shared/types'
@@ -48,6 +49,18 @@ export async function getBroadcastState(stationId: string): Promise<BroadcastSta
     throw new ApiError(res.status, `GET ${path} failed: ${res.status}`)
   }
   return res.json() as Promise<BroadcastStateResponse>
+}
+
+// 청취 화면의 DJ 정보 창 (#353) — 로그인(게스트 포함)한 청취자 누구나
+export async function getStationDj(stationId: string): Promise<StationDjInfo> {
+  const path = stationPath(stationId, '/dj')
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
+  })
+  if (!res.ok) {
+    throw new ApiError(res.status, `GET ${path} failed: ${res.status}`)
+  }
+  return res.json() as Promise<StationDjInfo>
 }
 
 // 테스트 화면 — 어드민만. 202는 요청 접수이고 실제 전환은 엔진이 한다
