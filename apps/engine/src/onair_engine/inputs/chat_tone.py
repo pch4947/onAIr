@@ -7,6 +7,9 @@
 규칙으로는 가릴 수 없다. "핫팩 먹어도 돼요?"는 물음표가 붙은 질문이고, "제 채팅은 또 씹으시네"에는 걸러 낼
 낱말이 없다. 그래서 채팅이 들어올 때 LLM에 한 번 묻는다. 판정이 늦거나 실패하면 보통 채팅으로 본다 —
 판정 때문에 채팅이 방송에서 빠지면 안 된다.
+
+같은 호출에서 그 채팅이 오늘의 주제에 관한 글인지도 묻는다 — 엔딩 돌아보기가 주제와 관련 있는 글만 다시 꺼내게
+하려는 것이다(사용자 결정 2026-11-20). 실제 방송의 엔딩이 "노래가 끊겼어요", "왜 말씀이 없으세요"를 돌아봤다.
 """
 from __future__ import annotations
 
@@ -34,6 +37,7 @@ MARKER = "채팅 성격 판정"  # 더미 LLM이 이 요청을 알아보는 구�
 PLAIN, JOKE, COMPLAINT = TONE_PLAIN, TONE_JOKE, TONE_COMPLAINT
 TONES = (PLAIN, JOKE, COMPLAINT)
 ABOUTS = (ABOUT_SELF, ABOUT_TALK, ABOUT_SONG)
+ON_TOPIC, OFF_TOPIC = "on", "off"
 MAX_BODY_CHARS = 200
 MAX_HEARD_CHARS = 400
 
@@ -44,7 +48,7 @@ _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 def build_prompt(topic: str, body: str, heard: str | None = None) -> Prompt:
     lines = [
-        f"{MARKER}: 아래 청취자 채팅에 대해 두 가지를 고른다.",
+        f"{MARKER}: 아래 청취자 채팅에 대해 세 가지를 고른다.",
         "첫째(tone), 어떤 성격의 말인가.",
         (f"- {COMPLAINT}: 방송 진행, DJ, 선곡, 다른 청취자를 향한 불만·비난·비꼼, 또는 자기 글을 읽어 주지 "
          "않는다는 항의. 정중한 부탁이나 신청, 아쉽다는 말은 여기에 넣지 않는다."),
@@ -62,7 +66,14 @@ def build_prompt(topic: str, body: str, heard: str | None = None) -> Prompt:
          "답하는지가 글에 없으면 이것이다."),
         f"- {ABOUT_SONG}: 방송에 나가는 곡이나 그 제목·가수에 대한 감상.",
         f"- 어느 쪽인지 분명하지 않으면 {ABOUT_SELF}다.",
-        f'출력은 JSON 하나만: {{"tone": "{PLAIN}", "about": "{ABOUT_SELF}"}}',
+        ("셋째(topic), 아래 주제에 관한 글인가. 방송을 마치며 DJ가 오늘 나눈 이야기를 돌아볼 때 다시 꺼낼 만한 "
+         "글인지로 고른다."),
+        f"- {ON_TOPIC}: 주제에 관한 자기 경험이나 생각, 사연이 들어 있다.",
+        # "소리·끊김·진행 같은 방송 상태에 대한 말"을 예로 들었더니 첫째 판정이 달라졌다 — "소리가 안 들려요"가
+        # 불만 10번 중 9번에서 0번이 됐다(2026-11-20, var/tone_focus.py). 예를 빼고 넓게만 적는다
+        f"- {OFF_TOPIC}: 인사, 맞장구나 감탄뿐인 글, 곡 감상이나 신청, 그 밖에 주제와 상관없는 모든 글.",
+        f"- 어느 쪽인지 분명하지 않으면 {OFF_TOPIC}다.",
+        f'출력은 JSON 하나만: {{"tone": "{PLAIN}", "about": "{ABOUT_SELF}", "topic": "{ON_TOPIC}"}}',
         "",
         data_block(TOPIC, topic),
     ]
@@ -72,17 +83,26 @@ def build_prompt(topic: str, body: str, heard: str | None = None) -> Prompt:
     return Prompt(system=_SYSTEM, user="\n".join(lines))
 
 
-def parse_judgement(text: str) -> tuple[str, str | None]:
-    """(성격, 기대는 것). 성격을 해석할 수 없으면 ValueError. 기대는 것은 없거나 모르는 값이면 None이다."""
+def _parse(text: str) -> dict:
     match = _JSON_RE.search(text)
     if not match:
         raise ValueError("JSON이 없습니다")
     data = json.loads(match.group(0))
-    tone = data.get("tone") if isinstance(data, dict) else None
-    if tone not in TONES:
-        raise ValueError(f"모르는 성격: {tone!r}")
+    if not isinstance(data, dict) or data.get("tone") not in TONES:
+        raise ValueError(f"모르는 성격: {data.get('tone') if isinstance(data, dict) else data!r}")
+    return data
+
+
+def parse_judgement(text: str) -> tuple[str, str | None]:
+    """(성격, 기대는 것). 성격을 해석할 수 없으면 ValueError. 기대는 것은 없거나 모르는 값이면 None이다."""
+    data = _parse(text)
     about = data.get("about")
-    return tone, about if about in ABOUTS else None
+    return data["tone"], about if about in ABOUTS else None
+
+
+def parse_on_topic(text: str) -> bool | None:
+    """주제에 관한 글인가. 답이 없거나 모르는 값이면 None — 판정하지 않은 것으로 본다."""
+    return {ON_TOPIC: True, OFF_TOPIC: False}.get(_parse(text).get("topic"))
 
 
 def parse_tone(text: str) -> str:
@@ -109,6 +129,7 @@ class ChatToneJudge:
         """채팅 한 건의 성격. 판정하지 못하면 보통 채팅(PLAIN)이다.
 
         기대는 것(req.about)도 함께 적는다 — 판정하지 못하면 None으로 두어 규칙 분류를 따르게 한다.
+        주제에 관한 글인지(req.on_topic)도 적는다 — 엔딩 돌아보기가 본다 (inputs/callbacks.py).
         """
         tone, method = PLAIN, "llm"
         try:
@@ -117,6 +138,7 @@ class ChatToneJudge:
                     text = await self._llm.complete(build_prompt(self._topic, req.body, req.heard),
                                                     max_tokens=self.max_tokens)
             tone, req.about = parse_judgement(text)
+            req.on_topic = parse_on_topic(text) if self._topic else None  # 주제 없는 방송은 판정하지 않는다
         except TimeoutError:
             method = "timeout"
         except (LlmError, ValueError, OSError) as exc:

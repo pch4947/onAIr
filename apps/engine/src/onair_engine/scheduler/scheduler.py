@@ -302,7 +302,7 @@ class Scheduler:
         self._last_talk_corner: str | None = None  # 곡 소개가 아닌 마지막 코너
         self._song_since_talk = False  # 그 코너 뒤에 곡이 나갔다
         self._last_track: dict | None = None  # 마지막으로 소개한 곡 — 곡 뒤 첫 멘트가 받는다
-        self._song_returns = 0  # 곡 뒤에 말을 이은 횟수 — 곡을 받는 말은 한 번 걸러 한 번만 한다
+        self._song_returns = 0  # 곡 뒤에 말을 이은 횟수 — 방금 나간 곡을 알려 주는 간격(back_announce_every)을 센다
         self._quiet_visits = 0  # 조용한 동안 한 번에 쓴 진입 수 — 몇 번에 한 번은 곡 이야기로 쉬어 간다
 
     @property
@@ -1019,8 +1019,10 @@ class Scheduler:
             # 앞 곡 소개를 받은 뒤에야 알려 주는데, 이 덩어리는 그 전에 쓴다
             if block is not None and every and self._quiet_visits % every == 0:
                 song_story = self._last_track
-            # 곡을 받는 말도 매번 하면 틀이 된다. 곡 이야기를 하는 차례에는 그 이야기가 곡을 받는다
-            material.extra["back_announce"] = song_story is None and self._song_returns % 2 == 1
+            # 곡이 끝나면 방금 나간 곡이 무엇이었는지부터 알린다 (사용자 결정 2026-11-20). 곡 이야기를 하는 차례에도
+            # 제목은 알린다. 질문의 답을 받는 차례에는 프롬프트가 뺀다 (steps.announces_song)
+            every = self.chat_rules.back_announce_every
+            material.extra["back_announce"] = bool(every) and (self._song_returns - 1) % every == 0
         # 화제를 꺼내면서 묻지 않는다 — 질문은 곡 앞에서 던지고 답은 곡 뒤에 받는다 (_should_ask, 7.7.2절)
         material.extra["no_question"] = True
         if song_story is not None:

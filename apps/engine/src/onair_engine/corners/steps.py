@@ -61,10 +61,13 @@ JOKE_RULE = ("{which} 청취자가 웃자고 한 농담이다. 사실로 받아 
 # 앞 이야기에 대한 "맞는 것 같아요"가 지금 이야기에 대한 말처럼 인용됐다. 분위기만 전한다
 # 반응 분위기는 곡 뒤 첫 멘트에서만 전한다 (5.1.5절). 이야기 도중에 전하면 하던 이야기에 끼어든다 — 방송 40개에서
 # 이야기 도중·곡 소개에 전한 30번 중 13번이 지적됐고, 곡 뒤 첫 멘트에 전한 22번은 2번이었다 (T-019)
-MOOD_RULE = ("아래는 곡이 나가기 전의 이야기와 방금 나간 곡을 들으며 청취자들이 보낸 반응이다. 한 건씩 인용하지 않고, "
-             "어떤 반응이 있었는지 멘트 첫머리에 한 문장으로만 전한 뒤 하려던 이야기로 넘어간다. 반응이 여러 "
+# 곡을 알려 주는 멘트(BACK_ANNOUNCE_RULE)에서는 그 문장 바로 뒤에 전한다 — 곡 감상이 곡 이름 뒤에 붙는다
+_MOOD_RULE = ("아래는 곡이 나가기 전의 이야기와 방금 나간 곡을 들으며 청취자들이 보낸 반응이다. 한 건씩 인용하지 않고, "
+             "어떤 반응이 있었는지 {where} 한 문장으로만 전한 뒤 하려던 이야기로 넘어간다. 반응이 여러 "
              "갈래면 다 늘어놓지 않고 두 가지까지만 고른다. 반응의 글귀를 "
              "그대로 읽지 않고, 숫자와 닉네임을 말하지 않는다. 반응이 한 건뿐이면 여러 사람인 것처럼 말하지 않는다.")
+MOOD_RULE = _MOOD_RULE.format(where="멘트 첫머리에")
+MOOD_AFTER_ANNOUNCE_RULE = _MOOD_RULE.format(where="곡을 알려 준 문장 바로 뒤에")
 # 곡이 나가는 동안 올라온 반응은 곡에 대한 것일 수도, 곡 전에 한 말에 대한 것일 수도 있다. 곡만 알려 줬더니
 # "그 말 맞는 것 같아요"를 곡에 대한 반응으로 전하고 "풍경을 떠올린 듯한 반응"처럼 뜻을 지어냈다 (T-012)
 # "그때 나간 말에는…", "그 노래를 들으며…"처럼 가리키기만 하면 무엇에 대한 반응인지 알 수 없다 (T-019)
@@ -150,7 +153,14 @@ DAYTIME_RULE = ("방송 시간대: {part} {clock}. 이것을 멘트에 일부러
 NO_QUESTION_RULE = "청취자에게 질문하지 않는다. 묻는 대신 DJ가 생각을 풀어 가고, 질문으로 끝내지 않는다."
 # 곡 뒤에 고정 문구("다시 …로 돌아왔어요")를 틀지 않는다 — 그 자리는 이 멘트가 잇는다
 AFTER_SONG_RULE = "곡이 끝나고 다시 말을 잇는 자리다. 새로 인사하거나 돌아왔다고 말하지 않는다."
-BACK_ANNOUNCE_RULE = "먼저 아래 방금 나간 곡을 한마디로 받고, 거기서 이야기로 넘어간다. 곡을 다시 소개하지는 않는다."
+# 곡이 끝나면 방금 나간 곡이 무엇이었는지부터 알린다 (사용자 결정 2026-11-20, T-020). 예전에는 한 번 걸러 한 번
+# "한마디로 받고" 넘어가게 했는데, 곡 뒤 첫 멘트 100건 가운데 제목을 말한 것은 5건이고 나머지는 "방금 곡의 경쾌함이…"
+# 처럼 느낌만 말하거나 곡을 건드리지 않고 다음 이야기로 넘어갔다 (수집 실행 20261120-041934)
+# 말끝 예시("지금 들으신 곡은 ~입니다")는 넣지 않는다 — 넣으면 그 말끝이 persona와 상관없이 되풀이된다 (T-007)
+BACK_ANNOUNCE_RULE = ("{first} 방금 나간 곡이 무엇이었는지 알려 주는 말이다 — 아래 방금 나간 곡의 제목과 가수를 넣어 "
+                      "DJ의 말투로 짧게 말한다. 곡을 다시 소개하거나 감상을 길게 풀지 않고, 그다음 문장부터 이야기로 "
+                      "넘어간다. 곡을 알려 주는 문장은 위의 문장 수 제한에 넣지 않는다.")
+BACK_ANNOUNCE_THEN_RULE = "청취자의 채팅이나 반응을 받을 것이 있으면 곡을 알려 준 바로 다음에 받고, 그 뒤에 이야기로 넘어간다."
 ANGLE_CONTINUE_RULE = "아래 이번 갈래는 앞에서 하던 이야기다. 처음 꺼내듯 말하지 않고 하던 이야기를 이어 간다."
 ANGLE_HANDOFF_RULE = ("아래 다룬 갈래 가운데 마지막 것이 바로 앞에서 한 이야기다. "
                       "그 이야기에서 자연스럽게 넘어오며 이번 갈래를 꺼낸다.")
@@ -207,14 +217,21 @@ def _question(m: Material) -> str:
     return f" {NO_QUESTION_RULE}" if m.extra.get("no_question") else ""
 
 
-def _after_song(m: Material) -> tuple[str, str]:
+def announces_song(m: Material) -> bool:
+    """이 멘트가 방금 나간 곡을 알려 주는가 — 곡 전에 던진 질문으로 돌아오는 멘트는 답만 받는다 (7.7.2절, 사용자 결정)."""
+    return bool(m.extra.get("after_song") and m.extra.get("back_announce") and not m.extra.get("asked"))
+
+
+def _after_song(m: Material, first: str = "첫 문장은") -> tuple[str, str]:
     """곡 뒤에 말을 잇는 자리의 지시와 데이터 블록. 곡 뒤가 아니면 둘 다 빈 문자열."""
     track = m.extra.get("after_song")
     if not track:
         return "", ""
-    # 곡 전에 던진 질문으로 돌아오는 멘트는 곡을 받는 말까지 하지 않는다 — 첫머리가 길어진다
-    if m.extra.get("back_announce") and not m.extra.get("asked"):
-        return f" {AFTER_SONG_RULE} {BACK_ANNOUNCE_RULE}", "\n" + data_block(PREV_TRACK, track_line(track))
+    if announces_song(m):
+        rule = f" {AFTER_SONG_RULE} {BACK_ANNOUNCE_RULE.format(first=first)}"
+        if m.quotes or m.mood:
+            rule += f" {BACK_ANNOUNCE_THEN_RULE}"
+        return rule, "\n" + data_block(PREV_TRACK, track_line(track))
     return f" {AFTER_SONG_RULE}", ""
 
 
@@ -277,7 +294,7 @@ def _talk_block(m: Material) -> str:
     text = (f"곡과 곡 사이에 DJ가 혼자 이어 말할 {BLOCK_MARKER}를 쓴다. 문단 {parts}개로 나누고, 문단마다 2~3문장을 쓰고, "
             "문단 사이는 빈 줄로 띄운다. 한 사람이 한 호흡으로 말하듯 문단이 앞 문단을 받아 이어져야 한다. "
             "문단마다 새로 인사하거나 주제를 다시 소개하지 않고, 같은 말을 되풀이하지 않는다.")
-    rule, blocks = _after_song(m)
+    rule, blocks = _after_song(m, "첫 문단의 첫 문장은")
     text += rule
     if song := m.extra.get("song_story"):
         # 주제 이야기만 되풀이하지 않게 가끔 방금 나간 곡 이야기로 쉬어 간다. 다음 곡 이야기는 할 수 없다 —
@@ -287,7 +304,8 @@ def _talk_block(m: Material) -> str:
                  "곡을 다시 소개하거나 다시 틀겠다고 하지 않는다. "
                  "수상·발매 시기·일화처럼 확인할 수 없는 사실은 말하지 않는다. "
                  "오늘 주제와 닿는 데가 있으면 가볍게 잇는다.")
-        blocks += "\n" + data_block(PREV_TRACK, track_line(song))
+        if PREV_TRACK not in blocks:  # 곡을 알려 주는 지시가 이미 곡을 넣었다
+            blocks += "\n" + data_block(PREV_TRACK, track_line(song))
     elif m.extra.get("angle"):
         text += _angle_rule(m, " 주제는 이미 소개했으니 다시 소개하지 않고, 아래 이번 갈래로 바로 시작한다.")
         text += " 이번 갈래의 말할 거리를 문단에 차례로 풀어 쓴다."
@@ -554,10 +572,11 @@ STEP_KINDS: dict[str, StepKind] = {
 }
 
 
-def _mood(reactions: list) -> str:
+def _mood(reactions: list, after_announce: bool = False) -> str:
     """반응 분위기 지시와 데이터 블록 — 반응들과, 알면 그때 방송에 나가던 말."""
     bodies = list(dict.fromkeys(r.body.strip() for r in reactions))[:_MOOD_MAX_LINES]
-    text = f"\n{MOOD_RULE}\n" + data_block(REACTIONS, "\n".join(bodies))
+    rule = MOOD_AFTER_ANNOUNCE_RULE if after_announce else MOOD_RULE
+    text = f"\n{rule}\n" + data_block(REACTIONS, "\n".join(bodies))
     heard = list(dict.fromkeys(r.heard for r in reactions if r.heard))[:2]
     if heard:
         text += f"\n{MOOD_HEARD_RULE}\n" + data_block(
@@ -604,7 +623,7 @@ def build_prompt(step: str, material: Material, profile: StationProfile, *,
     if material.mood:
         if not kind.quotable:
             raise ValueError(f"{step} 단계는 채팅 반응을 전하지 않는다")
-        user += _mood(material.mood)
+        user += _mood(material.mood, announces_song(material))
     if trend := material.extra.get("aggregate"):
         user += f"\n{AGGREGATE_RULE}\n" + data_block(TREND, trend.keyword)
     elif preview := material.extra.get("preview"):

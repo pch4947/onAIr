@@ -11,6 +11,7 @@ import pytest
 from onair_engine.corners.run import PlannedStep
 from onair_engine.corners.steps import (
     ASKED_ALONE_RULE,
+    MOOD_AFTER_ANNOUNCE_RULE,
     MOOD_HEARD_RULE,
     MOOD_RULE,
     QUOTE_RULE,
@@ -178,9 +179,12 @@ def _with_reactions(tmp_path):
     scheduler._contract_version = 2
     states: list[tuple[str, RequestState]] = []
     scheduler.telemetry.log_request_state = lambda rid, state: states.append((rid, state))
-    for chat in (_chat(AGREE, "agree", about=ABOUT_TALK, anchor_id="track:1", anchor_seq=0),
-                 _chat(SONG, "song", about=ABOUT_SONG, anchor_id="track:1", anchor_seq=0),
-                 _chat(STORY, "story", about=ABOUT_SELF)):
+    # 조금 전에 온 글로 둔다 — 지금 시각으로 두면 곡을 편성하는 시각과 같은 눈금에 찍혀(Windows의 시계는 약 16ms 단위)
+    # "곡 전에 온 반응"으로 세어지지 않을 때가 있다 (전체 실행에서 test_reactions_cross_one_song_only가 가끔 실패했다)
+    earlier = time.time() - 1
+    for chat in (_chat(AGREE, "agree", about=ABOUT_TALK, at=earlier, anchor_id="track:1", anchor_seq=0),
+                 _chat(SONG, "song", about=ABOUT_SONG, at=earlier, anchor_id="track:1", anchor_seq=0),
+                 _chat(STORY, "story", about=ABOUT_SELF, at=earlier)):
         scheduler.pool.add(chat)
     return scheduler, states
 
@@ -191,7 +195,8 @@ def test_first_ment_after_the_song_carries_the_reactions_as_mood(tmp_path):
     assert [r.request_id for r in job.material.mood] == ["agree", "song"]
     assert [q.request_id for q in job.material.quotes] == ["story"], "혼자 뜻이 통하는 글은 평소처럼 한 건씩 받는다"
     user = build_prompt(job.step, job.material, PROFILE).user
-    assert MOOD_RULE in user and AGREE in user and SONG in user
+    # 곡 뒤 첫 멘트는 곡을 먼저 알리므로, 반응은 그 문장 바로 뒤에 전한다 (T-020)
+    assert MOOD_AFTER_ANNOUNCE_RULE in user and MOOD_RULE not in user and AGREE in user and SONG in user
 
 
 def test_talk_that_does_not_follow_a_song_leaves_the_reactions_alone(tmp_path):
