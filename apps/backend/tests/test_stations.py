@@ -148,6 +148,41 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
                     app.state.redis.get.return_value = raw
                     self.assertEqual((await client.get('/api/stations/st_local_dev/stream/state')).json()['djName'], dj_name)
 
+    async def test_dj_info_shows_only_public_persona_fields(self):
+        """청취 화면의 DJ 정보 (#353): 보여 줄 필드만 싣고, 금지 사항·대본 예시·persona_id는 싣지 않는다."""
+        app = create_app(Settings('127.0.0.1', 3000))
+        persona = BODY['persona'] | {'persona_id': 'psn_secret', 'music_taste': ['발라드', '인디'],
+                                     'signature_phrases': ['천천히 가요'], 'forbidden': ['정치 이야기']}
+        record = {'status': 'started', 'config': {'persona': persona, 'format': 'talk', 'topic': '겨울 간식'}}
+        app.state.redis = SimpleNamespace(get=AsyncMock(return_value=json.dumps(record)))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url='http://test') as client:
+            # 로그인(게스트 포함)이 필요하다
+            self.assertEqual((await client.get('/api/stations/st_local_dev/dj')).status_code, 401)
+            for user in [{'id': 'u1', 'role': 'user'}, {'id': 'g1', 'role': 'guest'}]:
+                app.dependency_overrides[get_current_user] = lambda user=user: user
+                with self.subTest(role=user['role']):
+                    response = await client.get('/api/stations/st_local_dev/dj')
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(response.json(), {'dj': {
+                        'name': '새벽', 'concept': '스터디 방송', 'tone': '차분한 존댓말',
+                        'style': {'formality': 'polite', 'energy': 'low', 'humor': 'rare'},
+                        'musicTaste': ['발라드', '인디'], 'signaturePhrases': ['천천히 가요'],
+                        'voice': 'dummy-feminine'}, 'format': 'talk', 'topic': '겨울 간식'})
+                    for private in ('psn_secret', '정치 이야기', '반가워요.'):
+                        self.assertNotIn(private, response.text)
+            # 형식을 고르지 않은 방송은 talk, 선택 필드가 없으면 빈 목록
+            minimal = {'status': 'started', 'config': {'persona': {'dj_name': '번개'}}}
+            app.state.redis.get.return_value = json.dumps(minimal)
+            body = (await client.get('/api/stations/st_local_dev/dj')).json()
+            self.assertEqual((body['format'], body['topic'], body['dj']['musicTaste'], body['dj']['signaturePhrases']),
+                             ('talk', None, [], []))
+            # 방송 기록이 없거나 DJ가 없으면 404
+            for raw in [None, json.dumps({'status': 'started', 'config': {}})]:
+                app.state.redis.get.return_value = raw
+                self.assertEqual((await client.get('/api/stations/st_local_dev/dj')).status_code, 404)
+            app.state.redis.get.side_effect = TimeoutError
+            self.assertEqual((await client.get('/api/stations/st_local_dev/dj')).status_code, 503)
+
     async def test_proxy_timeout_unavailable_and_validation(self):
         upstream = SimpleNamespace(request=AsyncMock())
         request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(engine_http=upstream)))

@@ -185,6 +185,37 @@ async def station_summary(request: Request, station) -> tuple[str, str | None, s
     return record['status'], config.get('format', 'talk'), (config.get('persona') or {}).get('dj_name')
 
 
+def public_dj(persona: dict) -> dict:
+    """청취자에게 보여 줄 DJ 정보 (#353). 고른 필드만 싣는다 — 금지 사항·대본 예시·persona_id는 DJ 운영용이다."""
+    style = persona.get('style') or {}
+    return {
+        'name': persona['dj_name'],
+        'concept': persona.get('concept'),
+        'tone': persona.get('tone'),
+        'style': {key: style.get(key) for key in ('formality', 'energy', 'humor')},
+        'musicTaste': list(persona.get('music_taste') or []),
+        'signaturePhrases': list(persona.get('signature_phrases') or []),
+        'voice': persona.get('voice'),
+    }
+
+
+@router.get('/stations/{station_id}/dj', dependencies=[Depends(get_current_user)])
+async def station_dj(request: Request, response: Response):
+    """청취 화면의 DJ 정보 창 (#353). 방송 중 페르소나 전환으로 바뀔 수 있어 매번 기록에서 읽는다."""
+    station = current_station(request)
+    response.headers['Cache-Control'] = 'no-store'
+    try:
+        async with asyncio.timeout(3):
+            raw = await request.app.state.redis.get(f'backend:{station.station_id}:station')
+    except (RedisError, TimeoutError):
+        raise HTTPException(503, 'Redis unavailable') from None
+    config = (json.loads(raw).get('config') or {}) if raw else {}
+    persona = config.get('persona') or {}
+    if not persona.get('dj_name'):
+        raise HTTPException(404, 'DJ not found')
+    return {'dj': public_dj(persona), 'format': config.get('format', 'talk'), 'topic': config.get('topic')}
+
+
 async def vote_summary(request: Request, station) -> dict | None:
     try:
         async with asyncio.timeout(3):

@@ -4,6 +4,7 @@ import { FirstSongField } from '@/routes/station-create/FirstSongField'
 import { EMPTY_FIRST_SONG, firstSongError, firstSongUrl } from '@/routes/station-create/firstSong'
 import type { FirstSongValue } from '@/routes/station-create/firstSong'
 import { defaultVoiceId, voiceChoiceGroups } from '@/routes/station-create/voiceOptions'
+import { ENERGY_OPTIONS, FORMALITY_OPTIONS, HUMOR_OPTIONS } from '@/shared/personaLabels'
 import type {
   Energy,
   Formality,
@@ -17,20 +18,6 @@ import type {
   Voice,
 } from '@/shared/types'
 
-const FORMALITY_OPTIONS: { value: Formality; label: string }[] = [
-  { value: 'polite', label: '존댓말' },
-  { value: 'casual', label: '반말' },
-]
-const ENERGY_OPTIONS: { value: Energy; label: string }[] = [
-  { value: 'low', label: '차분하게' },
-  { value: 'mid', label: '보통' },
-  { value: 'high', label: '활기차게' },
-]
-const HUMOR_OPTIONS: { value: Humor; label: string }[] = [
-  { value: 'rare', label: '드물게' },
-  { value: 'some', label: '가끔' },
-  { value: 'often', label: '자주' },
-]
 const BROADCAST_MINUTES_OPTIONS = [30, 45, 60]
 
 const CORNER_OPTIONS: { value: TalkCorner; label: string }[] = [
