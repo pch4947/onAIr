@@ -522,7 +522,8 @@ class Telemetry:
         if leaning:
             label += f" · {leaning}"
         self._event("chat_tone", f"채팅 성격 · \"{_excerpt(req.body)}\" · {label}",
-                    request_id=req.request_id, tone=tone, method=method, about=about)
+                    request_id=req.request_id, tone=tone, method=method, about=about,
+                    on_topic=getattr(req, "on_topic", None))
         self._db.commit()
 
     def log_question(self, event: str, text: str) -> None:

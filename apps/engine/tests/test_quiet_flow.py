@@ -110,7 +110,7 @@ def test_every_third_quiet_break_talks_about_the_song_just_played(tmp_path):
     blocks = _blocks(llm)
     third = blocks[2]
     assert "방금 나간 곡을 듣고 떠오른 이야기" in third and f'<data label="{PREV_TRACK}">' in third
-    assert ANGLE not in third and "한마디로 받고" not in third, "주제 갈래와 곡 받기 한마디는 쉰다"
+    assert ANGLE not in third and third.count(f'<data label="{PREV_TRACK}">') == 1, "주제 갈래는 쉬고, 곡은 한 번만 넣는다"
     assert "방금 나간 곡을 듣고 떠오른 이야기" not in blocks[0] + blocks[1]
 
 
@@ -131,7 +131,7 @@ def test_song_story_does_not_need_the_next_track(tmp_path):
     asyncio.run(open_thread())
     engine.telemetry.close()
     assert material.extra["song_story"]["title"] == "첫눈 오는 밤"
-    assert material.extra["back_announce"] is False
+    assert material.extra["back_announce"] is True, "곡 이야기를 하는 차례에도 방금 나간 곡이 무엇이었는지는 알린다"
 
 
 def test_chat_keeps_the_broadcast_on_short_segments(tmp_path):

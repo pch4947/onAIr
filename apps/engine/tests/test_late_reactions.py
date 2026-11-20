@@ -11,6 +11,7 @@ import pytest
 from onair_engine.corners.run import PlannedStep
 from onair_engine.corners.steps import (
     ASKED_ALONE_RULE,
+    MOOD_AFTER_ANNOUNCE_RULE,
     MOOD_HEARD_RULE,
     MOOD_RULE,
     QUOTE_RULE,
@@ -191,7 +192,8 @@ def test_first_ment_after_the_song_carries_the_reactions_as_mood(tmp_path):
     assert [r.request_id for r in job.material.mood] == ["agree", "song"]
     assert [q.request_id for q in job.material.quotes] == ["story"], "혼자 뜻이 통하는 글은 평소처럼 한 건씩 받는다"
     user = build_prompt(job.step, job.material, PROFILE).user
-    assert MOOD_RULE in user and AGREE in user and SONG in user
+    # 곡 뒤 첫 멘트는 곡을 먼저 알리므로, 반응은 그 문장 바로 뒤에 전한다 (T-020)
+    assert MOOD_AFTER_ANNOUNCE_RULE in user and MOOD_RULE not in user and AGREE in user and SONG in user
 
 
 def test_talk_that_does_not_follow_a_song_leaves_the_reactions_alone(tmp_path):

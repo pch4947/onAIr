@@ -236,9 +236,9 @@ def test_broadcast_carries_the_angle_across_the_song(tmp_path):
     # 곡만 사이에 두고 같은 코너로 돌아온다 — "다시 …로 돌아왔어요"를 틀지 않는다
     glue = [s.audio_ref.rsplit("/", 1)[1].rsplit("_", 1)[0] for s in transport.segments if _glue(s)]
     assert glue.count("topic_talk_call") == 1 and "topic_talk_resume" not in glue
-    # 곡 뒤 첫 멘트는 방금 나간 곡을 안다. 곡을 받는 말은 한 번 걸러 한 번만 한다
+    # 곡 뒤 첫 멘트는 방금 나간 곡을 알고, 곡마다 그 곡이 무엇이었는지부터 알린다 (2026-11-20 결정)
     assert "after_song" not in openers[0].material.extra
-    assert [j.material.extra["back_announce"] for j in openers[1:3]] == [True, False]
+    assert [j.material.extra["back_announce"] for j in openers[1:3]] == [True, True]
     assert openers[1].material.extra["after_song"]["title"]
 
 

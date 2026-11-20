@@ -36,11 +36,15 @@ class Aired:
 
 
 def _worth_recalling(chat: ListenerRequest) -> bool:
-    """나중에 다시 꺼내도 말이 되는 채팅 — 청취자 자신의 이야기다.
+    """나중에 다시 꺼내도 말이 되는 채팅 — 오늘의 주제에 관한, 청취자 자신의 이야기다.
 
     그때 나가던 말에 대한 반응("맞는 것 같아요")과 질문("그게 무슨 말이에요?")은 그 자리에서 끝난 말이다.
     몇 분 뒤 다른 화제에서 다시 꺼내면 무엇에 대한 말인지 알 수 없다 (2026-11-15 실제 방송).
     """
+    if chat.on_topic is False:
+        # 주제와 관련 있는 글만 다시 꺼낸다 (사용자 결정 2026-11-20) — 실제 방송의 엔딩이 "노래가 끊겼어요",
+        # "왜 말씀이 없으세요"를 돌아봤다. 판정하지 않은 글(None)은 아래 규칙만 본다
+        return False
     return not is_mood(chat) and "?" not in chat.body and "？" not in chat.body
 
 

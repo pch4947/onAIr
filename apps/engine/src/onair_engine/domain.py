@@ -142,6 +142,7 @@ class ListenerRequest:
     tone: str | None = None  # 채팅 성격 (TONE_*) — 판정하지 않았으면 None이고 보통 채팅으로 다룬다
     about: str | None = None  # 무엇에 기대는 글인가 (ABOUT_*) — 판정하지 않았으면 None이고 규칙 분류(chat_type)를 따른다
     stale: bool = False  # 기대던 말이 지나갔다 — 한 건씩 받지 않고, 곡 뒤 첫 멘트가 분위기로만 전한다
+    on_topic: bool | None = None  # 오늘의 주제에 관한 글인가 (inputs/chat_tone.py) — 판정하지 않았으면 None
 
 
 # 채팅 성격 (inputs/chat_tone.py) — 불만은 받지 않고 농담은 농담으로 받는다. PENDING은 판정을 기다리는 중이다
