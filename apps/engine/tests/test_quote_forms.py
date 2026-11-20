@@ -85,4 +85,7 @@ def test_every_configured_form_counts_as_naming_the_listener():
         script = "겨울엔 팥 붕어빵이 제일이" + form.lstrip("~") + ", 저도 그래요."
         assert attributed(script), form
     assert quoted("겨울엔 역시 붕어빵이죠 팥붕 최고", "겨울엔 팥 붕어빵이 제일이라는 글이 왔어요. 저도 팥이에요.")
+    # 실제 대본은 인용 조사를 빼고 쓰기도 한다 (2026-11-20 작은 확인에서 놓친 꼴)
+    assert quoted("DJ님은 군고구마 드실 때 김치파예요 우유파예요?",
+                  "군고구마 먹을 때 김치파냐 우유파냐 궁금해하신 분, 번개는 우유 한 모금에 고구마 한입 조합이야.")
     assert not attributed("오늘은 붕어빵 이야기를 해 볼게요."), "DJ 자신의 말은 밝히는 말이 아니다"
