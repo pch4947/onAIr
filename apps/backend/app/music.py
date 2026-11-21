@@ -294,6 +294,45 @@ async def run_process(args, timeout, *, env=None):
         raise HTTPException(502, 'Audio preparation failed; the video may be unavailable or unsupported')
 
 
+# 뒤가 잘린 음원 (#339): Lavalink youtube 플러그인의 /youtube/stream은 길이가 적히지 않은 형식(itag 18, 지금 받는
+# 유일한 형식)을 첫 구간 약 11.86MB까지만 준다. 영상 비트레이트가 높은 곡은 2~5분에서 끊긴다. 같은 영상은 다시 받아도
+# 같은 자리에서 끊기므로 다시 받지 않는다. 받은 파일의 머리에는 원래 길이가 적혀 있어서, 변환한 MP3를 실제로 재야 안다.
+TRUNCATED_TOLERANCE_SEC = 5.0
+
+
+def ffprobe_path(settings):
+    configured = os.environ.get('ONAIR_FFPROBE')
+    if configured:
+        return configured
+    if Path(settings.ffmpeg).is_absolute():
+        return str(Path(settings.ffmpeg).with_name('ffprobe.exe' if os.name == 'nt' else 'ffprobe'))
+    return 'ffprobe'
+
+
+async def audio_seconds(ffprobe, path):
+    """파일에 실제로 들어 있는 오디오의 길이."""
+    try:
+        process = await asyncio.create_subprocess_exec(
+            ffprobe, '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', str(path),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+    except FileNotFoundError:
+        raise HTTPException(503, 'Media tools unavailable; contact the administrator') from None
+    try:
+        async with asyncio.timeout(15):
+            output, _ = await process.communicate()
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+    try:
+        seconds = float(output.decode().strip())
+    except ValueError:
+        seconds = 0.0
+    if process.returncode or seconds <= 0:
+        raise HTTPException(502, 'Audio preparation failed; the video may be unavailable or unsupported')
+    return seconds
+
+
 def music_segment_id(generation, owner, retry_key):
     # A reused client key in a new broadcast must not inherit an old PLAYED state.
     scope = f'{generation}:' if generation else ''
@@ -326,44 +365,57 @@ class MusicService:
                         manifest.write_text(json.dumps(metadata), encoding='utf-8')
                 return audio, metadata
             raise HTTPException(409, 'Idempotency-Key already used for another video')
+        if not self.settings.lavalink_password:
+            raise HTTPException(503, 'Lavalink is not configured')
         with tempfile.TemporaryDirectory(prefix='onair-youtube-') as temp:
-            root = Path(temp)
-            if not self.settings.lavalink_password:
-                raise HTTPException(503, 'Lavalink is not configured')
-            env = os.environ | {'ONAIR_LAVALINK_URL': self.settings.lavalink_url,
-                                'ONAIR_LAVALINK_PASSWORD': self.settings.lavalink_password}
-            if Path(self.settings.ffmpeg).is_absolute():
-                env.setdefault('ONAIR_FFPROBE', str(Path(self.settings.ffmpeg).with_name(
-                    'ffprobe.exe' if os.name == 'nt' else 'ffprobe')))
-            try:
-                await run_process([sys.executable, '-m', 'app.youtube_worker', video_id, temp,
-                                   str(self.settings.youtube_max_seconds)], 120, env=env)
-            except HTTPException:
-                failure = root / 'error.json'
-                code = json.loads(failure.read_text())['code'] if failure.exists() else 'worker_failed'
-                logger.warning('YouTube preparation failed: %s', code)
-                if code in ('service_unavailable', 'service_auth', 'media_tools_unavailable'):
-                    raise HTTPException(503, 'Lavalink unavailable; contact the administrator') from None
-                raise
-            metadata = json.loads((root / 'result.json').read_text(encoding='utf-8'))
-            if metadata['title'] == video_id:
-                enriched = await fetch_oembed_title(video_id)
-                if enriched:
-                    metadata['title'], metadata['artist'] = enriched
-            source = (root / metadata.pop('source')).resolve()
-            if source.parent != root.resolve() or not source.is_file():
-                raise HTTPException(502, 'Invalid downloaded audio')
-            converted = root / 'audio.mp3'
-            await run_process([self.settings.ffmpeg, '-nostdin', '-hide_banner', '-loglevel', 'error',
-                               '-y', '-i', str(source), '-vn', '-t', str(self.settings.youtube_max_seconds),
-                               '-ar', '48000', '-ac', '2', '-c:a', 'libmp3lame', '-b:a', '192k',
-                               str(converted)], 120)
+            converted, metadata, expected_ms = await self.download(video_id, Path(temp))
+            if metadata['duration_ms'] < expected_ms - TRUNCATED_TOLERANCE_SEC * 1000:
+                # 그대로 내보내면 곡이 도중에 끊기고 다음 멘트가 나온다. 이 영상은 쓰지 않는다
+                logger.warning('YouTube audio for %s is cut short: got %.1fs of %.1fs', video_id,
+                               metadata['duration_ms'] / 1000, expected_ms / 1000)
+                raise HTTPException(502, {'code': 'audio_truncated',
+                                          'message': 'Only part of this video could be downloaded; try another upload'})
             # Stage beside the destination so publication uses a same-volume rename on Windows.
             staged = audio.with_suffix('.tmp')
             await asyncio.to_thread(shutil.copyfile, converted, staged)
             staged.replace(audio)
             manifest.write_text(json.dumps(metadata), encoding='utf-8')
         return audio, metadata
+
+    async def download(self, video_id, root):
+        """한 번 받아 MP3로 바꾼다 → (MP3 경로, 곡 정보, 원래 길이 ms). 곡 정보의 duration_ms는 MP3를 실제로 잰 길이다.
+
+        엔진은 track.started + duration_ms를 곡이 끝나는 시각으로 쓰므로(계약 3.4절) 실제로 나갈 길이를 알린다.
+        """
+        env = os.environ | {'ONAIR_LAVALINK_URL': self.settings.lavalink_url,
+                            'ONAIR_LAVALINK_PASSWORD': self.settings.lavalink_password,
+                            'ONAIR_FFPROBE': ffprobe_path(self.settings)}
+        try:
+            await run_process([sys.executable, '-m', 'app.youtube_worker', video_id, str(root),
+                               str(self.settings.youtube_max_seconds)], 120, env=env)
+        except HTTPException:
+            failure = root / 'error.json'
+            code = json.loads(failure.read_text())['code'] if failure.exists() else 'worker_failed'
+            logger.warning('YouTube preparation failed: %s', code)
+            if code in ('service_unavailable', 'service_auth', 'media_tools_unavailable'):
+                raise HTTPException(503, 'Lavalink unavailable; contact the administrator') from None
+            raise
+        metadata = json.loads((root / 'result.json').read_text(encoding='utf-8'))
+        if metadata['title'] == video_id:
+            enriched = await fetch_oembed_title(video_id)
+            if enriched:
+                metadata['title'], metadata['artist'] = enriched
+        source = (root / metadata.pop('source')).resolve()
+        if source.parent != root.resolve() or not source.is_file():
+            raise HTTPException(502, 'Invalid downloaded audio')
+        converted = root / 'audio.mp3'
+        await run_process([self.settings.ffmpeg, '-nostdin', '-hide_banner', '-loglevel', 'error',
+                           '-y', '-i', str(source), '-vn', '-t', str(self.settings.youtube_max_seconds),
+                           '-ar', '48000', '-ac', '2', '-c:a', 'libmp3lame', '-b:a', '192k',
+                           str(converted)], 120)
+        expected_ms = metadata['duration_ms']
+        metadata['duration_ms'] = round(await audio_seconds(ffprobe_path(self.settings), converted) * 1000)
+        return converted, metadata, expected_ms
 
     async def enqueue(self, video_id, owner, retry_key, source='playlist', request_id=None, nickname=None, comment=None,
                       extra=None):

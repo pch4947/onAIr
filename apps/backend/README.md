@@ -41,6 +41,11 @@ Lavalink(OAuth + remoteCipher) 다운로드 → MP3 변환 → 기존 Redis 큐 
   방송 상태가 `started`, `ONAIR_HLS_ENABLED=1`이어야 합니다.
 - 기본 최대 길이는 600초이며 `ONAIR_YOUTUBE_MAX_SECONDS`로 1~3600초 범위에서 조정합니다.
   라이브·길이 불명 영상은 거부합니다. 영상별 접근 제한은 Lavalink/YouTube 응답에 따릅니다. 다운로드는 최대 100 MiB입니다.
+- **뒤가 잘린 음원은 거부합니다 (#339).** Lavalink youtube 플러그인의 `/youtube/stream`은 지금 받을 수 있는 유일한 형식
+  (itag 18, 360p 영상+오디오)을 첫 구간 약 11.86MB까지만 줍니다. 영상 비트레이트가 높은 곡은 2~5분에서 끊기고,
+  같은 영상은 다시 받아도 같은 자리에서 끊깁니다. 백엔드는 변환한 MP3를 재서 원래 길이보다 5초 넘게 짧으면
+  502 `{"detail": {"code": "audio_truncated"}}`로 거부하고 경고 로그(`is cut short: got ..s of ..s`)를 남깁니다.
+  곡 길이(`duration_ms`)는 항상 MP3를 잰 값으로 알립니다. 플러그인이 고쳐지기 전까지 이런 영상은 틀 수 없습니다.
 
 ### PowerShell 호출
 
