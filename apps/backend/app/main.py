@@ -76,6 +76,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.add_middleware(CORSMiddleware, allow_origins=["*"],
                                allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
                                allow_headers=["Content-Type", "Idempotency-Key", "Authorization"])
+    # 운영에서는 Caddy가 /api, /hls, /ws, /health 앞부분만 이 앱으로 넘긴다.
+    # 새 앞부분의 경로를 만들면 deploy/Caddyfile에도 추가한다 (deploy/README.md)
     application.include_router(router)
     application.include_router(auth_router)
     application.include_router(account_router)
