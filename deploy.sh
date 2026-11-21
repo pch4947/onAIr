@@ -17,6 +17,8 @@
 #   SERVICES="onair-backend onair-engine" bash deploy.sh
 # 프론트 정적 파일을 서빙하는 경로(Caddy root)도 바꿀 수 있습니다:
 #   WEB_ROOT=/var/www/onair bash deploy.sh
+#
+# Caddy 설정(deploy/Caddyfile)은 이 스크립트가 적용하지 않습니다. 바뀐 배포에서는 deploy/README.md대로 따로 적용합니다.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

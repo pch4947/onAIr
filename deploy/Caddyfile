@@ -1,0 +1,27 @@
+# onAIr VM의 Caddy 설정 — /etc/caddy/Caddyfile에 둔다 (적용 방법: deploy/README.md)
+#
+# 백엔드는 127.0.0.1:3000에서만 받는다. 아래에 적은 경로만 백엔드로 넘기고, 나머지는 프론트 정적 파일이다.
+# 백엔드에 새 경로 앞부분(예: /ws)이 생기면 여기에도 추가한다 — 빠지면 그 요청은 index.html을 받는다.
+# 웹소켓(/ws)은 reverse_proxy가 따로 설정 없이 넘긴다.
+
+3-37-161-202.sslip.io {
+    handle /api/* {
+        reverse_proxy 127.0.0.1:3000
+    }
+    handle /hls/* {
+        reverse_proxy 127.0.0.1:3000
+    }
+    # 방송 실시간 알림 웹소켓 (#312)
+    handle /ws/* {
+        reverse_proxy 127.0.0.1:3000
+    }
+    handle /health* {
+        reverse_proxy 127.0.0.1:3000
+    }
+    # 프론트 빌드 결과 — deploy.sh가 apps/frontend/dist를 여기로 복사한다 (WEB_ROOT)
+    handle {
+        root * /var/www/onair
+        try_files {path} /index.html
+        file_server
+    }
+}
