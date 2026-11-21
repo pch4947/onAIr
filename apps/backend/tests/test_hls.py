@@ -35,8 +35,9 @@ class HlsTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse((publisher.directory / "index.m3u8.tmp").exists())
             # Decode the mixed-source HLS playlist with FFmpeg, not just file existence.
             process = await asyncio.create_subprocess_exec(
-                settings.ffmpeg, "-loglevel", "error", "-i", str(publisher.directory / "index.m3u8"),
-                "-t", "8", "-f", "null", "-", stdout=asyncio.subprocess.DEVNULL)
+                # 라이브 재생목록은 기본으로 끝의 3조각부터 읽고 새 조각을 기다린다 — 처음부터 읽게 한다 (#359)
+                settings.ffmpeg, "-loglevel", "error", "-live_start_index", "0",
+                "-i", str(publisher.directory / "index.m3u8"), "-t", "8", "-f", "null", "-", stdout=asyncio.subprocess.DEVNULL)
             async with asyncio.timeout(20):
                 self.assertEqual(await process.wait(), 0)
             initial_sequence = publisher.sequence

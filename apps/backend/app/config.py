@@ -24,7 +24,11 @@ class Settings:
     buffer_low_seconds: float = 15
     # 다음 멘트가 아직 없을 때 채우는 무음 조각 길이. 짧을수록 멘트가 빨리 이어지지만 조각·경계가 늘어난다
     fill_chunk_seconds: float = 2
-    broadcast_delay_seconds: float = 12
+    # HLS 조각 길이 (#359). 짧을수록 청취 지연이 줄지만 요청 수가 늘고 느린 네트워크에서 끊김이 늘 수 있다
+    hls_segment_seconds: float = 2
+    # 청취자가 실제로 듣는 시각 = 발행 시각 + 이 값. 투표 창, segment.started, 지금 재생 중이 이 값을 믿는다.
+    # 2초 조각에서 크롬·아이폰 사파리(둘 다 hls.js) 실측 약 5초 (#359). 조각 길이를 바꾸면 다시 잰다
+    broadcast_delay_seconds: float = 5
     station_id: str = "st_local_dev"
     # 다중 방송 채널 (ONAIR_STATION_IDS). 비어 있으면 station_id 하나만 쓴다
     station_ids: tuple[str, ...] = ()
@@ -90,6 +94,12 @@ def load_settings() -> Settings:
             raise ValueError("ONAIR_FILL_CHUNK_SECONDS must be between 0.25 and 4")
         return value
 
+    def hls_segment_seconds() -> float:
+        value = float(os.environ.get("ONAIR_HLS_SEGMENT_SECONDS", str(Settings.hls_segment_seconds)))
+        if not math.isfinite(value) or not 1 <= value <= 6:
+            raise ValueError("ONAIR_HLS_SEGMENT_SECONDS must be between 1 and 6")
+        return value
+
     station_ids = parse_station_ids(os.environ.get("ONAIR_STATION_IDS", ""))
     station_id = station_ids[0] if station_ids else os.environ.get("ONAIR_STATION_ID", "st_local_dev")
     if not re.fullmatch(STATION_ID_PATTERN, station_id):
@@ -108,7 +118,8 @@ def load_settings() -> Settings:
                     fallback_mode=fallback_mode, fallback_audio=Path(fallback).resolve() if fallback else None,
                     buffer_low_seconds=positive_seconds("ONAIR_BUFFER_LOW_SECONDS", "15"),
                     fill_chunk_seconds=fill_chunk_seconds(),
-                    broadcast_delay_seconds=positive_seconds("ONAIR_BROADCAST_DELAY_SECONDS", "12"),
+                    hls_segment_seconds=hls_segment_seconds(),
+                    broadcast_delay_seconds=positive_seconds("ONAIR_BROADCAST_DELAY_SECONDS", str(Settings.broadcast_delay_seconds)),
                     buffer_target_seconds=positive_seconds("STREAM_BUFFER_TARGET_SECONDS", "45"),
                     response_window_seconds=positive_seconds("REQUEST_RESPONSE_WINDOW_SECONDS", "90"),
                     redis_url=os.environ.get("ONAIR_REDIS_URL") or os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0"),
