@@ -135,7 +135,7 @@ StationRuntime
 | `/api/stations/{sid}/replays/mine` | 그대로 두고, 채널을 모은 `GET /api/replays/mine`을 추가 |
 | `/api/scheduler/tick` | 디버그용. 기본 채널만 |
 
-### 6.3 프론트엔드에 필요한 작업 (프론트 담당)
+### 6.3 프론트엔드에 필요한 작업 (프론트 담당) — 완료 (#238)
 
 - 방송 목록 화면 (`GET /api/stations`). 지금 메인 화면은 목업 데이터다
 - 청취 경로에 방송 ID 추가 (`/listen/:stationId`) 후 위 방송별 API 사용
