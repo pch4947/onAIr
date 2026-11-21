@@ -26,6 +26,19 @@ from ..messaging.contracts import Segment, validate_audio
 log = logging.getLogger(__name__)
 
 
+def segment_seconds(settings) -> float:
+    """HLS 조각 길이 (#359). 설정이 없는 가짜 설정(테스트)은 기본값을 쓴다."""
+    from ..config import Settings
+    return getattr(settings, 'hls_segment_seconds', Settings.hls_segment_seconds)
+
+
+def target_duration(settings) -> int:
+    """재생목록의 EXT-X-TARGETDURATION. 조각 길이를 반올림한 값이 이보다 크면 안 되고(RFC 8216 4.3.3.1),
+    라이브 중에 바뀌면 안 되므로 설정에서 한 번에 정한다. 무음 채움 조각도 한 조각이라 함께 본다.
+    사파리는 이 값의 약 3배만큼 뒤에서 재생하므로 청취 지연을 정하는 값이기도 하다."""
+    return math.ceil(max(segment_seconds(settings), getattr(settings, 'fill_chunk_seconds', 2)))
+
+
 class HlsPublisher:
     def __init__(self, redis, settings, replay_sessions=None):
         self.redis, self.settings = redis, settings
@@ -173,7 +186,10 @@ class HlsPublisher:
                 args += ['-map', '0:a:0', '-af', 'adenorm=level=-90,loudnorm=I=-16:TP=-1.5:LRA=11']
             args += ["-vn",
                      "-ar", "48000", "-ac", "2", "-c:a", "aac", "-b:a", "128k",
-                     "-f", "hls", "-hls_time", "4", "-hls_list_size", "0",
+                     # 무음 채움은 한 조각으로 낸다 — 길이가 조각 길이와 같으면 AAC 프레임 경계 때문에 0.02초짜리 조각이 덧붙는다
+                     "-f", "hls", "-hls_time",
+                     f"{segment_seconds(self.settings) if source else target_duration(self.settings) + 1:g}",
+                     "-hls_list_size", "0",
                      "-hls_segment_filename", str(output / "chunk_%05d.ts"), str(output / "local.m3u8")]
             process = await asyncio.create_subprocess_exec(
                 *args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
@@ -193,7 +209,9 @@ class HlsPublisher:
                 if line.startswith("#EXTINF:"):
                     duration = float(line.split(":", 1)[1].rstrip(","))
                 elif line and not line.startswith("#"):
-                    if duration is None or not math.isfinite(duration) or not 0 < duration <= 5:
+                    # 반올림해 TARGETDURATION을 넘는 조각은 재생목록 규칙 위반이다 — 사파리가 재생을 거부할 수 있다
+                    if (duration is None or not math.isfinite(duration)
+                            or not 0 < duration < target_duration(self.settings) + 0.5):
                         raise ValueError("Invalid encoded HLS chunk duration")
                     name = f"{self.session}_{token}_{len(chunks)}.ts"
                     temporary = self.directory / (name + ".tmp")
@@ -215,7 +233,7 @@ class HlsPublisher:
             self.sequence += 1
             self.discontinuities += int(old[2])
             self.retired.append((time.monotonic() + 60, old))
-        lines = ["#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-TARGETDURATION:5",
+        lines = ["#EXTM3U", "#EXT-X-VERSION:3", f"#EXT-X-TARGETDURATION:{target_duration(self.settings)}",
                  f"#EXT-X-MEDIA-SEQUENCE:{self.sequence}",
                  f"#EXT-X-DISCONTINUITY-SEQUENCE:{self.discontinuities}"]
         for filename, seconds, discontinuity in self.entries:
@@ -259,7 +277,7 @@ class HlsPublisher:
 
     def write_vod_manifest(self, final):
         vod_dir = self.directory / "vod" / self.session
-        lines = ["#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-TARGETDURATION:5",
+        lines = ["#EXTM3U", "#EXT-X-VERSION:3", f"#EXT-X-TARGETDURATION:{target_duration(self.settings)}",
                  f"#EXT-X-PLAYLIST-TYPE:{'VOD' if final else 'EVENT'}"]
         for filename, seconds, discontinuity in self.vod_entries:
             if discontinuity:

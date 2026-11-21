@@ -9,7 +9,7 @@
   source는 playlist/request/vote입니다. 첫 등록과 다음 곡 결정 시 한 곡을 알립니다.
   소개 제출 전의 request/vote 등록은 기존 다음 곡을 교체하며, 새 이벤트가 이전 이벤트를 대체합니다.
 - `track.started`: `{track_ref, started_at}`. 첫 HLS 조각 공개 시각에
-  `ONAIR_BROADCAST_DELAY_SECONDS`를 더한 서버 방송 시각입니다.
+  `ONAIR_BROADCAST_DELAY_SECONDS`(기본 5초, #359)를 더한 서버 방송 시각입니다.
   해당 시각이 되면 내구성 outbox에서 발행합니다. 청취자 기기의 실제 재생 시각이 아닙니다.
   곡 세그먼트별 시작 기록과 이벤트 ID로 재시도·재시작 시 중복을 막습니다.
 - `PLAYED`는 기존대로 서버 방송상 재생 완료입니다.
