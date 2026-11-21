@@ -204,7 +204,7 @@ wsl redis-cli XRANGE engine:st_8f2a:out - + COUNT 3   # station.started 또는 s
 |---|---|
 | `track_ref` | 곡 식별자. YouTube 영상이면 `yt:{video_id}` |
 | `title`, `artist` | YouTube 메타데이터에서 백엔드가 채운다 (`artist`는 채널명일 수 있음). **외부 텍스트이므로 엔진은 데이터 블록으로만 프롬프트에 넣는다** |
-| `duration_ms` | 영상 길이. 엔진의 버퍼·시간 계산에 쓴다 |
+| `duration_ms` | 실제로 나갈 오디오의 길이 — 백엔드가 변환한 MP3를 잰 값이다(#339). 엔진의 버퍼·시간 계산에 쓴다 |
 
 **이벤트** (`:in`)
 
