@@ -1,5 +1,6 @@
 """Redis-backed user accounts. Mirrors the storage pattern used by RequestStore."""
 from datetime import datetime, timezone
+import asyncio
 import json
 import time
 from uuid import uuid4
@@ -88,6 +89,15 @@ def verify_password(password: str, password_hash: str) -> bool:
     return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
 
 
+# bcrypt는 한 번에 0.2~0.4초 걸린다. 방송 송출과 같은 이벤트 루프에서 돌리면 그동안 송출이 멈추므로 스레드로 뺀다
+async def hash_password_async(password: str) -> str:
+    return await asyncio.to_thread(hash_password, password)
+
+
+async def verify_password_async(password: str, password_hash: str) -> bool:
+    return await asyncio.to_thread(verify_password, password, password_hash)
+
+
 # 게스트·어드민 계정의 저장 키. .invalid는 예약 도메인이라 EmailStr이 거부해서
 # 일반 가입·이메일 로그인과 겹칠 수 없다.
 GUEST_DOMAIN = "guest.onair.invalid"
@@ -116,7 +126,7 @@ class UserStore:
         return entry
 
     async def create(self, email: str, password: str, name: str) -> dict:
-        return await self._insert(email.lower(), name.strip(), hash_password(password), "member")
+        return await self._insert(email.lower(), name.strip(), await hash_password_async(password), "member")
 
     async def create_guest(self, name: str) -> dict:
         return await self._insert(f"guest-{uuid4().hex}@{GUEST_DOMAIN}", name.strip(), None, "guest",
@@ -166,6 +176,7 @@ class UserStore:
     async def authenticate(self, email: str, password: str) -> dict | None:
         user = await self.get_by_email(email)
         # 게스트·어드민 계정은 비밀번호가 없어 이메일 로그인이 안 된다
-        if user is None or not user.get("passwordHash") or not verify_password(password, user["passwordHash"]):
+        if (user is None or not user.get("passwordHash")
+                or not await verify_password_async(password, user["passwordHash"])):
             return None
         return user

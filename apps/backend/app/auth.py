@@ -18,6 +18,11 @@ ACCESS_TOKEN_TTL = timedelta(days=7)
 JWT_ALGORITHM = "HS256"
 PIN_FAILURE_LIMIT = 5
 PIN_FAILURE_WINDOW_SEC = 60.0
+# 비밀번호 무작위 대입 막기. 같은 접속지에서 같은 계정을 틀리면 금방 막고, 계정을 바꿔 가며 틀리는 접속지도 막는다.
+# 계정만으로는 막지 않는다 — 남이 일부러 틀려서 주인의 로그인을 막을 수 있기 때문이다
+PASSWORD_FAILURE_LIMIT = 5
+PASSWORD_CLIENT_FAILURE_LIMIT = 30
+PASSWORD_FAILURE_WINDOW_SEC = 300.0
 
 
 class SignupInput(BaseModel):
@@ -42,20 +47,64 @@ class AdminInput(BaseModel):
 class PinGuard:
     """접속지별 최근 실패 시각. 창 안에서 한도를 넘으면 핀을 확인하지 않고 거부한다."""
 
-    def __init__(self):
+    def __init__(self, limit: int = PIN_FAILURE_LIMIT, window: float = PIN_FAILURE_WINDOW_SEC):
         self.failures: dict[str, deque[float]] = defaultdict(deque)
+        self.limit, self.window = limit, window
 
     def _recent(self, client: str, now: float) -> deque[float]:
         attempts = self.failures[client]
-        while attempts and now - attempts[0] > PIN_FAILURE_WINDOW_SEC:
+        while attempts and now - attempts[0] > self.window:
             attempts.popleft()
         return attempts
 
     def blocked(self, client: str, now: float) -> bool:
-        return len(self._recent(client, now)) >= PIN_FAILURE_LIMIT
+        blocked = len(self._recent(client, now)) >= self.limit
+        if not self.failures[client]:
+            del self.failures[client]  # 실패가 없는 키를 쌓아 두지 않는다
+        return blocked
 
     def fail(self, client: str, now: float) -> None:
         self._recent(client, now).append(now)
+
+    def clear(self, client: str) -> None:
+        self.failures.pop(client, None)
+
+
+class PasswordGuard:
+    """비밀번호 확인 실패를 센다 (로그인, 비밀번호 변경, 탈퇴). 한도를 넘으면 비밀번호를 확인하지 않고 429."""
+
+    def __init__(self):
+        self.pairs = PinGuard(PASSWORD_FAILURE_LIMIT, PASSWORD_FAILURE_WINDOW_SEC)
+        self.clients = PinGuard(PASSWORD_CLIENT_FAILURE_LIMIT, PASSWORD_FAILURE_WINDOW_SEC)
+
+    @staticmethod
+    def of(request: Request) -> "PasswordGuard":
+        guard = getattr(request.app.state, "password_guard", None)
+        if guard is None:
+            guard = request.app.state.password_guard = PasswordGuard()
+        return guard
+
+    @staticmethod
+    def _keys(request: Request, account: str) -> tuple[str, str]:
+        client = request.client.host if request.client else "unknown"
+        return client, f"{client}|{account.lower()}"
+
+    def check(self, request: Request, account: str) -> None:
+        client, pair = self._keys(request, account)
+        now = time.monotonic()
+        if self.pairs.blocked(pair, now) or self.clients.blocked(client, now):
+            raise HTTPException(429, "Too many attempts",
+                                headers={"Retry-After": str(int(PASSWORD_FAILURE_WINDOW_SEC))})
+
+    def fail(self, request: Request, account: str) -> None:
+        client, pair = self._keys(request, account)
+        now = time.monotonic()
+        self.pairs.fail(pair, now)
+        self.clients.fail(client, now)
+
+    def passed(self, request: Request, account: str) -> None:
+        # 맞게 넣었으면 그 계정의 실패 기록은 지운다. 접속지 전체의 기록은 남긴다
+        self.pairs.clear(self._keys(request, account)[1])
 
 
 def create_access_token(user: dict, secret: str) -> str:
@@ -140,13 +189,17 @@ async def signup(body: SignupInput, request: Request):
 
 @router.post("/login")
 async def login(body: LoginInput, request: Request):
+    guard = PasswordGuard.of(request)
+    guard.check(request, body.email)
     try:
         async with asyncio.timeout(3):
             user = await request.app.state.users.authenticate(body.email, body.password)
     except (RedisError, TimeoutError):
         raise HTTPException(503, "Redis unavailable") from None
     if user is None:
+        guard.fail(request, body.email)
         raise HTTPException(401, "Invalid email or password")
+    guard.passed(request, body.email)
     token = create_access_token(user, request.app.state.settings.jwt_secret)
     return {"user": public_user(user), "accessToken": token}
 
