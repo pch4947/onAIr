@@ -338,8 +338,10 @@ _PARAGRAPH_RE = re.compile(r"\n\s*\n")
 _SENTENCE_RE = re.compile(r"(?<=[.?!…])\s+")
 
 
-def split_block(raw: str, parts: int) -> list[str]:
+def split_block(raw: str, parts: int, *, keep_vocal: bool = False) -> list[str]:
     """덩어리 대본을 문단으로 — 문단 하나가 세그먼트 하나다. 거부면 [REJECT], 쓸 문단이 없으면 [].
+
+    keep_vocal이면 허용한 발성 태그를 문단에 남긴다 (pipeline.llm.clean_script).
 
     LLM이 빈 줄 없이 한 문단으로 쓰면 문장 수로 고르게 나눈다. 계획보다 많이 나온 문단은 마지막 문단에 붙인다.
     """
@@ -348,7 +350,7 @@ def split_block(raw: str, parts: int) -> list[str]:
 
     def clean(text: str) -> str | None:
         try:
-            return clean_script(text)
+            return clean_script(text, keep_vocal=keep_vocal)
         except LlmError:  # 기호뿐인 문단
             return None
 

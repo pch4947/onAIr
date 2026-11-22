@@ -361,6 +361,7 @@ class GeminiTtsClient:
     """
 
     file_ext = ".wav"
+    vocal_tags = True  # 글 속의 <laugh> 같은 발성 태그를 소리로 낸다 — 다른 TTS는 글자로 읽는다 (#369)
 
     def __init__(self, voice: str = DEFAULT_GEMINI_VOICE, *, api_key: str | None = None,
                  model: str = DEFAULT_GEMINI_TTS_MODEL, base_url: str = GEMINI_API,

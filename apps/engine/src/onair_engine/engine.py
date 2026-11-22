@@ -74,6 +74,7 @@ class EngineSettings:
     # TTS 말투 지시와 쉼 태그 (#369) — 받을 수 있는 TTS(gemini)에만 건다. 다른 TTS는 태그를 글자로 읽는다
     tts_style: bool = False   # DJ의 에너지로 정한 스타일 문장을 합성할 때 함께 보낸다
     tts_pauses: bool = False  # 문장 사이에 쉼 태그를 넣는다
+    tts_vocal_tags: bool = False  # 대본을 쓰는 LLM이 웃을 자리에 <laugh>·<chuckle>을 넣게 한다 (멘트에 하나까지)
     tts_moods: dict = field(default_factory=dict)  # 에너지별 문구를 바꿀 때 — {"low": "...", "mid": "...", "high": "..."}
     max_concurrent_generations: int = 2
     # 백엔드가 track.queued를 보내기 전에 더미 곡 이름으로 곡 소개를 만들지. 로컬 실행용이다 —
@@ -335,6 +336,8 @@ class StationEngine:
         if use_style is not None and (self.settings.tts_style or self.settings.tts_pauses):
             style = voice_style(profile.energy, self.settings.tts_moods) if self.settings.tts_style else None
             use_style(style, pauses=self.settings.tts_pauses)
+        # 발성 태그는 받는 TTS에서만 쓰게 한다 — 대본 프롬프트가 이 값을 본다 (corners/base.py)
+        profile.vocal_tags = self.settings.tts_vocal_tags and bool(getattr(client, "vocal_tags", False))
         return client
 
     def _plan_dilemmas(self, fmt, corners: list[str] | None) -> None:

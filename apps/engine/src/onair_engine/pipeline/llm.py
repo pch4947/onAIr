@@ -245,6 +245,12 @@ class LlmError(RuntimeError):
 
 # TTS가 그대로 읽으면 방송 사고가 되는 것들 — 프롬프트로 막고, 새어 나온 것은 여기서 지운다
 _MARKUP_RE = re.compile(r"[*_#`>]+")
+# 발성 태그 (#369) — 대본을 쓰는 LLM이 웃을 자리에 넣는다. 허용한 것만 합성용 글(Script.spoken)에 남기고,
+# 그 밖의 <…>는 모두 지운다. 지우지 않으면 아래 _MARKUP_RE가 '>'만 떼어 "<sigh"가 대본에 남는다
+VOCAL_TAGS = ("laugh", "chuckle")
+MAX_VOCAL_TAGS = 1  # 멘트 하나에 — 많으면 연기처럼 들린다
+_TAG_RE = re.compile(r"<\s*/?\s*([^<>\n]{1,24}?)\s*>")
+_KEPT_TAG_RE = re.compile("([a-z ]+)")  # 다듬는 동안 허용 태그를 대신하는 표시
 _STAGE_RE = re.compile(r"\[[^\]]*\]|\([^)]*(?:음악|BGM|웃음|효과음|잠시|멈춤)[^)]*\)")
 _SPEAKER_RE = re.compile(r"^\s*(?:DJ\s*[^\s:：]{0,10}|진행자|앵커)\s*[:：]\s*", re.MULTILINE)
 _SENTENCE_END_RE = re.compile(r"[.!?…~]|[요다죠까네]\s")
@@ -276,11 +282,35 @@ def _unwrap(text: str) -> str:
     return text
 
 
-def clean_script(text: str, *, truncated: bool = False) -> str:
+def strip_vocal(text: str) -> str:
+    """발성 태그를 뗀 글 — 화면·검사·기록에 쓰는 대본."""
+    return " ".join(_TAG_RE.sub(" ", text).split())
+
+
+def vocal_script(raw: str, *, truncated: bool = False) -> Script:
+    """LLM 출력 → 대본. 허용한 발성 태그가 있으면 합성용 글(spoken)을 따로 둔다."""
+    text = clean_script(raw, truncated=truncated)
+    spoken = clean_script(raw, truncated=truncated, keep_vocal=True)
+    return Script(text=text, spoken=spoken if spoken != text else None)
+
+
+def clean_script(text: str, *, truncated: bool = False, keep_vocal: bool = False) -> str:
     """LLM 출력을 TTS에 넣을 한 덩어리 대본으로 다듬는다.
 
     truncated(출력 토큰 한도에서 잘림)면 마지막 완결 문장까지만 남긴다 — 말이 끊기면 안 된다.
+    keep_vocal이면 허용한 발성 태그(VOCAL_TAGS)를 MAX_VOCAL_TAGS개까지 남긴다. 그 밖의 <…>는 늘 지운다.
     """
+    kept = 0
+
+    def tag(match: re.Match) -> str:
+        nonlocal kept
+        name = " ".join(match.group(1).lower().split())
+        if keep_vocal and name in VOCAL_TAGS and kept < MAX_VOCAL_TAGS:
+            kept += 1
+            return f" {name} "
+        return " "
+
+    text = _TAG_RE.sub(tag, text)
     text = _STAGE_RE.sub(" ", text)
     text = _MARKUP_RE.sub("", text)  # 화자 표기가 **DJ 새벽:**처럼 감싸여 올 수 있어 먼저 벗긴다
     text = _SPEAKER_RE.sub("", text)
@@ -292,9 +322,9 @@ def clean_script(text: str, *, truncated: bool = False) -> str:
         if not ends:
             raise LlmError(f"출력이 한도에서 잘렸고 완결 문장이 없습니다: {text[:60]!r}")
         text = text[:ends[-1].end()].strip()
-    if not text:
+    if not strip_vocal(_KEPT_TAG_RE.sub(" ", text)):
         raise LlmError("빈 대본")
-    return text
+    return _KEPT_TAG_RE.sub(lambda m: f"<{m.group(1)}>", text)
 
 
 def _post_json(url: str, body: dict, headers: dict[str, str], timeout: float,
@@ -345,7 +375,7 @@ class ClaudeLlmClient:
         reply = await self._call(prompt, self.max_tokens)
         if reply.refused:  # 모델 자체 거부 = L1 REJECT와 같게 다룬다
             return Script(text=REJECT)
-        return Script(text=clean_script(reply.text, truncated=reply.truncated))
+        return vocal_script(reply.text, truncated=reply.truncated)
 
     async def complete(self, prompt: Prompt, *, max_tokens: int) -> str:
         return _raw(await self._call(prompt, max_tokens), "claude")
@@ -393,7 +423,7 @@ class GeminiLlmClient:
         reply = await self._call(prompt, self.max_tokens)
         if reply.refused:
             return Script(text=REJECT)
-        return Script(text=clean_script(reply.text, truncated=reply.truncated))
+        return vocal_script(reply.text, truncated=reply.truncated)
 
     async def complete(self, prompt: Prompt, *, max_tokens: int) -> str:
         return _raw(await self._call(prompt, max_tokens), "gemini")
@@ -468,7 +498,7 @@ class OpenAiLlmClient:
         reply = await self._call(prompt, self.max_tokens)
         if reply.refused:  # 제공자 필터·모델 거부 = L1 REJECT와 같게 다룬다
             return Script(text=REJECT)
-        return Script(text=clean_script(reply.text, truncated=reply.truncated))
+        return vocal_script(reply.text, truncated=reply.truncated)
 
     async def complete(self, prompt: Prompt, *, max_tokens: int) -> str:
         return _raw(await self._call(prompt, max_tokens), "openai")

@@ -30,7 +30,7 @@ from ..domain import (
 )
 from ..prompt_data import RECENT, WORN, data_block
 from ..telemetry import Telemetry
-from .llm import REJECT, DummyLlmClient, LlmClient, LlmError
+from .llm import REJECT, VOCAL_TAGS, DummyLlmClient, LlmClient, LlmError, strip_vocal
 from .repeats import WornPhrases
 from .safety import SafetyChecker, Subjective, split_sentences
 from .tts import TtsClient, TtsQuotaError
@@ -85,6 +85,10 @@ _FAILED = object()  # _write: LLM이 재시도까지 실패했다
 # 뉴스 내용을 전하는 단계 — 주관 표현 규칙은 여기에만 건다. 뉴스 형식의 오프닝·엔딩 인사에는 걸지 않는다
 _NEWS_STEP = "news_"
 _PENDING_AIR_MAX = 256
+VOCAL_TAG_NAMES = re.compile("<(" + "|".join(VOCAL_TAGS) + ")>")  # 기록에 남길 태그 이름
+# 웃음 사이의 간격 [임시값] — 대본은 농담을 받는 멘트 30개 중 29개에 웃음을 넣었다(2026-11-22, var/vocal_check.py).
+# 농담마다 웃으면 틀이 된다. 이 시간 안에 한 번 웃었으면 다음 태그는 소리로 내지 않는다
+VOCAL_GAP_SEC = 120.0
 # 인용 검사 — 채팅 글자 bigram 중 이만큼이 대본에 있으면 인용한 것으로 본다 [예시].
 # LLM은 "컵라면이요"를 "컵라면이라고"처럼 어미를 바꿔 인용하므로 문자열 그대로는 비교하지 않는다
 QUOTE_MATCH = 0.5
@@ -181,6 +185,8 @@ class GenerationPipeline:
         self._worn = WornPhrases()
         # 생성했지만 아직 송출 확인이 안 된 대본 (context-memory 3.1절 pending_air)
         self._pending_air: dict[str, str] = {}
+        self._vocal: dict[str, str] = {}  # 대본 글자 → 발성 태그가 든 합성용 글 (#369)
+        self._last_vocal_at = float("-inf")
         # 대본은 한 번에 하나씩 쓴다 — 뒤 멘트가 앞 멘트의 대본을 보고 쓰게 한다. 합성은 그대로 동시에 돈다.
         # 예전에는 합성이 끝나야 맥락에 들어가서, 동시에 만든 멘트의 절반이 앞 멘트를 모르고 썼다 (#262)
         self._script_lock = asyncio.Lock()
@@ -234,6 +240,14 @@ class GenerationPipeline:
         except _TtsFailed:
             return await self._fallback(job)
 
+    def _keep_vocal(self, text: str, spoken: str | None) -> None:
+        """발성 태그가 든 합성용 글을 대본 글자에 묶어 둔다 — 합성할 때 찾아 쓴다 (_voice)."""
+        if not spoken or spoken == text:
+            return
+        self._vocal[text] = spoken
+        while len(self._vocal) > _PENDING_AIR_MAX:
+            self._vocal.pop(next(iter(self._vocal)))
+
     async def _write_in_turn(self, job: GenerationJob):
         """앞 멘트의 대본이 나온 뒤에 쓴다. 앞 호출이 오래 걸리면 기다리지 않고 쓴다."""
         try:
@@ -263,6 +277,7 @@ class GenerationPipeline:
                 script = await self._retry(job, "llm", lambda: self.llm.generate(prompt),
                                            hedge_after=HEDGE_LLM_SEC)
                 texts = [script.text]
+                self._keep_vocal(script.text, script.spoken)
         except Exception:
             logger.exception("LLM_FAILED %s %s", job.job_id, job.corner_type)
             return _FAILED
@@ -364,9 +379,14 @@ class GenerationPipeline:
     async def _write_block(self, prompt: Prompt, parts: int) -> list[str]:
         """이야기 덩어리를 한 번에 쓰고 문단으로 나눈다. 문단을 못 얻으면 LlmError — 다시 부른다."""
         raw = await self.llm.complete(prompt, max_tokens=BLOCK_MAX_TOKENS)
-        texts = split_block(raw, parts)
-        if not texts:
+        tagged = split_block(raw, parts, keep_vocal=True)
+        if not tagged:
             raise LlmError("덩어리 대본에서 문단을 얻지 못했습니다")
+        texts = [strip_vocal(text) for text in tagged]
+        # 발성 태그는 덩어리 전체에서 하나까지다 — 문단마다 웃으면 연기처럼 들린다
+        first = next((n for n, (text, spoken) in enumerate(zip(texts, tagged)) if spoken != text), None)
+        if first is not None:
+            self._keep_vocal(texts[first], tagged[first])
         return texts
 
     async def _run_part(self, job: GenerationJob) -> SegmentSubmission | None:
@@ -387,9 +407,19 @@ class GenerationPipeline:
         seg_id = new_id("seg")
         logger.info("SCRIPT %s [%s] %s", seg_id, job.corner_type, script.text)
         out_path = self.audio_dir / f"{seg_id}{self.tts.file_ext}"
+        # 발성 태그가 든 글은 합성에만 쓴다. 대본을 고쳐 쓴 뒤(문장 빼기 등)에는 맞는 글이 없어 태그 없이 합성한다
+        spoken = script.spoken or self._vocal.pop(script.text, None)
+        now = time.time()
+        voiced = script.text
+        if spoken and getattr(self.tts, "vocal_tags", False):
+            if now - self._last_vocal_at >= VOCAL_GAP_SEC:
+                voiced, self._last_vocal_at = spoken, now
+                self._log(job, "vocal", now, now, ",".join(VOCAL_TAG_NAMES.findall(spoken)) or "tag")
+            else:
+                self._log(job, "vocal", now, now, "skipped")
         try:
             duration_ms = await self._retry(
-                job, "tts", lambda: self.tts.synthesize(script.text, out_path),
+                job, "tts", lambda: self.tts.synthesize(voiced, out_path),
                 hedge_after=tts_hedge_sec(self._longest_part(script.text)))
         except Exception as exc:
             logger.exception("TTS_FAILED %s %s", job.job_id, job.corner_type)
