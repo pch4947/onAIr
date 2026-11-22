@@ -100,6 +100,8 @@ class StationProfile:
     forbidden: list[str] = field(default_factory=list)
     # 가끔 쓰는 입버릇 — 매번 쓰면 반복이 되므로 프롬프트에서 빈도를 제한한다
     signature_phrases: list[str] = field(default_factory=list)
+    # 폼에서 고른 에너지(low | mid | high) — TTS의 말투 지시를 정한다 (pipeline/tts.voice_style, #369)
+    energy: str = "mid"
 
 
 @dataclass

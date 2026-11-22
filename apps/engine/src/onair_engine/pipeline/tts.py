@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -260,6 +261,33 @@ def list_cartesia_voices(language: str = "ko", *, api_key: str | None = None,
 
 GEMINI_API = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_GEMINI_TTS_MODEL = "gemini-3.8-flash-tts"
+# 말투 지시(speech_metadata.style) — DJ의 에너지에서 규칙으로 정한다. 방송 중에 LLM이 고르지 않는다 (persona.md 9절).
+# 문구는 2026-11-22에 같은 멘트를 합성해 듣고 정했다(apps/engine/var/tts-samples-20261122, #369):
+# "차분하고 나긋하게, 서두르지 않고"는 같은 글이 41% 길어졌고, "서두르지 않고"만 빼도 24%로 줄었다 — 빠르기를
+# 늦추는 말은 넣지 않는다. 아래 low의 문구가 17%이고, 들은 사람이 여섯 가지 가운데 고른 것이다.
+# high는 "bright and lively"와 견줘 듣고 고른 것이다(하이텐션 반말, 밝은 존댓말 DJ의 멘트). mid는 초안이다 [임시값]
+VOICE_PACE = "at a natural conversational pace"
+VOICE_MOODS = {"low": "calm and warm", "mid": "relaxed and friendly", "high": "cheerful and energetic"}
+# 쉼 태그 — 문장 사이에 넣는다. 영어가 아닌 대본에도 태그는 영어로 쓴다(공식 문서). 소리 내어 읽히지 않는다:
+# 태그 서너 개를 넣어도 길이는 0.4~1.6초만 늘었다
+PAUSE_TAG = "<short pause>"
+MAX_PAUSES = 4
+_SENTENCE_GAP = re.compile(r"(?<=[.?!…])\s+(?=\S)")
+
+
+def voice_style(energy: str, moods: dict[str, str] | None = None) -> str:
+    """DJ의 에너지(low | mid | high) → 스타일 문장. 모르는 값이면 mid로 본다."""
+    table = {**VOICE_MOODS, **(moods or {})}
+    return f"{table.get(energy) or table['mid']}, {VOICE_PACE}"
+
+
+def with_pauses(text: str, limit: int = MAX_PAUSES) -> str:
+    """문장 사이에 쉼 태그를 넣는다 — 앞에서부터 limit개까지. 한 문장짜리 글은 그대로다."""
+    parts = _SENTENCE_GAP.split(text.strip())
+    out = parts[0]
+    for n, part in enumerate(parts[1:], 1):
+        out += (f" {PAUSE_TAG} " if n <= limit else " ") + part
+    return out
 DEFAULT_GEMINI_VOICE = "kore"  # 로컬 실행용 — 운영은 방마다 persona.voice로 정한다
 
 
@@ -336,22 +364,39 @@ class GeminiTtsClient:
 
     def __init__(self, voice: str = DEFAULT_GEMINI_VOICE, *, api_key: str | None = None,
                  model: str = DEFAULT_GEMINI_TTS_MODEL, base_url: str = GEMINI_API,
-                 timeout: float = 30.0):
+                 timeout: float = 30.0, style: str | None = None, pauses: bool = False):
         self._api_key = _gemini_key(api_key)
         self.voice = voice
         self.model = model
         self._endpoint = f"{base_url.rstrip('/')}/interactions"
         self._timeout = timeout
-        self.cache_namespace = f"gemini/{model}/{voice}"
         self.blocked_until = 0.0  # 한도 초과로 호출하지 않는 시각까지 — 스케줄러도 이 값을 본다
+        self.use_style(style, pauses=pauses)
+
+    def use_style(self, style: str | None, *, pauses: bool = False) -> None:
+        """말투 지시와 쉼 태그를 정한다 — 이 클라이언트가 만드는 모든 오디오에 걸린다 (#369).
+
+        같은 글이라도 말투가 다르면 다른 오디오라서 캐시 이름에 넣는다. CachedTts로 감싸기 전에 부른다.
+        """
+        self.style = style or None
+        self.pauses = pauses
+        self.cache_namespace = f"gemini/{self.model}/{self.voice}"
+        if self.style:
+            self.cache_namespace += "/style-" + hashlib.sha256(self.style.encode()).hexdigest()[:10]
+        if self.pauses:
+            self.cache_namespace += "/pauses"
 
     async def synthesize(self, text: str, out_path: Path) -> int:
         wait = self.blocked_until - time.time()
         if wait > 0:
             raise TtsQuotaError(f"gemini TTS 한도 초과로 {wait:.0f}초 동안 호출하지 않습니다", wait)
+        # 글자는 대본 그대로(verbatim)이고, 말투는 annotations에 싣는다 — 글자에 "차분하게:" 같은 지시를 쓰면 읽는다
+        item: dict = {"type": "text", "text": with_pauses(text) if self.pauses else text}
+        if self.style:
+            item["annotations"] = [{"type": "speech_metadata", "style": self.style}]
         body = {
             "model": self.model,
-            "input": [{"type": "user_input", "content": [{"type": "text", "text": text}]}],
+            "input": [{"type": "user_input", "content": [item]}],
             "response_format": {"type": "audio"},
             "generation_config": {"speech_config": [{"voice": self.voice}]},
         }

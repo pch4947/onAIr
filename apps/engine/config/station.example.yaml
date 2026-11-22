@@ -56,6 +56,10 @@ pipeline:
   tts_split_chars: 150        # [임시값] 이보다 긴 대본은 문장 경계에서 나눠 동시에 합성하고 한 파일로 붙인다 (#342).
                               # 합성 시간이 가장 긴 조각만큼으로 줄어든다. 조각의 이음매가 어색하면 0으로 끈다.
                               # WAV를 내는 TTS(gemini·dummy)에서만 나눈다
+  tts_style: true             # DJ의 에너지(폼의 style.energy)로 정한 말투 지시를 TTS에 함께 보낸다 (#369). gemini만 받는다.
+                              # 문구는 pipeline/tts.py의 VOICE_MOODS — 말이 약 17% 느려진다(2026-11-22 견본)
+  tts_pauses: true            # 문장 사이에 쉼 태그(<short pause>)를 넣는다 (#369). 대본 글자는 그대로 두고 합성 직전에만 넣는다
+  # tts_moods: {low: calm and warm, mid: relaxed and friendly, high: cheerful and energetic}  # 에너지별 문구를 바꿀 때
   pause_ms: 700               # [임시값] 멘트 끝에 붙이는 쉬는 시간(무음, ms). 멘트가 숨 쉴 틈 없이 이어 붙는다는
                               # 2026-11-15 실제 방송 피드백으로 넣었다. 0이면 붙이지 않는다. WAV를 내는 TTS(gemini)에만 붙는다
   max_concurrent_generations: 2
