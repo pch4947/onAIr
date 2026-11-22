@@ -11,7 +11,7 @@ from onair_schema import Style
 from onair_engine.api import create_app
 from onair_engine.engine import EngineSettings
 from onair_engine.manager import EngineManager
-from onair_engine.personas import PersonaDrafter, base_tone
+from onair_engine.personas import GENRE_RULES, PersonaDrafter, base_tone, genres_named
 from onair_engine.pipeline.llm import DummyLlmClient, LlmError
 from onair_engine.pipeline.safety import SafetyChecker
 from onair_engine.telemetry import Telemetry
@@ -129,6 +129,48 @@ def test_only_failed_drafts_are_regenerated(tmp_path):
     assert [d["dj_name"] for d in res.json()["drafts"]] == ["새벽", "다온"]
     assert "초안 개수: 1" in llm.prompts[1].user  # 모자란 개수만 다시 요청
     assert "피할 이름: 새벽" in llm.prompts[1].user
+
+
+def test_drafts_of_a_many_genre_room_do_not_settle_on_one_genre(tmp_path):
+    """장르를 여럿 고르면 초안이 장르를 하나씩 나눠 가졌다 — 그 컨셉이 선곡을 한 장르로 묶는다 (T-022)."""
+    many = {**FORM, "music_taste": ["J-POP", "힙합/랩", "팝"]}
+    jpop = {**_draft("윤슬"), "concept": "제이팝으로 여는 산뜻한 오후"}
+    llm = ScriptedLlm([
+        json.dumps({"drafts": [_draft("새벽"), jpop]}, ensure_ascii=False),
+        json.dumps({"drafts": [_draft("다온")]}, ensure_ascii=False),
+    ])
+    client, _ = _client(tmp_path, llm)
+    res = client.post("/v1/personas/drafts", json={"form": many, "count": 2}, headers=AUTH)
+
+    assert [d["dj_name"] for d in res.json()["drafts"]] == ["새벽", "다온"]  # 장르를 적은 초안만 다시 만든다
+    assert all(d["music_taste"] == many["music_taste"] for d in res.json()["drafts"])
+    assert all(rule in llm.prompts[0].user for rule in GENRE_RULES)
+
+    # 장르가 하나면 컨셉에 적어도 선곡이 좁아지지 않는다 — 규칙도 검사도 붙이지 않는다
+    one = ScriptedLlm([json.dumps({"drafts": [{**_draft("새벽"), "concept": "발라드로 쉬어 가는 밤"}]},
+                                  ensure_ascii=False)])
+    client, _ = _client(tmp_path, one)
+    res = client.post("/v1/personas/drafts", json={"form": FORM, "count": 1}, headers=AUTH)
+    assert res.json()["drafts"][0]["concept"] == "발라드로 쉬어 가는 밤"
+    assert GENRE_RULES[0] not in one.prompts[0].user
+
+    # 호스트가 메모에서 한 장르를 짚었으면 그 뜻을 따른다 — 막으면 초안이 모두 탈락해 503이 된다
+    asked = ScriptedLlm([json.dumps({"drafts": [jpop]}, ensure_ascii=False)])
+    client, _ = _client(tmp_path, asked)
+    res = client.post("/v1/personas/drafts", headers=AUTH,
+                      json={"form": {**many, "host_note": "제이팝을 사랑하는 DJ"}, "count": 1})
+    assert res.json()["drafts"][0]["concept"] == jpop["concept"]
+    assert GENRE_RULES[0] not in asked.prompts[0].user
+
+
+def test_genre_names_are_found_in_their_other_spellings():
+    genres = ["J-POP", "힙합/랩", "팝", "록/밴드", "R&B/소울"]
+    assert genres_named("제이팝으로 여는 오후", genres) == ["제이팝"]
+    assert genres_named("힙합으로 털어내는 하루", genres) == ["힙합"]
+    assert genres_named("하루 끝에 놓는 팝 한 곡", genres) == ["팝"]
+    assert genres_named("밤을 채우는 알앤비와 j-pop", genres) == ["J-POP", "알앤비"]
+    # 한 글자 이름은 다른 낱말의 끝이면 장르가 아니다
+    assert genres_named("초록 숲을 기록하는 랩소디 없는 밤", ["록/밴드", "팝"]) == []
 
 
 def test_no_usable_draft_is_503(tmp_path):

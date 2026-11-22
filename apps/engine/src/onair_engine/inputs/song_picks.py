@@ -26,11 +26,19 @@ MAX_ARTIST_CHARS = 60
 MAX_WHY_CHARS = 100
 MAX_PLAYED = 30  # 프롬프트에 넣는 이미 튼 곡 수 — 최근 것부터
 
+# 장르를 여럿 고른 방 — 장르를 한꺼번에 주면 LLM이 섞어 읽는다(J-POP, 발라드, 인디 → 일본 인디 발라드만).
+# 그래서 차례마다 한 장르만 준다. 이미 튼 곡도 끌어당긴다 — 앞 차례에 일본 곡을 틀었으면 발라드 차례에도
+# 일본 곡을 고른다. 그 목록을 따라가지 말라고 적는다 (ENGINE_TUNING_LOG T-022)
+TURN_RULE = ("- 이 방송은 여러 장르를 차례로 튼다. 이번에는 아래 선곡 취향의 장르에서만 고른다. "
+             "이미 튼 곡에는 다른 장르 차례에 튼 곡이 섞여 있다. 그 목록은 같은 곡을 피하는 데만 쓰고, "
+             "그 곡들의 장르나 나라를 따라가지 않는다. "
+             "그 안에서 오늘의 화제나 분위기와 어울리는 곡이면 더 좋다.")
+
 _SYSTEM = ("너는 라디오 방송의 선곡 담당이다. 방송의 분위기에 맞는, 실제로 발매된 곡을 고른다.\n"
            + DATA_RULES)
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 _COUNT_RE = re.compile(r"곡 후보 (\d+)개")
-_KEY_RE = re.compile(r"[^0-9a-z가-힣]")
+_KEY_RE = re.compile(r"[\W_]")  # 글자와 숫자만 남긴다 — 한글·영문만 남기면 일본어 제목은 열쇠가 비어 곡이 버려진다
 
 
 @dataclass(frozen=True)
@@ -54,11 +62,13 @@ def song_key(title: str) -> str:
 
 
 def build_prompt(profile: StationProfile, genres: list[str], topic: str | None, played: list[str],
-                 count: int) -> Prompt:
+                 count: int, *, turn_of_many: bool = False) -> Prompt:
+    """turn_of_many: 방의 장르가 여럿이고 genres는 그 가운데 이번 차례의 것이다 (SongPicker.genres_for_turn)."""
     lines = [
         f"{MARKER}: 이 방송에서 다음에 틀 곡 후보 {count}개를 고른다.",
         "- 실제로 발매된 곡만 고르고, 제목과 아티스트를 정확히 적는다. 확실하지 않은 곡은 넣지 않는다.",
-        ("- 아래 선곡 취향의 장르에서 고른다. 그 안에서 오늘의 화제나 분위기와 어울리는 곡이면 더 좋다."
+        (TURN_RULE if turn_of_many else
+         "- 아래 선곡 취향의 장르에서 고른다. 그 안에서 오늘의 화제나 분위기와 어울리는 곡이면 더 좋다."
          if genres else "- 아래 스테이션 컨셉에 어울리는 곡을 고른다. 오늘의 화제와 어울리면 더 좋다."),
         "- 이미 튼 곡은 다시 고르지 않고, 바로 앞에 튼 곡과 같은 아티스트도 피한다. 후보끼리도 아티스트가 겹치지 않게 한다.",
         "- 누구나 아는 곡만 고르지 않는다. 라이브 실황, 리믹스, 모음집, 10분이 넘는 곡은 넣지 않는다.",
@@ -138,20 +148,30 @@ class SongPicker:
         self.count = count
         self.max_tokens = max_tokens
         self._suggested: dict[str, str] = {}  # 곡 열쇠 → 제안한 곡 이름
+        self._turn = 0  # 고른 횟수 — 장르가 여럿이면 이 순서로 돌아가며 고른다
 
     def use_persona(self, profile: StationProfile, genres: list[str]) -> None:
         """방송 중에 DJ가 바뀌었다 (#261) — 새 DJ의 컨셉과 선곡 취향으로 고른다."""
         self.profile = profile
         self.genres = list(genres)
 
+    def genres_for_turn(self) -> list[str]:
+        """이번 차례에 고를 장르. 장르가 여럿이면 하나씩 돌아가며 — 백엔드는 후보 가운데 먼저 찾은 한 곡만 튼다."""
+        if len(self.genres) < 2:
+            return self.genres
+        return [self.genres[self._turn % len(self.genres)]]
+
     async def pick(self, played: list[str]) -> list[Pick]:
         """곡 후보. 제공자 장애나 해석 실패면 빈 목록 — 다음 차례에 다시 고른다."""
         heard = {song_key(p.split(" — ")[0]) for p in played}
         # 제안했지만 틀지 못한 곡도 알려 준다 — 알려 주지 않으면 같은 곡을 다시 낸다
         known = [*played, *(label for key, label in self._suggested.items() if key not in heard)]
+        genres = self.genres_for_turn()
+        self._turn += 1  # 실패해도 넘어간다 — 한 장르에서 곡을 못 내도 다음 장르로 이어 가게
         try:
             text = await self._llm.complete(
-                build_prompt(self.profile, self.genres, self.topic, known, self.count),
+                build_prompt(self.profile, genres, self.topic, known, self.count,
+                             turn_of_many=len(self.genres) > 1),
                 max_tokens=self.max_tokens)
             picks = parse_picks(text)
         except (LlmError, ValueError, OSError) as exc:
