@@ -38,7 +38,7 @@ from .pipeline.embed import make_embedder
 from .pipeline.llm import make_llm
 from .pipeline.pipeline import GenerationPipeline
 from .pipeline.safety import SafetyChecker
-from .pipeline.tts import TtsClient, make_tts
+from .pipeline.tts import TtsClient, make_tts, voice_style
 from .scheduler.scheduler import FormatSwitch, PersonaSwitch, Scheduler
 from .sources.rss import Feed, RssCollector, load_news_feeds
 from .telemetry import Telemetry
@@ -71,6 +71,10 @@ class EngineSettings:
     pause_ms: int = 0  # 멘트 끝에 붙이는 쉬는 시간(무음). WAV를 내는 TTS(gemini·dummy)에만 붙는다
     hedge: bool = True  # 느린 LLM·TTS 호출에 예비 호출을 겹쳐 보낸다 (#340)
     tts_split_chars: int = 0  # 이보다 긴 대본은 나눠서 동시에 합성하고 한 파일로 붙인다 (#342). 0이면 나누지 않는다
+    # TTS 말투 지시와 쉼 태그 (#369) — 받을 수 있는 TTS(gemini)에만 건다. 다른 TTS는 태그를 글자로 읽는다
+    tts_style: bool = False   # DJ의 에너지로 정한 스타일 문장을 합성할 때 함께 보낸다
+    tts_pauses: bool = False  # 문장 사이에 쉼 태그를 넣는다
+    tts_moods: dict = field(default_factory=dict)  # 에너지별 문구를 바꿀 때 — {"low": "...", "mid": "...", "high": "..."}
     max_concurrent_generations: int = 2
     # 백엔드가 track.queued를 보내기 전에 더미 곡 이름으로 곡 소개를 만들지. 로컬 실행용이다 —
     # 운영(--serve)에서는 끈다: 실제로 나오지 않는 곡을 소개하게 된다
@@ -159,7 +163,7 @@ def profile_from(persona: Persona) -> StationProfile:
     return StationProfile(
         dj_name=persona.dj_name, tone=persona.tone, concept=persona.concept,
         examples=list(persona.examples), forbidden=list(persona.forbidden),
-        signature_phrases=list(persona.signature_phrases),
+        signature_phrases=list(persona.signature_phrases), energy=persona.style.energy,
     )
 
 
@@ -185,7 +189,7 @@ class StationEngine:
             raise StationRejected("invalid_payload", f"형식 설정: {exc}"[:300]) from exc
         try:
             # 보이스는 방마다 다르다 (persona.md 9.3절). 엔진 설정 값은 로컬 실행용 기본값이다
-            tts_client = self.tts_factory(config.voice)
+            tts_client = self._tts_client(config.voice, config.profile)
         except RuntimeError as exc:
             raise StationRejected("tts_unavailable", str(exc)) from exc
         try:
@@ -320,6 +324,18 @@ class StationEngine:
             station_id=self.config.station_id, broadcast_id=self._broadcast_id, fmt=fmt.format,
             persona=persona_text(self.config.profile.concept, self.config.profile.tone),
         )
+
+    def _tts_client(self, voice: str | None, profile: StationProfile) -> TtsClient:
+        """이 DJ의 TTS 클라이언트 — 말투 지시와 쉼 태그를 받을 수 있는 TTS면 DJ의 에너지로 정해 건다 (#369).
+
+        말투는 DJ마다 한 문장으로 고정한다. 멘트마다 바꾸면 목소리가 흔들린다(공식 가이드, persona.md 9절).
+        """
+        client = self.tts_factory(voice)
+        use_style = getattr(client, "use_style", None)
+        if use_style is not None and (self.settings.tts_style or self.settings.tts_pauses):
+            style = voice_style(profile.energy, self.settings.tts_moods) if self.settings.tts_style else None
+            use_style(style, pauses=self.settings.tts_pauses)
+        return client
 
     def _plan_dilemmas(self, fmt, corners: list[str] | None) -> None:
         """본 코너에 투표 코너가 있으면 고민을 뒤에서 만든다 (#279). 방송에 한 번만 만든다.
@@ -540,7 +556,7 @@ class StationEngine:
             return self._reject_persona("unsafe_persona", f"persona.{name}: 안전 규칙에 걸렸습니다 ({rule})")
         profile = profile_from(persona)
         try:
-            tts = CachedTts(self.tts_factory(persona.voice), cache_dir=self.settings.tts_cache_dir,
+            tts = CachedTts(self._tts_client(persona.voice, profile), cache_dir=self.settings.tts_cache_dir,
                             pause_ms=self.settings.pause_ms, split_chars=self.settings.tts_split_chars)
         except RuntimeError as exc:
             return self._reject_persona("tts_unavailable", str(exc)[:300])

@@ -41,7 +41,10 @@ def load_profile(spec: dict | str | Path) -> StationProfile:
     """station.profile — 필드를 직접 쓰거나 persona 파일(config/personas/*.yaml) 경로를 준다."""
     if not isinstance(spec, dict):
         spec = yaml.safe_load(Path(spec).read_text(encoding="utf-8"))
-    return StationProfile(**{k: v for k, v in spec.items() if k not in _PERSONA_META})
+    profile = StationProfile(**{k: v for k, v in spec.items() if k not in _PERSONA_META})
+    if isinstance(spec.get("style"), dict) and spec["style"].get("energy"):
+        profile.energy = str(spec["style"]["energy"])  # persona 파일의 폼 선택지 — TTS 말투 지시에 쓴다 (#369)
+    return profile
 
 
 def load_config(path: Path) -> tuple[StationConfig, EngineSettings]:
@@ -97,6 +100,9 @@ def load_config(path: Path) -> tuple[StationConfig, EngineSettings]:
         pause_ms=int(pipe.get("pause_ms", 0)),
         hedge=bool(pipe.get("hedge", True)),
         tts_split_chars=int(pipe.get("tts_split_chars", 0)),
+        tts_style=bool(pipe.get("tts_style", False)),
+        tts_pauses=bool(pipe.get("tts_pauses", False)),
+        tts_moods=dict(pipe.get("tts_moods") or {}),
         max_concurrent_generations=int(pipe.get("max_concurrent_generations", 2)),
         dummy_tracks=bool(pipe.get("dummy_tracks", True)),
         target_buffer_sec=float(pipe.get("target_buffer_sec", 30)),
