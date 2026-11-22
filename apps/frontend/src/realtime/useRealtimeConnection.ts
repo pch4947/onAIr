@@ -66,8 +66,10 @@ export function useRealtimeConnection(stationId: string | undefined) {
     return () => {
       document.removeEventListener('visibilitychange', wake)
       window.removeEventListener('online', wake)
-      unsubscribes.forEach((unsubscribe) => unsubscribe())
+      // 닫고 나서 구독을 끊는다 — close()가 알리는 'disconnected'를 받아야 전역 상태가 '연결됨'으로 남지 않는다.
+      // 남으면 다른 화면이 소켓 없이도 느린 조회 간격(15초)을 쓴다 (#366)
       client.close()
+      unsubscribes.forEach((unsubscribe) => unsubscribe())
     }
   }, [stationId, cache, setConnectionStatus])
 }

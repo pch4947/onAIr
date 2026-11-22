@@ -240,9 +240,11 @@ export function ListenPage({ testPanel, navActive, stationId: stationIdProp }: L
     event.preventDefault()
     const trimmed = chatInput.trim()
     if (!trimmed) return
+    // 바로 비워 다음 채팅을 칠 수 있게 하고, 보내지 못했으면 쓴 글을 되돌려 놓는다 (#366).
+    // 그사이 새로 친 글이 있으면 덮어쓰지 않는다
     submitRequestMutation.mutate({
       stationId, prompt: trimmed, listenerName: currentUser?.name, kind: 'story',
-    })
+    }, { onError: () => setChatInput((current) => current || trimmed) })
     setChatInput('')
   }
 

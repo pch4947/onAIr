@@ -36,6 +36,7 @@ export function PostDetailModal({ post, onClose, onPostLikeChange, onPostDeleted
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isConfirmingPostDelete, setIsConfirmingPostDelete] = useState(false)
   const [commentDeleteTarget, setCommentDeleteTarget] = useState<BoardComment | null>(null)
+  const [commentError, setCommentError] = useState('')
   const commentTotalPages = Math.max(1, Math.ceil(commentTotal / COMMENT_PAGE_SIZE))
 
   const deletePostMutation = useMutation({
@@ -48,23 +49,30 @@ export function PostDetailModal({ post, onClose, onPostLikeChange, onPostDeleted
 
   const deleteCommentMutation = useMutation({
     mutationFn: (comment: BoardComment) => deleteComment(post.id, comment.id),
-    onSuccess: (_, comment) => {
-      setComments((prev) => prev.filter((item) => item.id !== comment.id))
-      setCommentTotal((prev) => Math.max(0, prev - 1))
+    onSuccess: () => {
       setCommentDeleteTarget(null)
+      // 뒤 페이지의 댓글이 당겨져 오고, 페이지의 마지막 댓글이면 빈 페이지가 남으므로 다시 불러온다
+      const page = comments.length === 1 && commentPage > 1 ? commentPage - 1 : commentPage
+      setCommentPage(page)
+      void loadComments(page)
     },
   })
 
-  const handleTogglePostLike = async () => {
-    const status = postLike.liked ? await unlikePost(post.id) : await likePost(post.id)
-    setPostLike(status)
-    onPostLikeChange?.(post.id, status)
-  }
+  // 누르는 동안은 다시 누를 수 없다 — 연타하면 같은 상태를 보고 같은 요청을 두 번 보낸다 (#366)
+  const postLikeMutation = useMutation({
+    mutationFn: () => (postLike.liked ? unlikePost(post.id) : likePost(post.id)),
+    onSuccess: (status) => {
+      setPostLike(status)
+      onPostLikeChange?.(post.id, status)
+    },
+  })
 
-  const handleToggleCommentLike = async (comment: BoardComment) => {
-    const status = comment.liked ? await unlikeComment(comment.id) : await likeComment(comment.id)
-    setComments((prev) => prev.map((item) => (item.id === comment.id ? { ...item, ...status } : item)))
-  }
+  const commentLikeMutation = useMutation({
+    mutationFn: (comment: BoardComment) => (comment.liked ? unlikeComment(comment.id) : likeComment(comment.id)),
+    onSuccess: (status, comment) => {
+      setComments((prev) => prev.map((item) => (item.id === comment.id ? { ...item, ...status } : item)))
+    },
+  })
 
   const loadComments = async (page: number) => {
     setIsLoadingComments(true)
@@ -72,6 +80,9 @@ export function PostDetailModal({ post, onClose, onPostLikeChange, onPostDeleted
       const result = await getComments(post.id, { offset: (page - 1) * COMMENT_PAGE_SIZE, limit: COMMENT_PAGE_SIZE })
       setComments(result.comments)
       setCommentTotal(result.total)
+      setCommentError('')
+    } catch {
+      setCommentError('댓글을 불러오지 못했어요, 잠시 후 다시 시도해주세요')
     } finally {
       setIsLoadingComments(false)
     }
@@ -99,6 +110,8 @@ export function PostDetailModal({ post, onClose, onPostLikeChange, onPostDeleted
       const lastPage = Math.max(1, Math.ceil((commentTotal + 1) / COMMENT_PAGE_SIZE))
       setCommentPage(lastPage)
       await loadComments(lastPage)
+    } catch {
+      setCommentError('댓글을 등록하지 못했어요, 다시 시도해주세요')
     } finally {
       setIsSubmitting(false)
     }
@@ -122,7 +135,12 @@ export function PostDetailModal({ post, onClose, onPostLikeChange, onPostDeleted
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-3">
-            <LikeButton liked={postLike.liked} count={postLike.likeCount} onToggle={handleTogglePostLike} />
+            <LikeButton
+              liked={postLike.liked}
+              count={postLike.likeCount}
+              onToggle={() => postLikeMutation.mutateAsync().catch(() => {})}
+              disabled={postLikeMutation.isPending}
+            />
             {post.authorId === currentUser?.id && (
               <button
                 type="button"
@@ -166,7 +184,8 @@ export function PostDetailModal({ post, onClose, onPostLikeChange, onPostDeleted
                     <LikeButton
                       liked={comment.liked}
                       count={comment.likeCount}
-                      onToggle={() => handleToggleCommentLike(comment)}
+                      onToggle={() => commentLikeMutation.mutateAsync(comment).catch(() => {})}
+                      disabled={commentLikeMutation.isPending && commentLikeMutation.variables?.id === comment.id}
                     />
                     {comment.authorId === currentUser?.id && (
                       <button
@@ -208,6 +227,8 @@ export function PostDetailModal({ post, onClose, onPostLikeChange, onPostDeleted
             </div>
           )}
 
+          {commentError && <p role="alert" className="text-xs text-danger">{commentError}</p>}
+
           <form onSubmit={handleSubmitComment} className="flex gap-2">
             <input
               type="text"
@@ -228,8 +249,12 @@ export function PostDetailModal({ post, onClose, onPostLikeChange, onPostDeleted
         </div>
       </div>
 
+      {/* 확인 창은 글 창의 바깥 배경 안에 그려진다 — 클릭이 배경까지 올라가면 글 창이 닫힌다 (#366) */}
       {isConfirmingPostDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6"
+          onClick={(event) => event.stopPropagation()}
+        >
           <div className="flex w-full max-w-100 flex-col gap-4 rounded-xl bg-surface px-7 pb-6 pt-7 shadow-lg">
             <p className="text-lg font-semibold text-text">이 글을 삭제할까요?</p>
             <p className="text-[13px] leading-relaxed text-text-muted">
@@ -261,7 +286,10 @@ export function PostDetailModal({ post, onClose, onPostLikeChange, onPostDeleted
       )}
 
       {commentDeleteTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6"
+          onClick={(event) => event.stopPropagation()}
+        >
           <div className="flex w-full max-w-100 flex-col gap-4 rounded-xl bg-surface px-7 pb-6 pt-7 shadow-lg">
             <p className="text-lg font-semibold text-text">이 댓글을 삭제할까요?</p>
             <p className="text-[13px] leading-relaxed text-text-muted">되돌릴 수 없어요.</p>

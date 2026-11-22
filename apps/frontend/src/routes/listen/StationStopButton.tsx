@@ -22,7 +22,8 @@ export function StationStopButton({ stationId, userId }: { stationId?: string; u
       }
     },
     retry: false,
-    refetchInterval: pollMs,
+    // 내 방송이 아니면(404 → null) 더 묻지 않는다 — 청취자마다 3초에 한 번씩 쓸모없는 조회가 쌓인다 (#366)
+    refetchInterval: (query) => (query.state.data === null ? false : pollMs),
   })
   const stop = useMutation({
     mutationFn: (createdAt: number) => client.stopStation(stationId!, createdAt),

@@ -203,6 +203,8 @@ export function SongRequestModal({ onClose, stationId, onSubmitted }: SongReques
 
         {!stationId && <p role="alert">방송 정보를 불러온 뒤 다시 열어주세요.</p>}
         {stationId && station.isPending && <p role="status">방송 권한을 확인하고 있어요...</p>}
+        {/* 방송이 준비 중이거나 끝나는 중이면 백엔드가 신청을 받지 않는다 — 버튼만 꺼져 있으면 이유를 알 수 없다 (#366) */}
+        {station.data === false && <p role="status" className="text-xs text-text-muted">지금은 신청곡을 받을 수 없어요. 방송이 진행 중일 때 다시 신청해주세요.</p>}
         {station.error && <p role="alert" className="text-xs text-danger">{station.error.message}</p>}
         {validation && <p role="alert" className="text-xs text-danger">{validation}</p>}
         {submitSongRequestMutation.isPending && <p role="status" className="text-xs">음원을 다운로드하고 준비하고 있어요. 최대 4분 정도 걸릴 수 있어요.</p>}

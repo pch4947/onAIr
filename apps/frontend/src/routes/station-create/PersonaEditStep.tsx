@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { checkPersonaDraft } from '@/routes/station-create/api'
 import type { Persona } from '@/shared/types'
 
@@ -82,13 +82,35 @@ export function PersonaEditStep({ persona, isSubmitting, submitError, onBack, on
   const [isChecking, setIsChecking] = useState(false)
   const [checkError, setCheckError] = useState('')
 
+  // 검사하는 동안 창을 닫으면 이 단계가 사라진다 — 그 뒤에 검사가 끝나도 방송을 만들지 않는다 (#366)
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
+
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
-    const next: Persona = { ...persona, djName, concept, tone, examples, signaturePhrases, forbidden }
+    // 앞뒤 공백을 지우고 빈 칸은 뺀다 — 서버는 빈 값을 영어 오류(String should have at least 1 character)로 거절한다
+    const clean = (items: string[]) => items.map((item) => item.trim()).filter(Boolean)
+    const next: Persona = {
+      ...persona, djName: djName.trim(), concept: concept.trim(), tone: tone.trim(),
+      examples: clean(examples), signaturePhrases: clean(signaturePhrases), forbidden: clean(forbidden),
+    }
+    const blanks: Record<string, string> = {}
+    if (!next.djName) blanks['persona.dj_name'] = 'DJ 이름을 입력해주세요'
+    if (!next.concept) blanks['persona.concept'] = '컨셉을 입력해주세요'
+    if (!next.tone) blanks['persona.tone'] = '말투 묘사를 입력해주세요'
+    if (next.examples.length < 3) blanks['persona.examples'] = '예시 멘트를 3개 이상 채워주세요'
+    if (Object.keys(blanks).length > 0) {
+      setFieldErrors(blanks)
+      return
+    }
     setIsChecking(true)
     setCheckError('')
     try {
       const result = await checkPersonaDraft(next)
+      if (!mounted.current) return
       if (!result.ok) {
         const nextErrors: Record<string, string> = {}
         for (const error of result.errors) nextErrors[error.field] = error.reason
