@@ -16,6 +16,12 @@ import type { Persona, PersonaForm, StationFormat, StationInfo } from '@/shared/
 
 type Step = 'format' | 'form' | 'loading' | 'drafts' | 'edit' | 'submitting' | 'waiting'
 
+// 아직 기다릴 것이 있는 상태 — 준비 중이거나, 시작했지만 재생할 오디오가 없는 동안.
+// 끝나는 중·끝난 방송은 hls_ready가 false라서 "시작했지만 준비 중"과 섞이면 조회가 끝나지 않는다 (#366)
+const isWaiting = (station: StationResult) =>
+  station.status === 'preparing' || (station.status === 'started' && !station.hls_ready)
+const isReady = (station: StationResult) => station.status === 'started' && station.hls_ready
+
 interface StationCreateModalProps {
   onClose: () => void
 }
@@ -38,7 +44,7 @@ export function StationCreateModal({ onClose }: StationCreateModalProps) {
   const retry = useRef<{ body: string; key: string } | null>(null)
 
   useEffect(() => {
-    if (!station || station.status === 'rejected' || (station.status === 'started' && station.hls_ready)) return
+    if (!station || !isWaiting(station)) return
     const controller = new AbortController()
     const timer = window.setTimeout(async () => {
       try {
@@ -149,8 +155,10 @@ export function StationCreateModal({ onClose }: StationCreateModalProps) {
         {step === 'waiting' && station && (
           <div className="flex flex-col gap-4" role="status">
             <h2 className="text-lg font-semibold">{station.status === 'rejected' ? '방송을 시작하지 못했어요'
-              : station.status === 'started' && station.hls_ready ? '방송이 준비됐어요' : '방송을 준비하고 있어요'}</h2>
+              : isReady(station) ? '방송이 준비됐어요'
+              : isWaiting(station) ? '방송을 준비하고 있어요' : '방송이 종료됐어요'}</h2>
             <p className="text-[13px] leading-relaxed text-text-muted">{station.status === 'rejected' ? '선택한 목소리 또는 방송 생성 서비스에 문제가 있어요. 운영자에게 문의해주세요.'
+              : !isReady(station) && !isWaiting(station) ? '다른 곳에서 방송을 끝냈어요. 새로 만들려면 창을 닫고 다시 시작해주세요.'
               : station.status === 'preparing' && station.first_song_status === 'preparing'
                 ? '첫 노래를 준비하고 있어요. 영상에 따라 몇 분 걸릴 수 있어요.'
               : station.status === 'preparing' ? 'DJ가 방송을 시작할 때까지 기다려주세요.'
@@ -159,7 +167,7 @@ export function StationCreateModal({ onClose }: StationCreateModalProps) {
               <p className="text-xs text-text-muted">첫 노래를 받지 못해서 첫 노래 없이 방송을 시작해요.</p>
             )}
             {pollError && <><p role="alert">{pollError}</p><button type="button" onClick={() => setStation({ ...station })}>상태 다시 확인</button></>}
-            {station.status === 'started' && station.hls_ready && <button type="button" onClick={() => { onClose(); navigate(`/listen/${station.station_id}`) }}>방송 듣기</button>}
+            {isReady(station) && <button type="button" onClick={() => { onClose(); navigate(`/listen/${station.station_id}`) }}>방송 듣기</button>}
           </div>
         )}
         {(step === 'edit' || step === 'submitting') && selected && (
@@ -167,7 +175,12 @@ export function StationCreateModal({ onClose }: StationCreateModalProps) {
             persona={selected}
             isSubmitting={step === 'submitting'}
             submitError={submitError}
-            onBack={() => setStep('drafts')}
+            onBack={() => {
+              // 앞서 실패한 방송 만들기의 오류와 "내 방송으로 가기"를 초안 목록까지 끌고 가지 않는다
+              setSubmitError('')
+              setExistingStationId(null)
+              setStep('drafts')
+            }}
             onConfirm={handleConfirm}
           />
         )}

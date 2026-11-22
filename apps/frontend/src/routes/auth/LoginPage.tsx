@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { AuthBrandPanel } from '@/routes/auth/AuthBrandPanel'
 import { DemoJoinModal } from '@/routes/auth/DemoJoinModal'
 import type { DemoJoinMode } from '@/routes/auth/DemoJoinModal'
@@ -20,7 +21,7 @@ export function LoginPage() {
   const signupEmail = (location.state as { signupEmail?: string } | null)?.signupEmail
   const [email, setEmail] = useState(signupEmail ?? '')
   const [password, setPassword] = useState('')
-  const [keepSignedIn, setKeepSignedIn] = useState(false)
+  const queryClient = useQueryClient()
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState('')
   const [demoJoinMode, setDemoJoinMode] = useState<DemoJoinMode | null>(null)
@@ -32,11 +33,15 @@ export function LoginPage() {
     try {
       const { accessToken } = await login(email.trim(), password)
       setAccessToken(accessToken)
+      // 앞서 쓰던 계정의 캐시(알림, 내 방송, 실패한 내 정보 조회)를 버린다 — 남아 있으면 다른 계정의 알림이 뜨거나,
+      // 만료로 실패해 있던 내 정보 때문에 방금 로그인한 사용자가 다시 로그인 화면으로 밀려난다 (#366)
+      queryClient.clear()
       navigate('/main')
     } catch (error) {
+      const code = error instanceof Error ? error.message : ''
       setSubmitError(
-        error instanceof Error && error.message === 'INVALID_CREDENTIALS'
-          ? '이메일 또는 비밀번호가 올바르지 않습니다'
+        code === 'INVALID_CREDENTIALS' ? '이메일 또는 비밀번호가 올바르지 않습니다'
+          : code === 'TOO_MANY_ATTEMPTS' ? '비밀번호를 여러 번 틀려서 잠시 막혔어요. 5분 뒤에 다시 시도해주세요'
           : '로그인에 실패했어요, 잠시 후 다시 시도해주세요',
       )
     } finally {
@@ -66,6 +71,7 @@ export function LoginPage() {
             <span className={fieldLabelClass}>이메일</span>
             <input
               type="email"
+              required
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               placeholder="you@example.com"
@@ -77,26 +83,13 @@ export function LoginPage() {
             <span className={fieldLabelClass}>비밀번호</span>
             <input
               type="password"
+              required
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               placeholder="비밀번호를 입력하세요"
               className={textInputClass}
             />
           </label>
-
-          <div className="flex items-center justify-between text-[13px]">
-            <label className="flex items-center gap-2 text-text-muted">
-              <input
-                type="checkbox"
-                checked={keepSignedIn}
-                onChange={(event) => setKeepSignedIn(event.target.checked)}
-              />
-              로그인 상태 유지
-            </label>
-            <button type="button" className="font-medium text-primary">
-              비밀번호를 잊으셨나요?
-            </button>
-          </div>
 
           {submitError && <p className="text-xs text-danger">{submitError}</p>}
 

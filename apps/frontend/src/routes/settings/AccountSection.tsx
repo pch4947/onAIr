@@ -14,7 +14,19 @@ const inputClass =
   'h-9 w-full rounded-md border border-field-border bg-field-bg px-3 text-base text-text placeholder:text-field-placeholder md:text-[13px]'
 const buttonClass = 'shrink-0 rounded-md bg-primary px-4 py-2 text-xs font-semibold text-white disabled:opacity-50'
 
+const PASSWORD_MAX = 128
+const RETRY_LATER = '잠시 후 다시 시도해 주세요.'
+// 비밀번호를 5분 안에 여러 번 틀리면 백엔드가 막는다(429, #364). 로그인·비밀번호 변경·탈퇴가 같이 막힌다
+const LOCKED = '비밀번호를 여러 번 틀려서 잠시 막혔어요. 5분 뒤에 다시 시도해 주세요.'
+
 const statusOf = (error: unknown) => (error instanceof AccountError ? error.status : 0)
+// 409는 원인이 여럿이다 — 닉네임 중복, 진행 중인 방송, 같은 계정을 동시에 고친 충돌("Account changed; retry")
+const detailOf = (error: unknown) => (error instanceof AccountError ? error.detail : undefined)
+const isNameTaken = (error: unknown) => statusOf(error) === 409 && detailOf(error) === 'Name already taken'
+const liveStationOf = (error: unknown) => {
+  const detail = detailOf(error)
+  return statusOf(error) === 409 && typeof detail === 'object' && detail !== null && 'station_id' in detail
+}
 
 function Message({ error, success }: { error?: string | null; success?: string | null }) {
   if (error) return <p role="alert" className="text-xs text-danger">{error}</p>
@@ -27,7 +39,7 @@ function NameForm({ user, onSaved }: { user: AuthUser; onSaved: (user: AuthUser)
   const trimmed = name.trim()
   const mutation = useMutation({ mutationFn: changeName, onSuccess: onSaved })
   const error = mutation.isError
-    ? statusOf(mutation.error) === 409 ? '이미 쓰는 닉네임이에요.' : '닉네임을 바꾸지 못했어요. 잠시 후 다시 시도해 주세요.'
+    ? isNameTaken(mutation.error) ? '이미 쓰는 닉네임이에요.' : `닉네임을 바꾸지 못했어요. ${RETRY_LATER}`
     : null
   const submit = (event: FormEvent) => {
     event.preventDefault()
@@ -66,7 +78,10 @@ function PasswordForm() {
   const mismatch = confirm.length > 0 && next !== confirm
   const error = tooShort ? `새 비밀번호는 ${PASSWORD_MIN}자 이상이어야 해요.`
     : mismatch ? '새 비밀번호가 서로 달라요.'
-    : mutation.isError ? statusOf(mutation.error) === 403 ? '지금 비밀번호가 맞지 않아요.' : '비밀번호를 바꾸지 못했어요.'
+    : mutation.isError
+      ? statusOf(mutation.error) === 403 ? '지금 비밀번호가 맞지 않아요.'
+        : statusOf(mutation.error) === 429 ? LOCKED
+        : `비밀번호를 바꾸지 못했어요. ${RETRY_LATER}`
     : null
   const touch = (set: (value: string) => void) => (value: string) => { set(value); mutation.reset() }
   return (
@@ -78,9 +93,9 @@ function PasswordForm() {
       <input type="password" autoComplete="current-password" placeholder="지금 비밀번호" aria-label="지금 비밀번호"
         value={current} onChange={(event) => touch(setCurrent)(event.target.value)} className={inputClass} />
       <input type="password" autoComplete="new-password" placeholder={`새 비밀번호 (${PASSWORD_MIN}자 이상)`} aria-label="새 비밀번호"
-        value={next} onChange={(event) => touch(setNext)(event.target.value)} className={inputClass} />
+        maxLength={PASSWORD_MAX} value={next} onChange={(event) => touch(setNext)(event.target.value)} className={inputClass} />
       <input type="password" autoComplete="new-password" placeholder="새 비밀번호 확인" aria-label="새 비밀번호 확인"
-        value={confirm} onChange={(event) => touch(setConfirm)(event.target.value)} className={inputClass} />
+        maxLength={PASSWORD_MAX} value={confirm} onChange={(event) => touch(setConfirm)(event.target.value)} className={inputClass} />
       <div className="flex items-center justify-between gap-2">
         <Message error={error} success={mutation.isSuccess ? '비밀번호를 바꿨어요.' : null} />
         <button
@@ -110,9 +125,10 @@ function DeleteAccount() {
   })
   const status = statusOf(mutation.error)
   const error = !mutation.isError ? null
-    : status === 409 ? '진행 중인 내 방송이 있어요. 방송을 먼저 종료한 뒤 탈퇴해 주세요.'
+    : liveStationOf(mutation.error) ? '진행 중인 내 방송이 있어요. 방송을 먼저 종료한 뒤 탈퇴해 주세요.'
     : status === 403 ? '비밀번호가 맞지 않아요.'
-    : '탈퇴하지 못했어요. 잠시 후 다시 시도해 주세요.'
+    : status === 429 ? LOCKED
+    : `탈퇴하지 못했어요. ${RETRY_LATER}`
 
   if (!open) {
     return (

@@ -117,8 +117,6 @@ export function PersonaFormStep({ format, onBack, onSubmit, serverErrors = {} }:
   const [corners, setCorners] = useState<TalkCorner[]>(DEFAULT_CORNERS)
   const [newsSections, setNewsSections] = useState<NewsSection[]>(DEFAULT_NEWS_SECTIONS)
   const [intensity, setIntensity] = useState<Intensity>('mid')
-  // 백엔드에 아직 해당 필드가 없어 전송하지 않음 — 화면에만 보여주는 상태 (#102)
-  const [wantsSongRequests, setWantsSongRequests] = useState(true)
   const [errors, setErrors] = useState<Record<string, string>>({})
 
   useEffect(() => {
@@ -190,18 +188,6 @@ export function PersonaFormStep({ format, onBack, onSubmit, serverErrors = {} }:
           DJ 스타일을 고르면 AI가 어울리는 캐릭터 초안을 만들어드려요
         </p>
       </div>
-
-      {format === 'music' && (
-        <label className="flex items-center justify-between rounded-lg border border-field-border bg-field-bg px-4 py-3">
-          <span className={fieldLabelClass}>신청곡 받기</span>
-          <input
-            type="checkbox"
-            checked={wantsSongRequests}
-            onChange={(event) => setWantsSongRequests(event.target.checked)}
-            className="size-4"
-          />
-        </label>
-      )}
 
       {format === 'talk' && (
         <div className="flex flex-col gap-2">

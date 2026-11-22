@@ -1,8 +1,8 @@
 // 04_Board_게시판 화면
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Sidebar } from '@/app/Sidebar'
 import { LikeButton } from '@/routes/board/LikeButton'
 import { NewPostModal } from '@/routes/board/NewPostModal'
@@ -36,21 +36,21 @@ export function BoardPage() {
   const totalPages = Math.max(1, Math.ceil((postsQuery.data?.total ?? 0) / PAGE_SIZE))
 
   // 알림(예: 새 댓글)을 클릭해서 들어온 경우 — 목록에 없어도(다른 페이지에 있거나 오래된 글이어도) 바로 열어준다.
+  // 주소의 post는 읽자마자 지운다 — 지우면 이 effect가 다시 돌므로 정리 함수로 결과를 버리면 글이 열리지 않는다(#366).
+  // 알림을 연달아 누르면 마지막에 연 글만 보인다
   const linkedPostId = searchParams.get('post')
+  const requestedPostId = useRef<string | null>(null)
   useEffect(() => {
     if (!linkedPostId) return
-    let cancelled = false
+    requestedPostId.current = linkedPostId
     getBoardPost(linkedPostId).then((post) => {
-      if (!cancelled) setSelectedPost(post)
+      if (requestedPostId.current === linkedPostId) setSelectedPost(post)
     }).catch(() => {})
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev)
       next.delete('post')
       return next
     }, { replace: true })
-    return () => {
-      cancelled = true
-    }
   }, [linkedPostId, setSearchParams])
 
   const updatePostLikeInCache = (postId: string, status: LikeStatus) => {
@@ -65,10 +65,11 @@ export function BoardPage() {
     )
   }
 
-  const handleTogglePostLike = async (post: BoardPost) => {
-    const status = post.liked ? await unlikePost(post.id) : await likePost(post.id)
-    updatePostLikeInCache(post.id, status)
-  }
+  // 누르는 동안은 다시 누를 수 없다 — 연타하면 같은 상태를 보고 같은 요청을 두 번 보낸다 (#366)
+  const likeMutation = useMutation({
+    mutationFn: (post: BoardPost) => (post.liked ? unlikePost(post.id) : likePost(post.id)),
+    onSuccess: (status, post) => updatePostLikeInCache(post.id, status),
+  })
 
   return (
     <div className="flex min-h-screen">
@@ -113,7 +114,8 @@ export function BoardPage() {
                 <LikeButton
                   liked={post.liked}
                   count={post.likeCount}
-                  onToggle={() => handleTogglePostLike(post)}
+                  onToggle={() => likeMutation.mutateAsync(post).catch(() => {})}
+                  disabled={likeMutation.isPending && likeMutation.variables?.id === post.id}
                 />
               </div>
             </li>

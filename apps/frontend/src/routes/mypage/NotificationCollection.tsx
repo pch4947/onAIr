@@ -29,6 +29,15 @@ export function NotificationCollection() {
   const totalPages = Math.max(1, Math.ceil((query.data?.total ?? 0) / PAGE_SIZE))
   const unreadCount = query.data?.unreadCount ?? 0
 
+  // 알림을 지우면 뒤 페이지가 당겨지므로 다시 불러온다. 사이드바의 안 읽은 알림 수도 바로 맞춘다 (#366)
+  const syncAfterChange = () => {
+    void queryClient.invalidateQueries({ queryKey: ['notifications'] })
+    void queryClient.invalidateQueries({ queryKey: ['notifications-unread'] })
+  }
+
+  // 지운 뒤 목록이 짧아져 지금 페이지가 사라졌으면 마지막 페이지로 옮긴다
+  if (query.data && page > totalPages) setPage(totalPages)
+
   const handleClick = (item: NotificationItem) => {
     if (item.isUnread) {
       queryClient.setQueryData<NotificationPage>(queryKey, (old) => old && {
@@ -36,9 +45,11 @@ export function NotificationCollection() {
         notifications: old.notifications.map((n) => (n.id === item.id ? { ...n, isUnread: false } : n)),
         unreadCount: Math.max(0, old.unreadCount - 1),
       })
-      markNotificationRead(item.id).catch(() => query.refetch())
+      markNotificationRead(item.id).then(syncAfterChange, () => query.refetch())
     }
-    navigate(getNotificationPath(item))
+    // 갈 곳이 따로 없는 알림(사연 읽힘 등)은 이 목록이 그 알림의 자리다 — 데스크톱에서 모바일용 하위 페이지로 넘어가지 않게 한다
+    const path = getNotificationPath(item)
+    if (path !== '/mypage/notifications') navigate(path)
   }
 
   const handleReadAll = () => {
@@ -47,7 +58,7 @@ export function NotificationCollection() {
       notifications: old.notifications.map((n) => ({ ...n, isUnread: false })),
       unreadCount: 0,
     })
-    markAllNotificationsRead().catch(() => query.refetch())
+    markAllNotificationsRead().then(syncAfterChange, () => query.refetch())
   }
 
   const handleDelete = (event: React.MouseEvent, item: NotificationItem) => {
@@ -58,18 +69,26 @@ export function NotificationCollection() {
       total: Math.max(0, old.total - 1),
       unreadCount: item.isUnread ? Math.max(0, old.unreadCount - 1) : old.unreadCount,
     })
-    deleteNotification(item.id).catch(() => query.refetch())
+    if (notifications.length === 1 && page > 1) setPage(page - 1)
+    deleteNotification(item.id).then(syncAfterChange, () => query.refetch())
   }
 
   const handleDeleteAll = () => {
-    queryClient.setQueryData<NotificationPage>(queryKey, (old) => old && {
+    // 모든 페이지의 캐시를 비운다 — 첫 페이지로 돌아갈 때 지운 알림이 잠깐 보이지 않게
+    queryClient.setQueriesData<NotificationPage>({ queryKey: ['notifications'] }, (old) => old && {
       ...old, notifications: [], total: 0, unreadCount: 0,
     })
     setConfirmDeleteAll(false)
-    deleteAllNotifications().catch(() => query.refetch())
+    setPage(1)
+    deleteAllNotifications().then(syncAfterChange, () => query.refetch())
   }
 
-  if (!query.isLoading && notifications.length === 0) {
+  if (query.isError) {
+    return <p className="text-[13px] text-danger">알림을 불러오지 못했어요</p>
+  }
+
+  // 빈 목록은 첫 페이지에서만 "없어요"다 — 뒤 페이지가 비었으면 위에서 앞 페이지로 옮긴다
+  if (!query.isLoading && notifications.length === 0 && page === 1) {
     return <p className="text-[13px] text-text-muted">아직 알림이 없어요</p>
   }
 

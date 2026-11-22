@@ -24,28 +24,38 @@ export function BoardPostCollection({ queryKey, fetcher, emptyText, removeOnUnli
   const posts = query.data?.posts ?? []
   const totalPages = Math.max(1, Math.ceil((query.data?.total ?? 0) / PAGE_SIZE))
 
-  const handlePostLikeChange = (postId: string, status: LikeStatus) => {
-    queryClient.setQueryData<{ posts: BoardPost[]; total: number }>([queryKey, page], (old) => {
-      if (!old) return old
-      if (removeOnUnlike && !status.liked) {
-        return { ...old, posts: old.posts.filter((post) => post.id !== postId), total: old.total - 1 }
-      }
-      return { ...old, posts: old.posts.map((post) => (post.id === postId ? { ...post, ...status } : post)) }
-    })
-  }
+  // 지운 뒤 목록이 짧아져 지금 페이지가 사라졌으면 마지막 페이지로 옮긴다
+  if (query.data && page > totalPages) setPage(totalPages)
 
-  const handlePostDeleted = (postId: string) => {
+  // 목록에서 빠지면 뒤 페이지가 당겨지므로 다시 불러온다. 페이지의 마지막 글이었으면 앞 페이지로 간다 (#366)
+  const removePost = (postId: string) => {
     queryClient.setQueryData<{ posts: BoardPost[]; total: number }>([queryKey, page], (old) =>
       old ? { ...old, posts: old.posts.filter((post) => post.id !== postId), total: old.total - 1 } : old,
     )
+    if (posts.length === 1 && page > 1) setPage(page - 1)
+    void queryClient.invalidateQueries({ queryKey: [queryKey] })
   }
 
-  if (!query.isLoading && posts.length === 0) {
-    return <p className="text-[13px] text-text-muted">{emptyText}</p>
+  const handlePostLikeChange = (postId: string, status: LikeStatus) => {
+    if (removeOnUnlike && !status.liked) {
+      removePost(postId)
+      return
+    }
+    queryClient.setQueryData<{ posts: BoardPost[]; total: number }>([queryKey, page], (old) =>
+      old ? { ...old, posts: old.posts.map((post) => (post.id === postId ? { ...post, ...status } : post)) } : old,
+    )
   }
+
+  // 빈 목록은 첫 페이지에서만 "없어요"다. 글 창은 목록이 비어도 닫히지 않게 같은 자리에 둔다
+  const listBody = query.isError
+    ? <p className="text-[13px] text-danger">목록을 불러오지 못했어요</p>
+    : !query.isLoading && posts.length === 0 && page === 1
+      ? <p className="text-[13px] text-text-muted">{emptyText}</p>
+      : null
 
   return (
     <div className="flex flex-col gap-4">
+      {listBody}
       <ul className="flex flex-col gap-2.5">
         {posts.map((post) => (
           <li
@@ -92,7 +102,7 @@ export function BoardPostCollection({ queryKey, fetcher, emptyText, removeOnUnli
           post={selectedPost}
           onClose={() => setSelectedPost(null)}
           onPostLikeChange={handlePostLikeChange}
-          onPostDeleted={handlePostDeleted}
+          onPostDeleted={removePost}
         />
       )}
     </div>

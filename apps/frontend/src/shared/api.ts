@@ -236,6 +236,10 @@ export async function login(email: string, password: string): Promise<AuthRespon
   if (res.status === 401) {
     throw new Error('INVALID_CREDENTIALS')
   }
+  // 비밀번호를 5분 안에 여러 번 틀리면 백엔드가 막는다 (#364)
+  if (res.status === 429) {
+    throw new Error('TOO_MANY_ATTEMPTS')
+  }
   if (!res.ok) {
     throw new Error(`POST /api/auth/login failed: ${res.status}`)
   }

@@ -36,8 +36,8 @@ export function DemoJoinModal({ mode, onClose }: DemoJoinModalProps) {
     mutationFn: () => (isGuest ? joinAsGuest(trimmed) : joinAsAdmin(trimmed)),
     onSuccess: ({ accessToken }) => {
       setAccessToken(accessToken)
-      // 같은 기기에서 다른 계정으로 바꿔 들어와도 이전 사용자 정보가 남지 않게 한다
-      queryClient.removeQueries({ queryKey: ['me'] })
+      // 같은 기기에서 다른 계정으로 바꿔 들어와도 이전 사용자의 정보·알림·내 방송 캐시가 남지 않게 한다 (#366)
+      queryClient.clear()
       navigate('/main')
     },
   })

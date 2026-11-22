@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { getNotifications, markNotificationRead } from '@/shared/api'
 import { getNotificationPath } from '@/shared/notificationLink'
 import { useCurrentUser } from '@/shared/useCurrentUser'
@@ -75,6 +75,7 @@ const MOBILE_NAV_ITEMS: NavItem[] = [
 
 export function Sidebar({ active, hideMobileNav = false }: SidebarProps) {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const { data: user } = useCurrentUser()
   const name = user?.name ?? ''
   const [toasts, setToasts] = useState<NotificationItem[]>([])
@@ -123,7 +124,10 @@ export function Sidebar({ active, hideMobileNav = false }: SidebarProps) {
 
   const handleToastClick = (notification: NotificationItem) => {
     dismissToast(notification.id)
-    markNotificationRead(notification.id).catch(() => {})
+    // 읽음 처리가 끝나면 안 읽은 알림 수를 바로 맞춘다 — 다음 5초 조회까지 배지가 그대로 남지 않게 (#366)
+    markNotificationRead(notification.id)
+      .then(() => queryClient.invalidateQueries({ queryKey: ['notifications-unread'] }))
+      .catch(() => {})
     navigate(getNotificationPath(notification))
   }
 
