@@ -22,6 +22,17 @@ SPOKEN_RULES = (
 )
 
 
+# 발성 태그 (#369) — 2026-11-22에 사람이 자리를 골라 넣은 견본을 들었을 때 거슬리지 않았다. 자리는 규칙으로 정할 수
+# 없어 대본을 쓰는 쪽이 고른다. 태그를 받는 TTS(gemini)이고 설정이 켜져 있을 때만 붙인다 (StationProfile.vocal_tags)
+# 처음에는 "하나 넣을 수 있다 … 대부분의 멘트에는 넣지 않는다"고 했더니 210번 가운데 2번만 썼다(농담을 받는 멘트
+# 30번 중 2번, 텐션 높은 DJ만). 웃음이 나오는 자리를 짚어 주고 "넣는다"로 바꿨다 (2026-11-22, var/vocal_check.py)
+VOCAL_RULES = (
+    "다만 웃음이 나오는 자리에는 <chuckle>(가볍게 웃음)이나 <laugh>(소리 내어 웃음)를 넣는다 — 청취자의 농담을 "
+    "받을 때, DJ가 농담을 던진 바로 뒤가 그런 자리다. 한 번에 쓰는 글 전체에서 하나까지만 쓴다. 웃을 일이 없는 멘트, "
+    "위로하는 말, 진지한 이야기, 청취자의 사연이나 고민을 전하는 대목에는 넣지 않는다. 이 두 가지 밖의 태그는 쓰지 않는다."
+)
+
+
 # 귀로 듣는 말의 기본기 — persona와 무관하게 모든 DJ에 공통이다
 RADIO_CRAFT = (
     "라디오 멘트는 귀로 듣는 말이다. 한 문장에 한 가지 생각만 담아 짧게 끊고, "
@@ -51,7 +62,8 @@ def system_prompt(profile: StationProfile, *, plain: bool = False) -> str:
         parts.append(f"입버릇은 {phrases}. 어울릴 때만 가끔 쓰고 매 멘트마다 넣지 않는다.")
     if profile.forbidden:
         parts.append("다음은 하지 않는다: " + "; ".join(profile.forbidden) + ".")
-    parts += [RADIO_CRAFT, "대본 텍스트만 출력한다.", SPOKEN_RULES, L1_GUARD, DATA_RULES]
+    spoken = f"{SPOKEN_RULES} {VOCAL_RULES}" if profile.vocal_tags and not plain else SPOKEN_RULES
+    parts += [RADIO_CRAFT, "대본 텍스트만 출력한다.", spoken, L1_GUARD, DATA_RULES]
     prompt = " ".join(parts)
     if profile.examples:
         # 예시는 호스트가 쓴 텍스트다 — 데이터 블록으로 넣어 지시로 읽히지 않게 한다

@@ -51,6 +51,7 @@ class CachedTts:
         self._split_chars = max(0, int(split_chars))
         self._cache_dir = Path(cache_dir) if cache_dir else None
         self.file_ext = inner.file_ext
+        self.vocal_tags = bool(getattr(inner, "vocal_tags", False))  # 발성 태그를 받는 TTS인가 (#369)
         # 멘트 끝에 붙이는 쉬는 시간 — 멘트가 숨 쉴 틈 없이 이어 붙지 않게 한다 (2026-11-15 실제 방송 피드백).
         # 길이가 다르면 다른 파일이다 — 캐시를 따로 둔다
         self._pause_ms = max(0, int(pause_ms))

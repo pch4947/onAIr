@@ -102,6 +102,8 @@ class StationProfile:
     signature_phrases: list[str] = field(default_factory=list)
     # 폼에서 고른 에너지(low | mid | high) — TTS의 말투 지시를 정한다 (pipeline/tts.voice_style, #369)
     energy: str = "mid"
+    # 대본에 발성 태그를 쓰게 한다 — 태그를 받는 TTS이고 설정이 켜져 있을 때 엔진이 켠다 (corners/base.py)
+    vocal_tags: bool = False
 
 
 @dataclass
@@ -186,6 +188,8 @@ class Prompt:
 @dataclass
 class Script:
     text: str
+    # 발성 태그(<laugh> 등)가 든 합성용 글 — 태그를 받는 TTS에만 보낸다. 화면·검사·기록은 text를 쓴다 (#369)
+    spoken: str | None = None
 
 
 class BlockScript:
