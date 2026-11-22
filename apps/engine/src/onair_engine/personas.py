@@ -60,6 +60,35 @@ _SYSTEM = (
 )
 
 
+# 장르를 여럿 고른 방 — 초안이 장르를 하나씩 나눠 가지면 컨셉("제이팝으로 여는 오후")이 선곡을 그 장르로 묶는다.
+# 선곡과 신청곡 판정이 컨셉을 같이 읽기 때문이다 (inputs/song_picks.py, inputs/song_fit.py)
+GENRE_RULES = [
+    "아래 선곡 취향은 이 방송에서 트는 장르 전부다. 어느 초안이든 이 장르를 모두 튼다.",
+    "- 초안마다 장르를 하나씩 나눠 맡기지 않는다. 초안은 장르가 아니라 분위기와 DJ의 성격으로 가른다.",
+    "- concept, tone_detail, examples에 장르 이름을 쓰지 않고, 한 장르만 트는 방송처럼 말하지 않는다.",
+]
+# 폼의 장르 이름과 다르게 적는 표기 — 컨셉에 장르가 들어갔는지 볼 때 같이 찾는다
+_GENRE_ALIASES = {"j-pop": ("제이팝", "j팝", "jpop"), "r&b": ("알앤비",), "edm": ("이디엠", "전자음악")}
+
+
+def genres_named(text: str, genres: list[str]) -> list[str]:
+    """text에 나온 장르 이름. '힙합/랩'은 두 낱말로 보고, 한 글자 이름('팝')은 다른 낱말의 끝('제이팝')이면 세지 않는다."""
+    found = []
+    for genre in genres:
+        for word in filter(None, (part.strip() for part in genre.split("/"))):
+            for name in (word, *_GENRE_ALIASES.get(word.lower(), ())):
+                pattern = re.escape(name) if len(name) > 1 else rf"(?<![0-9A-Za-z가-힣]){re.escape(name)}"
+                if re.search(pattern, text, re.IGNORECASE):
+                    found.append(name)
+    return found
+
+
+def _keeps_every_genre(form: PersonaForm) -> bool:
+    """컨셉을 한 장르로 좁히면 안 되는 폼 — 장르를 여럿 골랐고, 호스트 메모가 그 가운데 하나를 짚지 않았다."""
+    genres = list(form.music_taste)
+    return len(genres) > 1 and not genres_named(form.host_note or "", genres)
+
+
 def build_prompt(form: PersonaForm, count: int, avoid_names: list[str]) -> Prompt:
     """초안 생성 프롬프트. 더미 LLM이 '초안 개수:', '기본 말투:', '고정 이름:', '피할 이름:' 줄을 읽는다."""
     tone = base_tone(form.style)
@@ -91,7 +120,10 @@ def build_prompt(form: PersonaForm, count: int, avoid_names: list[str]) -> Promp
         f"- 초안 {count}개는 이름·컨셉·분위기가 서로 겹치지 않게 만든다",
     ]
     if form.music_taste:
-        lines += ["", data_block(GENRES, ", ".join(form.music_taste))]
+        lines.append("")
+        if _keeps_every_genre(form):
+            lines += GENRE_RULES
+        lines.append(data_block(GENRES, ", ".join(form.music_taste)))
     if form.host_note:
         lines += ["", "호스트가 원하는 DJ를 적은 메모다. 컨셉과 말투 묘사에 반영한다.",
                   data_block(HOST_NOTE, form.host_note)]
@@ -196,6 +228,8 @@ class PersonaDrafter:
             return None, error_detail(exc)
         if not form.dj_name and persona.dj_name in taken:
             return None, f"이름 중복: {persona.dj_name}"
+        if _keeps_every_genre(form) and (named := genres_named(persona.concept, list(form.music_taste))):
+            return None, f"concept: 고른 장르 가운데 하나만 적음 {named}"
         for field, text in _texts(persona.model_dump()):
             if rule := self._safety.check_l2(text):
                 return None, f"{field}: 안전 규칙 ({rule})"

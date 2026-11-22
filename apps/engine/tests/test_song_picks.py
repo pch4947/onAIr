@@ -13,6 +13,7 @@ from onair_engine.domain import Material, Prompt, StationConfig, StationProfile
 from onair_engine.engine import EngineSettings, StationEngine
 from onair_engine.inputs.song_picks import (
     MARKER,
+    TURN_RULE,
     Pick,
     SongPicker,
     dummy_picks_json,
@@ -55,6 +56,10 @@ def test_parse_keeps_wellformed_songs_and_drops_duplicates():
         with pytest.raises(ValueError):
             parse_picks(bad)
     assert song_key("밤 편지 (feat. 누구)") == song_key("밤편지")
+    # 한글·영문이 아닌 제목도 곡이다 — 열쇠가 비면 버려져서 일본 곡은 하나도 제안하지 못했다
+    japanese = json.dumps({"songs": [{"title": "夜に駆ける", "artist": "YOASOBI"}]}, ensure_ascii=False)
+    assert parse_picks(japanese) == [Pick("夜に駆ける", "YOASOBI")]
+    assert song_key("夜に 駆ける!") == song_key("夜に駆ける") != song_key("群青")
 
 
 def test_picker_never_suggests_a_song_twice_nor_one_already_played():
@@ -69,6 +74,33 @@ def test_picker_never_suggests_a_song_twice_nor_one_already_played():
     first, second = asyncio.run(scenario())
     assert len(first) == 3 and len(second) == 3
     assert not {p.key for p in first} & {p.key for p in second}
+
+
+def test_picker_takes_one_genre_per_turn_when_the_room_has_several():
+    """장르를 한꺼번에 주면 LLM이 섞어 읽어 한쪽 곡만 낸다 — 차례마다 한 장르만 준다 (T-022)."""
+    class Recording:
+        def __init__(self):
+            self.prompts = []
+
+        async def complete(self, prompt: Prompt, *, max_tokens: int) -> str:
+            self.prompts.append(prompt.user)
+            return dummy_picks_json(prompt)
+
+    def asked(llm):
+        return [user.split(f'<data label="{GENRES}">\n')[1].split("\n</data>")[0] for user in llm.prompts]
+
+    llm = Recording()
+    picker = SongPicker(llm, PROFILE, ["J-POP", "발라드", "인디"], None, violates=lambda text: None)
+
+    async def scenario():
+        for _ in range(4):
+            await picker.pick([])
+        picker.use_persona(PROFILE, ["재즈"])  # DJ가 바뀌어 장르가 하나가 됐다
+        await picker.pick([])
+
+    asyncio.run(scenario())
+    assert asked(llm) == ["J-POP", "발라드", "인디", "J-POP", "재즈"]
+    assert all(TURN_RULE in user for user in llm.prompts[:4]) and TURN_RULE not in llm.prompts[4]
 
 
 def test_picker_drops_unsafe_songs_and_unsafe_reasons_only():
