@@ -265,9 +265,9 @@ DEFAULT_GEMINI_TTS_MODEL = "gemini-3.8-flash-tts"
 # 문구는 2026-11-22에 같은 멘트를 합성해 듣고 정했다(apps/engine/var/tts-samples-20261122, #369):
 # "차분하고 나긋하게, 서두르지 않고"는 같은 글이 41% 길어졌고, "서두르지 않고"만 빼도 24%로 줄었다 — 빠르기를
 # 늦추는 말은 넣지 않는다. 아래 low의 문구가 17%이고, 들은 사람이 여섯 가지 가운데 고른 것이다.
-# mid와 high는 같은 틀로 적은 초안이다 [임시값] — 들어 보고 고친다
+# high는 "bright and lively"와 견줘 듣고 고른 것이다(하이텐션 반말, 밝은 존댓말 DJ의 멘트). mid는 초안이다 [임시값]
 VOICE_PACE = "at a natural conversational pace"
-VOICE_MOODS = {"low": "calm and warm", "mid": "relaxed and friendly", "high": "bright and lively"}
+VOICE_MOODS = {"low": "calm and warm", "mid": "relaxed and friendly", "high": "cheerful and energetic"}
 # 쉼 태그 — 문장 사이에 넣는다. 영어가 아닌 대본에도 태그는 영어로 쓴다(공식 문서). 소리 내어 읽히지 않는다:
 # 태그 서너 개를 넣어도 길이는 0.4~1.6초만 늘었다
 PAUSE_TAG = "<short pause>"

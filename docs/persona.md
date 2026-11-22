@@ -422,9 +422,9 @@ AI VTuber 팬덤 연구(Neuro-sama)에서 팬의 83%가 "일관된 성격"을 �
 **현재 코드와의 차이** — 제공자 전환은 구현됐다(`GeminiTtsClient`, #153). 남은 것은 다음과 같다(`StationConfig.voice`로 어댑터를 만드는 구조는 그대로 쓴다).
 
 - **스타일 지시와 쉼 태그는 구현됐다 (2026-11-22, #369).** 설계와 다르게 잡은 것이 둘 있다.
-  - 스타일 문장은 새 필드(`voice_style`)가 아니라 **이미 오는 `style.energy`에서 규칙으로 정한다** (`pipeline/tts.voice_style`). persona 스키마와 백엔드·프론트를 바꾸지 않는다. 문구는 영어다 — `low` "calm and warm", `mid` "relaxed and friendly", `high` "bright and lively"에 "at a natural conversational pace"를 붙인다. 코너별 스타일은 아직 없다(뉴스 형식도 DJ의 문구를 쓴다).
+  - 스타일 문장은 새 필드(`voice_style`)가 아니라 **이미 오는 `style.energy`에서 규칙으로 정한다** (`pipeline/tts.voice_style`). persona 스키마와 백엔드·프론트를 바꾸지 않는다. 문구는 영어다 — `low` "calm and warm", `mid` "relaxed and friendly", `high` "cheerful and energetic"에 "at a natural conversational pace"를 붙인다. 코너별 스타일은 아직 없다(뉴스 형식도 DJ의 문구를 쓴다).
   - `synthesize`에 인자를 더하지 않고 **클라이언트에 한 번 건다** (`GeminiTtsClient.use_style`). DJ마다 문장이 하나로 고정되므로 방송 시작과 페르소나 전환 때만 정하면 된다. 스타일과 쉼 태그 여부는 캐시 이름에 들어간다.
-  - 문구는 같은 멘트를 합성해 듣고 정했다(`apps/engine/var/tts-samples-20261122/`). **빠르기를 늦추는 말은 넣지 않는다** — "차분하고 나긋하게, 서두르지 않고"는 같은 글이 41% 길어졌고, "서두르지 않고"를 빼면 24%, 정한 문구는 17%다. `mid`·`high`의 문구는 초안이다 `[임시값]`.
+  - 문구는 같은 멘트를 합성해 듣고 정했다(`apps/engine/var/tts-samples-20261122/`). **빠르기를 늦추는 말은 넣지 않는다** — "차분하고 나긋하게, 서두르지 않고"는 같은 글이 41% 길어졌고, "서두르지 않고"를 빼면 24%, 정한 문구는 17%다. `high`는 "bright and lively"와 견줘 듣고 골랐고, `mid`의 문구는 초안이다 `[임시값]`.
   - **쉼 태그**(`<short pause>`)는 엔진이 합성 직전에 문장 사이에 넣는다(앞에서부터 4개까지). 대본 글자는 그대로다 — 안전 검사, 인용 검사, 화면에 보이는 대본은 태그를 보지 않는다. 태그는 소리 내어 읽히지 않았다(서너 개를 넣어도 0.4~1.6초만 길어진다).
   - 설정은 `pipeline.tts_style`, `pipeline.tts_pauses`(운영 설정에서 켬), 문구를 바꿀 때는 `pipeline.tts_moods`. 스타일을 받지 못하는 TTS(dummy·edge·google·cartesia)에는 걸지 않는다 — 태그를 글자로 읽는다.
 - voice design용 엔진 REST를 추가한다([ENGINE_REDIS_CONTRACT.md](ENGINE_REDIS_CONTRACT.md) 10.12절).
