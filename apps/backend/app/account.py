@@ -13,12 +13,12 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from redis.exceptions import RedisError
 
-from .auth import JWT_ALGORITHM, get_current_user, public_user, reject_reserved_name
+from .auth import JWT_ALGORITHM, PasswordGuard, get_current_user, public_user, reject_reserved_name
 from .board_stories import POSTS_KEY
 from .notifications import NotificationStore
 from .station_runtime import ensure_runtimes
 from .stations import channel_records
-from .users import WITHDRAWN_NAME, NameAlreadyExists, UserChanged, hash_password, verify_password
+from .users import WITHDRAWN_NAME, NameAlreadyExists, UserChanged, hash_password_async, verify_password_async
 
 router = APIRouter(prefix='/api/account')
 User = Annotated[dict, Depends(get_current_user)]
@@ -59,9 +59,14 @@ def require_member(user):
         raise HTTPException(403, 'Only member accounts have account settings')
 
 
-def check_password(user, password):
-    if not user.get('passwordHash') or not verify_password(password, user['passwordHash']):
+async def check_password(request, user, password):
+    """로그인과 같은 한도로 틀린 횟수를 센다 — 토큰만 훔친 사람이 비밀번호를 찍어 맞히지 못하게."""
+    guard = PasswordGuard.of(request)
+    guard.check(request, user['email'])
+    if not user.get('passwordHash') or not await verify_password_async(password, user['passwordHash']):
+        guard.fail(request, user['email'])
         raise HTTPException(403, 'Password does not match')
+    guard.passed(request, user['email'])
 
 
 async def rewrite_hash(redis, key, match, change):
@@ -124,8 +129,8 @@ async def change_password(body: PasswordInput, request: Request, user: User,
                           authorization: Annotated[str | None, Header()] = None):
     """바꾸면 그 전에 발급된 토큰은 모두 버린다(다른 기기는 다시 로그인). 이 요청에 쓴 토큰만 그대로 쓸 수 있다 (#344)."""
     require_member(user)
-    check_password(user, body.currentPassword)
-    new_hash = hash_password(body.newPassword)
+    await check_password(request, user, body.currentPassword)
+    new_hash = await hash_password_async(body.newPassword)
     # get_current_user가 방금 검증한 토큰이다
     kept = jwt.decode((authorization or '').removeprefix('Bearer ').strip(),
                       request.app.state.settings.jwt_secret, algorithms=[JWT_ALGORITHM]).get('iat')
@@ -158,7 +163,7 @@ async def change_preferences(body: PreferencesInput, request: Request, user: Use
 async def delete_account(body: DeleteInput, request: Request, user: User):
     """비밀번호를 확인하고 지운다. 보낸 글·댓글·요청은 '탈퇴한 사용자'로 남는다. 진행 중인 내 방송이 있으면 409."""
     require_member(user)
-    check_password(user, body.password)
+    await check_password(request, user, body.password)
     redis = request.app.state.redis
     try:
         async with asyncio.timeout(10):
