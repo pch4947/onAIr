@@ -57,7 +57,7 @@ class TrackSearchResult(BaseModel):
     candidates: list[TrackCandidate]
 
 
-def search_candidates(payload, max_seconds):
+def search_candidates(payload, max_seconds, limit=3):
     if payload.get('loadType') == 'empty':
         return []
     if payload.get('loadType') != 'search' or not isinstance(payload.get('data'), list):
@@ -78,12 +78,12 @@ def search_candidates(payload, max_seconds):
         result.append(TrackCandidate(video_id=video, url='https://www.youtube.com/watch?v=' + video,
             title=str(info.get('title') or video)[:200], channel=str(info.get('author') or '')[:200],
             duration_ms=duration, thumbnail_url=f'https://i.ytimg.com/vi/{video}/mqdefault.jpg'))
-        if len(result) == 3:
+        if len(result) == limit:
             break
     return result
 
 
-async def search_youtube(settings, query):
+async def search_youtube(settings, query, limit=3):
     """YouTube 검색 — 신청곡 검색과 DJ 선곡(dj_picks.py)이 함께 쓴다. 실패하면 HTTPException(502·503·504)."""
     if not settings.lavalink_password:
         raise HTTPException(503, 'Search service unavailable')
@@ -94,7 +94,7 @@ async def search_youtube(settings, query):
                 params={'identifier': 'ytsearch:' + query})
         if response.status_code != 200:
             raise HTTPException(503, 'Search service unavailable')
-        return search_candidates(response.json(), settings.youtube_max_seconds)
+        return search_candidates(response.json(), settings.youtube_max_seconds, limit)
     except httpx.TimeoutException:
         raise HTTPException(504, 'Search timed out') from None
     except httpx.RequestError:
@@ -299,6 +299,58 @@ async def run_process(args, timeout, *, env=None):
 # 같은 자리에서 끊기므로 다시 받지 않는다. 받은 파일의 머리에는 원래 길이가 적혀 있어서, 변환한 MP3를 실제로 재야 안다.
 TRUNCATED_TOLERANCE_SEC = 5.0
 
+# 잘린 영상 대신 받을 영상 (#339): 같은 곡의 음원·가사 영상은 화면이 거의 멈춰 있어 용량이 작고 끝까지 받아진다.
+# 제목으로 다시 찾아, 길이가 비슷하고 제목이 겹치고 판(라이브·리믹스·커버 등)이 같은 것만 쓴다. 맞는 것이 없으면
+# 엉뚱한 곡을 트느니 거절한다. 운영 서버에서 3~7분 영상 30편 중 8편이 잘렸다 (2026-11-22, #339 댓글).
+SUBSTITUTE_SEARCH = 10           # 검색 결과에서 살펴볼 후보 수
+SUBSTITUTE_TRIES = 2             # 실제로 받아 볼 후보 수 — 한 번에 수 초가 걸리고 그동안 다른 다운로드가 막힌다
+SUBSTITUTE_LENGTH_TOLERANCE_SEC = 15.0
+SUBSTITUTE_TITLE_OVERLAP = 0.5   # 원래 제목의 낱말 중 후보의 제목·채널에 있어야 하는 비율
+_BRACKETS = re.compile(r'[()\[\]{}【】「」『』<>《》〈〉]')
+_WORD = re.compile(r'[0-9a-z]+|[가-힣]+|[぀-ヿ一-鿿]+')
+# 곡이 무엇인지와 상관없이 영상 제목에 붙는 말 — 찾을 때와 견줄 때 뺀다
+_TITLE_NOISE = frozenset((
+    'official', 'music', 'video', 'audio', 'mv', 'm', 'v', 'lyric', 'lyrics', 'visualizer', 'hd', 'hq', '4k',
+    'remaster', 'remastered', 'full', 'ver', 'version', 'feat', 'ft', 'prod',
+    '뮤직비디오', '뮤비', '공식', '가사', '음원', '고음질'))
+# 같은 곡이라도 다른 녹음임을 알리는 말 — 원래 영상과 후보에서 같아야 한다
+_VERSION_WORDS = frozenset((
+    'live', 'remix', 'cover', 'karaoke', 'instrumental', 'inst', 'mr', 'acoustic', 'nightcore', 'slowed', 'sped',
+    'reverb', '8d', 'reaction', 'concert', 'session', 'demo', 'mashup', 'medley',
+    '라이브', '리믹스', '커버', '노래방', '반주', '직캠', '무대', '콘서트', '어쿠스틱', '메들리', '모음'))
+# 화면이 멈춰 있는 영상임을 알리는 말 — 이런 후보를 먼저 받아 본다
+_STILL_WORDS = frozenset(('audio', 'lyric', 'lyrics', 'topic', '가사', '음원'))
+
+
+def title_words(text):
+    return _WORD.findall(_BRACKETS.sub(' ', text.lower()))
+
+
+def substitute_query(title):
+    """원래 영상의 제목에서 영상 종류를 알리는 말을 빼고 음원을 찾는 검색어를 만든다. 판을 알리는 말은 남긴다."""
+    kept = [word for word in title_words(title) if word not in _TITLE_NOISE]
+    return ' '.join(kept + ['audio'])[:120]
+
+
+def substitute_order(candidates, video_id, title, expected_ms):
+    """검색 결과에서 원래 영상 대신 받아 볼 후보를 고르고 차례를 정한다."""
+    wanted = [word for word in title_words(title) if word not in _TITLE_NOISE]
+    if not wanted:
+        return []
+    version = _VERSION_WORDS.intersection(wanted)
+    kept = []
+    for candidate in candidates:
+        words = set(title_words(candidate.title))
+        gap = abs(candidate.duration_ms - expected_ms)
+        if (candidate.video_id == video_id or gap > SUBSTITUTE_LENGTH_TOLERANCE_SEC * 1000
+                or _VERSION_WORDS.intersection(words) != version):
+            continue
+        known = words.union(title_words(candidate.channel))
+        if sum(word in known for word in wanted) < SUBSTITUTE_TITLE_OVERLAP * len(wanted):
+            continue
+        kept.append((not _STILL_WORDS.intersection(known), gap, len(kept), candidate))
+    return [row[-1] for row in sorted(kept, key=lambda row: row[:3])]
+
 
 def ffprobe_path(settings):
     configured = os.environ.get('ONAIR_FFPROBE')
@@ -373,14 +425,42 @@ class MusicService:
                 # 그대로 내보내면 곡이 도중에 끊기고 다음 멘트가 나온다. 이 영상은 쓰지 않는다
                 logger.warning('YouTube audio for %s is cut short: got %.1fs of %.1fs', video_id,
                                metadata['duration_ms'] / 1000, expected_ms / 1000)
-                raise HTTPException(502, {'code': 'audio_truncated',
-                                          'message': 'Only part of this video could be downloaded; try another upload'})
+                replacement = await self.substitute(video_id, metadata, expected_ms, Path(temp))
+                if replacement is None:
+                    raise HTTPException(502, {'code': 'audio_truncated', 'message':
+                                              'Only part of this video could be downloaded; try another upload'})
+                # 곡 정보(track_ref·제목·가수)는 신청한 영상 그대로 둔다 — 같은 곡이고, 재시도·캐시·신청 기록이
+                # 신청한 영상으로 묶여 있다. 길이만 실제로 나갈 소리의 것으로 바꾼다
+                converted, metadata['duration_ms'] = replacement
             # Stage beside the destination so publication uses a same-volume rename on Windows.
             staged = audio.with_suffix('.tmp')
             await asyncio.to_thread(shutil.copyfile, converted, staged)
             staged.replace(audio)
             manifest.write_text(json.dumps(metadata), encoding='utf-8')
         return audio, metadata
+
+    async def substitute(self, video_id, metadata, expected_ms, root):
+        """잘린 영상 대신 같은 곡의 다른 영상을 받는다 → (MP3 경로, 실제 길이 ms). 쓸 만한 것이 없으면 None."""
+        if metadata['title'] == video_id:
+            return None  # 제목을 알아내지 못한 영상은 무엇을 찾을지 모른다
+        try:
+            found = await search_youtube(self.settings, substitute_query(metadata['title']), SUBSTITUTE_SEARCH)
+        except HTTPException:
+            return None
+        chosen = substitute_order(found, video_id, metadata['title'], expected_ms)[:SUBSTITUTE_TRIES]
+        for index, candidate in enumerate(chosen):
+            folder = root / f'substitute-{index}'
+            folder.mkdir()
+            try:
+                converted, other, declared_ms = await self.download(candidate.video_id, folder)
+            except HTTPException:
+                continue
+            if other['duration_ms'] < declared_ms - TRUNCATED_TOLERANCE_SEC * 1000:
+                logger.warning('Substitute %s for %s is cut short too', candidate.video_id, video_id)
+                continue
+            logger.warning('Playing %s (%s) in place of cut-short %s', candidate.video_id, candidate.title, video_id)
+            return converted, other['duration_ms']
+        return None
 
     async def download(self, video_id, root):
         """한 번 받아 MP3로 바꾼다 → (MP3 경로, 곡 정보, 원래 길이 ms). 곡 정보의 duration_ms는 MP3를 실제로 잰 길이다.
