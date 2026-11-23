@@ -30,6 +30,9 @@ class CleanNamesTests(unittest.TestCase):
     def test_quoted_song_title(self):
         self.check("BTS (방탄소년단) 'Dynamite' Official MV", 'HYBE LABELS', ('Dynamite', 'BTS (방탄소년단)'))
         self.check("Girls' Generation 소녀시대 'Gee' MV", 'SMTOWN', ('Gee', "Girls' Generation 소녀시대"))
+        # 따옴표로 묶은 말이 둘이면 어느 것이 곡인지 모른다
+        title = "Europe 'The Final Countdown' - From 'Live At Sweden Rock - 30 Anniversary Show'"
+        self.check(title, 'earMUSIC', (title, 'earMUSIC'))
 
     def test_unsure_titles_are_not_split(self):
         # 가수 채널인데 어느 쪽도 채널 이름이 아니다 — 부제일 수 있다

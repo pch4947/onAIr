@@ -20,7 +20,8 @@ _WORD = re.compile(r'[0-9A-Za-z]+|[가-힣]+')
 _TAIL = re.compile(r'(?i)[\s|:\-–—]*\b(official\s+((music|lyrics?)\s+)?(video|audio|m/?v|visuali[sz]er)'
                    r'|music\s+video|lyrics?\s+video|m/?v)\s*$')
 # K-pop 영상 제목: 가수 '곡' — "BTS (방탄소년단) 'Dynamite'"
-_QUOTED = re.compile(r'''^(.+?)\s+['‘"“]([^'‘’"“”]+)['’"”]$''')
+# 가수 이름의 아포스트로피("Girls' Generation")는 되지만 따옴표로 묶은 말이 둘이면 나누지 않는다
+_QUOTED = re.compile(r'''^((?:(?!\s['‘"“]).)+)\s+['‘"“]([^'‘’"“”]+)['’"”]$''')
 _SEPARATOR = re.compile(r'\s+[-–—_]\s+')
 _CHANNEL_TAIL = re.compile(r'(?i)(\s*-\s*topic|\s*vevo|\s+official(\s+(channel|youtube))?|\s*공식(\s*채널)?)\s*$')
 _CAMEL = re.compile(r'(?<=[a-z])(?=[A-Z])')
