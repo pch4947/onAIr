@@ -105,6 +105,7 @@ class EngineSettings:
     embedder: str = "dummy"  # dummy(글자 겹침, 키 불필요) | gemini(GEMINI_API_KEY 필요)
     # 갈래마다 '하려는 말'을 붙이고 대본이 그 말을 풀어 가게 한다 (inputs/topic_plan.py). 0이면 붙이지 않는다.
     # 1: 하려는 말 + DJ의 취향·의견  2: 1 + 공감을 바라는 주제는 마음을 알아주는 말로, 비유 없이 평범한 말로
+    # 3: 2의 내용에, 지시를 줄이고 페르소나를 앞세워 쓴다 — 말하는 방식은 DJ의 에너지·농담 정도가 정한다 (#376)
     talk_gist: int = 0
     # 방송별로 쓴 갈래의 기록 — 기간 안에 다른 방송이 쓴 갈래를 규칙으로 뺀다. None이면 적지도 거르지도 않는다
     topic_usage_path: Path | None = None
@@ -344,7 +345,7 @@ class StationEngine:
             use_style(style, pauses=self.settings.tts_pauses)
         # 발성 태그는 받는 TTS에서만 쓰게 한다 — 대본 프롬프트가 이 값을 본다 (corners/base.py)
         profile.vocal_tags = self.settings.tts_vocal_tags and bool(getattr(client, "vocal_tags", False))
-        profile.voice_first = self.settings.talk_gist >= 3  # 실험 — 방송 시작과 페르소나 전환 때 함께 정한다
+        profile.voice_first = self.settings.talk_gist >= 3  # 방송 시작과 페르소나 전환 때 함께 정한다 (#376)
         return client
 
     def _plan_dilemmas(self, fmt, corners: list[str] | None) -> None:

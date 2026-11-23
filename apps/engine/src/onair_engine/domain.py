@@ -106,7 +106,7 @@ class StationProfile:
     vocal_tags: bool = False
     # 폼에서 고른 농담 정도(rare | some | often) — 페르소나를 앞세울 때 쓴다 (corners/base.py)
     humor: str = "some"
-    # 지시보다 페르소나를 앞세워 쓴다 (실험 talk_gist 3) — 엔진이 설정을 보고 켠다
+    # 지시보다 페르소나를 앞세워 쓴다 (설정 talk_gist 3, #376) — 엔진이 설정을 보고 켠다
     voice_first: bool = False
 
 
