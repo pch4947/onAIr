@@ -103,6 +103,7 @@ def load_config(path: Path) -> tuple[StationConfig, EngineSettings]:
         tts_style=bool(pipe.get("tts_style", False)),
         tts_pauses=bool(pipe.get("tts_pauses", False)),
         tts_vocal_tags=bool(pipe.get("tts_vocal_tags", False)),
+        talk_gist=int(pipe.get("talk_gist", 0)),
         tts_moods=dict(pipe.get("tts_moods") or {}),
         max_concurrent_generations=int(pipe.get("max_concurrent_generations", 2)),
         dummy_tracks=bool(pipe.get("dummy_tracks", True)),

@@ -93,7 +93,8 @@ def _bank_dir(value) -> Path | None:
 # 방송별 사용 기록(topic_usage)은 열지 않는다: 회차끼리 영향을 주면 견줄 수 없다
 ENGINE_KEYS = {"target_buffer_sec": float, "max_concurrent_generations": int, "contract_version": int,
                "emit_song_picks": _flag,  # DJ 선곡을 끈 기준선: --set engine.emit_song_picks=0 (#295)
-               "talk_bank_dir": _bank_dir, "embedder": str}
+               "talk_bank_dir": _bank_dir, "embedder": str,
+               "talk_gist": int}  # 견줄 때: --variant gist:engine.talk_gist=1
 STATION_KEYS = ("intensity",)
 # 회차의 루프 지연 P95가 이보다 크면 동시 실행이 타이밍 지표를 틀었다고 본다 [초기값] —
 # 2026-11-10 실측(flood, 더미 LLM): 30분 방송 동시 60회의 180~200ms에서는 세그먼트 생성 P95가 그대로였고

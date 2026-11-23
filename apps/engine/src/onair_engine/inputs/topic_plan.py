@@ -18,7 +18,7 @@ import json
 import logging
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..domain import Prompt
 from ..pipeline.embed import EmbedError
@@ -33,6 +33,7 @@ MIN_ANGLES, MAX_ANGLES = 2, 12
 MAX_POINTS = 6
 MAX_TITLE_CHARS = 40
 MAX_POINT_CHARS = 100
+MAX_GIST_CHARS = 120
 REFERENCES_PER_ANGLE = 2  # 갈래 하나에 참고 이야깃거리 이만큼을 찾아 준다 — 주제에 안 맞는 것을 버릴 여유 [예시]
 MAX_REFERENCES = 12
 # 이야깃거리 검색을 기다리는 상한. 벡터 캐시가 비어 있으면 수천 건을 임베딩하느라 1분쯤 걸린다 (2026-11-19 실측:
@@ -55,9 +56,12 @@ class Angle:
     title: str
     points: tuple[str, ...]
     source: str | None = None  # 참고한 데이터셋 이야깃거리의 id — 새로 짠 갈래는 None
+    gist: str = ""  # 이 갈래에서 DJ가 하려는 말 한 문장 — 없으면 말할 거리만 있다
+    level: int = 0  # 설정 talk_gist — 대본 프롬프트(corners/steps.py)가 이 값을 보고 지시를 붙인다
 
     def text(self) -> str:
-        return "\n".join([self.title, *(f"- {p}" for p in self.points)])
+        head = [self.title] + ([f"하려는 말: {self.gist}"] if self.gist else [])
+        return "\n".join([*head, *(f"- {p}" for p in self.points)])
 
 
 def angle_count(broadcast_minutes: int) -> int:
@@ -69,19 +73,41 @@ def _references_text(references: list) -> str:
                      for n, item in enumerate(references, 1))
 
 
+# 하려는 말(gist) — 갈래가 장면 조각의 나열이면 대본이 감각 묘사와 위로로 채워진다 (T-022).
+# 수집 대본 1,508개 멘트 가운데 DJ가 자기 말을 하는 것은 5%, 위로하는 말이 든 것은 25%였다. 같은 방 12개를 네 가지로
+# 방송해 가려 놓고 고르게 했을 때(고르기 22번) 예전 방식은 "가장 좋음" 0번, "가장 별로" 15번이었다.
+GIST_RULES = [
+    ("- 갈래마다 gist를 한 문장으로 붙인다. gist는 이 갈래에서 DJ가 청취자에게 하려는 말이다 — 장면을 그린 문장이 "
+     "아니라, 그 이야기를 꺼내는 까닭이 되는 생각이나 의견이다. 위로하거나 다독이는 말은 gist로 쓰지 않는다."),
+    ("- 말할 거리는 gist를 풀어 가는 재료다. 흔히 겪는 일, 그렇게 되는 까닭, 사람마다 갈리는 선택, 써 볼 만한 요령처럼 "
+     "내용이 있는 것으로 쓴다. 빛·소리·향기·공기 같은 분위기만 그린 것은 갈래 하나에 하나를 넘기지 않는다. "
+     "질문 문장으로 쓰지 않는다."),
+]
+FACT_RULE = "- 수치, 가격, 상호, 날짜, 역사적 사실처럼 확인할 수 없는 사실은 넣지 않는다."
+NO_EXPERIENCE_RULE = "- DJ가 직접 겪은 일처럼 쓰지 않는다."
+OPINION_RULE = "- DJ의 취향이나 의견(어느 쪽을 좋아한다, 이렇게 생각한다)은 말할 거리로 넣어도 된다."
+# 고른 사람의 말: "이 상황에선 해결책보다 공감에 더 초점을 두는 편이 맞음" (면접을 망친 날, 버그가 안 잡히는 밤)
+EMPATHY_RULE = ("- 주제가 힘든 일을 털어놓거나 위로·공감을 바라는 것이면, 위의 규칙과 달리 gist를 해결책이나 조언이 아니라 "
+                "그 마음을 알아주는 말로 쓴다. 말할 거리도 무엇을 하라는 방법보다 그런 때 흔히 드는 마음과 겪는 일로 쓴다.")
+
+
 def build_prompt(topic: str, count: int, forbidden: list[str] | None = None, *,
                  references: list | None = None, avoid: list[str] | None = None,
-                 taken: list[str] | None = None) -> Prompt:
+                 taken: list[str] | None = None, gist_level: int = 0) -> Prompt:
     """references는 찾아 둔 이야깃거리(BankItem), avoid는 다른 방송에서 다룬 갈래의 제목,
-    taken은 이 방송에 이미 짜 둔 갈래의 제목(빠진 만큼 다시 짤 때)."""
+    taken은 이 방송에 이미 짜 둔 갈래의 제목(빠진 만큼 다시 짤 때). gist_level이 0이면 하려는 말을 붙이지 않는다."""
     lines = [
         f"{MARKER}: 아래 주제를 서로 겹치지 않는 이야기 갈래 {count}개로 펼친다.",
         "- 갈래마다 짧은 제목 하나와 DJ가 말할 거리 4~6개를 붙인다.",
         "- 말할 거리는 순서대로 이어지게 쓴다. 앞의 것으로 이야기를 꺼내고, 가운데에서 풀어 가고, 마지막 것으로 마무리한다.",
-        "- 말할 거리는 떠오르는 장면, 흔히 겪는 일, 둘 중 하나 고르기처럼 구체적으로 쓴다. 질문 문장으로 쓰지 않는다.",
-        "- 수치, 가격, 상호, 날짜, 역사적 사실처럼 확인할 수 없는 사실은 넣지 않는다.",
-        "- DJ가 직접 겪은 일처럼 쓰지 않는다.",
     ]
+    if gist_level:
+        lines += [*GIST_RULES, FACT_RULE, NO_EXPERIENCE_RULE, OPINION_RULE]
+        if gist_level >= 2:
+            lines.append(EMPATHY_RULE)
+    else:
+        lines += ["- 말할 거리는 떠오르는 장면, 흔히 겪는 일, 둘 중 하나 고르기처럼 구체적으로 쓴다. 질문 문장으로 쓰지 않는다.",
+                  FACT_RULE, NO_EXPERIENCE_RULE]
     if forbidden:  # persona의 금지 항목 — 대본 생성과 같은 기준을 갈래에도 건다
         lines.append("- 다음은 넣지 않는다: " + "; ".join(forbidden))
     blocks = [data_block(TOPIC, topic)]
@@ -97,6 +123,8 @@ def build_prompt(topic: str, count: int, forbidden: list[str] | None = None, *,
         shape = '{"angles": [{"title": "갈래 제목", "points": ["말할 거리", ...], "source": 번호 또는 null}]}'
     else:
         shape = '{"angles": [{"title": "갈래 제목", "points": ["말할 거리", ...]}]}'
+    if gist_level:
+        shape = shape.replace('"points"', '"gist": "하려는 말 한 문장", "points"')
     if avoid:
         lines.append("- 아래 다른 방송에서 다룬 갈래와 겹치는 이야기는 짜지 않는다.")
         blocks.append(data_block(AIRED_ELSEWHERE, "\n".join(f"- {t}" for t in avoid)))
@@ -134,8 +162,9 @@ def parse_angles(text: str, sources: list[str] | None = None) -> list[Angle]:
             continue
         points = item.get("points") if isinstance(item.get("points"), list) else []
         points = tuple(p.strip()[:MAX_POINT_CHARS] for p in points if isinstance(p, str) and p.strip())
+        gist = item["gist"].strip()[:MAX_GIST_CHARS] if isinstance(item.get("gist"), str) else ""
         if title := item["title"].strip()[:MAX_TITLE_CHARS]:
-            angles.append(Angle(title, points[:MAX_POINTS], _source(item.get("source"), sources or [])))
+            angles.append(Angle(title, points[:MAX_POINTS], _source(item.get("source"), sources or []), gist))
     if not angles:
         raise ValueError("쓸 수 있는 갈래가 없습니다")
     return angles[:MAX_ANGLES]
@@ -160,7 +189,7 @@ class TopicPlan:
 
     def __init__(self, llm, topic: str, *, count: int, violates, forbidden: list[str] | None = None,
                  telemetry=None, max_tokens: int = 4000, bank=None, usage=None, station_id: str = "",
-                 broadcast_id: str | None = None, fmt: str = "talk", persona: str = ""):
+                 broadcast_id: str | None = None, fmt: str = "talk", persona: str = "", gist_level: int = 0):
         """bank는 이야깃거리 데이터셋(TalkBank), usage는 방송별 사용 기록(TopicUsage) — 없으면 쓰지 않는다.
 
         broadcast_id는 이 방송의 id — 사용 기록에서 "다른 방송"을 가린다. 스테이션 id는 고정 채널이라 방송이
@@ -180,6 +209,7 @@ class TopicPlan:
         self._broadcast = broadcast_id or station_id
         self._fmt = fmt
         self._persona = persona
+        self._gist_level = gist_level  # 설정 talk_gist
         self._vectors: dict = {}  # 갈래 제목 → 벡터 (usage.screen이 만든 것). 꺼낼 때 기록에 함께 남긴다
         self._angles: list[Angle] = []
         self.used: list[Angle] = []  # 꺼낸 순서대로 — 다음 갈래 프롬프트에 "이미 다룬 갈래"로 넣는다
@@ -191,7 +221,8 @@ class TopicPlan:
         references = await self._references()
         avoid = await self._aired_elsewhere()
         try:
-            prompt = build_prompt(self._topic, self._count, self._forbidden, references=references, avoid=avoid)
+            prompt = build_prompt(self._topic, self._count, self._forbidden, references=references, avoid=avoid,
+                                  gist_level=self._gist_level)
             text = await self._llm.complete(prompt, max_tokens=self.max_tokens)
             angles = parse_angles(text, [item.id for item in references])
         except (LlmError, ValueError, OSError) as exc:  # 제공자 장애·해석 실패
@@ -204,6 +235,7 @@ class TopicPlan:
                 angles, method = [], "failed"
         else:
             method = "llm"
+        angles = [replace(a, level=self._gist_level) for a in angles]
         kept = [a for a in angles if self._violates(a.text()) is None]
         dropped = len(angles) - len(kept)
         reused: list[Angle] = []
@@ -233,8 +265,9 @@ class TopicPlan:
             return [], []
         try:
             prompt = build_prompt(self._topic, need, self._forbidden, avoid=list(dict.fromkeys(avoid)),
-                                  taken=[a.title for a in kept])
+                                  taken=[a.title for a in kept], gist_level=self._gist_level)
             angles = parse_angles(await self._llm.complete(prompt, max_tokens=self.max_tokens))
+            angles = [replace(a, level=self._gist_level) for a in angles]
         except (LlmError, ValueError, OSError) as exc:
             log.warning("빠진 갈래를 다시 짜지 못했다: %s", exc)
             return [], []
@@ -303,7 +336,7 @@ class TopicPlan:
             if self._telemetry is not None:
                 self._telemetry.log_angle(angle, len(self.used), len(self.used) + len(self._angles))
             state, points = NEW, self._remaining(n) or ()
-        return Angle(self.current.title, points, self.current.source), state
+        return replace(self.current, points=points), state
 
     def more(self, n: int = 1) -> tuple[str, ...]:
         """하던 갈래의 다음 말할 거리 — 갈래를 넘기지 않는다. 다 썼으면 빈 튜플."""
