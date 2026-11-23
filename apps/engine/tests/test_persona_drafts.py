@@ -10,6 +10,7 @@ from onair_schema import PersonaForm
 from onair_engine.personas import (
     APART_RULE,
     DRAFT_RULES,
+    EXAMPLE_ENERGY,
     EXAMPLE_SITUATIONS,
     TONE_DETAIL_RULE,
     PersonaDrafter,
@@ -43,8 +44,18 @@ def test_examples_are_held_to_the_script_rules():
     rules = " ".join(DRAFT_RULES)
     assert "위로하거나 다독이는 문장은 다섯 개 가운데 하나까지" in rules
     assert "농담하는 문장의 주어는 사람" in rules and "시처럼 꾸미는 말" in rules
-    assert "구호나 표어, 위로하는 말은 입버릇으로 만들지 않는다" in rules
+    assert "구호나 표어, 위로하는 말, 쉬어 가자거나 느리게 하자고 권하는 말은 입버릇으로 만들지 않는다" in rules
     assert "'~하는 방송' 꼴로 끝내지 않는다" in rules
+
+
+def test_examples_carry_the_energy_of_the_dj():
+    """구호와 위로를 막자 텐션 높은 DJ의 예시에서 느낌표가 32% → 17%로 빠졌다."""
+    for energy in ("high", "mid", "low"):
+        user = build_prompt(_form(energy=energy), 3, []).user
+        assert f"- examples의 에너지: {EXAMPLE_ENERGY[energy]}" in user
+        assert all(EXAMPLE_ENERGY[other] not in user for other in EXAMPLE_ENERGY if other != energy)
+    # "서두르지 않는"이라고 썼더니 입버릇 "천천히 볼게요"가 다섯 명에게 생겼다
+    assert not any(word in EXAMPLE_ENERGY["low"] for word in ("천천히", "서두르", "느린", "느리게"))
 
 
 def test_host_note_comes_first():
