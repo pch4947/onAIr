@@ -196,6 +196,20 @@ GIST_HOW_RULE = ("이 덩어리는 아래 이번 갈래를 '풀어 가는 방식
                  "말할 거리는 재료이고 다 쓰지 않아도 된다. '하려는 말'은 이 이야기가 향하는 쪽이다 — 이 DJ의 말로 "
                  "한 번 드러나면 되고, 교훈이나 결론을 정리하는 문장으로 덩어리를 맺지 않는다. "
                  "빛·소리·향기 같은 분위기 묘사와 위로하는 말은 덩어리 전체에서 한두 문장을 넘기지 않는다.")
+# 사람이 가려 놓고 고른 중간 결과(T-025)에서 본 것 셋.
+# 위로 주제의 덩어리가 허탈함·불안·자기 의심을 늘어놓고 거기서 끝났다 (버그 방). 마음을 짚는 갈래에만 붙인다 —
+# 모든 갈래에 "그 사람 편에 서서 한마디를 건넨다"로 붙였더니 "나는 네 편이야" 꼴이 0회에서 11회가 됐고
+# 위로 주제가 아닌 방(헬스장, 월요병)에도 나왔다 (실행 20261123-203424, T-007과 같은 현상)
+HOW_COMFORT_RULE = ("이번 갈래는 힘든 마음을 짚어 가는 이야기다. 그 마음을 늘어놓은 채로 끝내지 않는다 — 마지막 문단에서는 "
+                    "DJ가 듣는 사람에게 직접 말을 건넨다.")
+_FEELINGS = re.compile(r"마음|감정")
+# 한 갈래를 두 덩어리에 걸쳐 말하면 둘째 덩어리가 첫째의 하려는 말과 농담을 그대로 다시 썼다 (헬스장 방)
+GIST_HOW_CONTINUE_RULE = ("이 갈래의 '하려는 말'은 앞의 덩어리에서 이미 했다 — 같은 문장으로 다시 말하지 않고, 앞에서 쓴 "
+                          "농담과 표현도 다시 쓰지 않는다. 남은 말할 거리로 이야기를 더 나아가게 한다.")
+# "세 가지로 꼽는다고 했는데 왜 두 개밖에 안해" — 셋째가 첫째와 같은 말이었다 (러닝 방)
+HOW_COUNT_RULE = ("몇 가지를 꼽거나 순위를 매긴다고 말했으면 그 수만큼 서로 다른 것을 하나씩 든다 — 앞에 든 것을 "
+                  "말만 바꿔 다시 세지 않는다.")
+_COUNTS = re.compile(r"꼽|순위|가지")
 SOFT_QUESTION_RULE = ("청취자의 대답을 기다리는 질문은 하지 않는다. 대답을 기다리지 않고 던지는 물음은 써도 된다.")
 # 이야기 덩어리 — 곡 사이 말을 한 번에 쓴다. 문단 하나가 세그먼트 하나로 합성된다 (pipeline._write_block)
 BLOCK_STEP = "talk_block"
@@ -330,6 +344,18 @@ def _talk(m: Material) -> str:
     return _with_topic(text, m) + _angle(m)
 
 
+def _how_rule(m: Material) -> str:
+    """'풀어 가는 방식'이 붙은 갈래의 덩어리 지시 — 하던 갈래를 이을 때, 꼽는 방식일 때, 마음을 짚는 방식일 때 한 줄씩 덧붙는다."""
+    rule = GIST_HOW_RULE
+    if m.extra.get("angle_state") == "continue":
+        rule += f" {GIST_HOW_CONTINUE_RULE}"
+    if _COUNTS.search(m.extra["angle"].how):
+        rule += f" {HOW_COUNT_RULE}"
+    if _FEELINGS.search(m.extra["angle"].how):
+        rule += f" {HOW_COMFORT_RULE}"
+    return rule
+
+
 def _talk_block(m: Material) -> str:
     """곡과 곡 사이 말 전체를 한 번에 — 채팅이 없는 동안의 DJ 주도 진행 (CORNER_DESIGN 7.7.1절)."""
     parts = int(m.extra.get("parts", 3))
@@ -357,7 +383,7 @@ def _talk_block(m: Material) -> str:
     elif m.extra.get("angle"):
         text += _angle_rule(m, " 주제는 이미 소개했으니 다시 소개하지 않고, 아래 이번 갈래로 바로 시작한다.")
         if free and m.extra["angle"].gist:
-            text += f" {GIST_HOW_RULE if m.extra['angle'].how else GIST_FREE_RULE} {DJ_OPINION_RULE}"
+            text += f" {_how_rule(m) if m.extra['angle'].how else GIST_FREE_RULE} {DJ_OPINION_RULE}"
         else:
             text += _gist(m, GIST_BLOCK_RULE) or " 이번 갈래의 말할 거리를 문단에 차례로 풀어 쓴다."
     else:

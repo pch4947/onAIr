@@ -7,7 +7,15 @@
 import asyncio
 import json
 
-from onair_engine.corners.steps import BLOCK_STEP, GIST_FREE_RULE, GIST_HOW_RULE, build_prompt
+from onair_engine.corners.steps import (
+    BLOCK_STEP,
+    GIST_FREE_RULE,
+    GIST_HOW_CONTINUE_RULE,
+    GIST_HOW_RULE,
+    HOW_COMFORT_RULE,
+    HOW_COUNT_RULE,
+    build_prompt,
+)
 from onair_engine.domain import Material, StationProfile
 from onair_engine.inputs.topic_plan import (
     HOW_EMPATHY_RULE,
@@ -81,8 +89,8 @@ def test_how_stays_with_the_angle_across_visits():
     assert state == "continue" and first.how == again.how != ""
 
 
-def _block(angle: Angle) -> str:
-    extra = {"parts": 4, "angle": angle, "voice_first": True}
+def _block(angle: Angle, **more) -> str:
+    extra = {"parts": 4, "angle": angle, "voice_first": True, **more}
     return build_prompt(BLOCK_STEP, Material(topic="월요병", extra=extra), PROFILE).user
 
 
@@ -95,8 +103,36 @@ def test_block_follows_the_format_when_the_angle_has_one():
 
 def test_block_without_a_format_is_written_as_at_level_three():
     """계획이 방식을 못 냈거나(찾아 둔 이야깃거리를 그대로 쓴 때) 설정 3이면 지금 지시 그대로다."""
-    user = _block(Angle("작은 시동", ("메일 한 통",), gist="첫 동작 하나가 재미있다.", level=4))
+    user = _block(Angle("작은 시동", ("메일 한 통",), gist="첫 동작 하나가 재미있다.", level=4), angle_state="continue")
     assert GIST_FREE_RULE in user and GIST_HOW_RULE not in user
+    assert GIST_HOW_CONTINUE_RULE not in user and HOW_COUNT_RULE not in user
+
+
+def test_second_block_of_an_angle_does_not_say_the_point_again():
+    """한 갈래를 두 덩어리에 걸쳐 말하면 둘째가 첫째의 하려는 말과 농담을 그대로 다시 썼다 (T-025, 사람이 고른 결과)."""
+    angle = parse_angles(PLAN)[0]
+    assert GIST_HOW_CONTINUE_RULE not in _block(angle)
+    assert GIST_HOW_CONTINUE_RULE in _block(angle, angle_state="continue")
+
+
+def test_counting_formats_are_told_to_count_different_things():
+    """ "세 가지로 꼽는다고 했는데 왜 두 개밖에 안해" — 꼽거나 순위를 매기는 방식에만 붙는다."""
+    judge = parse_angles(PLAN)[0]
+    assert HOW_COUNT_RULE not in _block(judge), "판정하는 방식에는 붙지 않는다"
+    count = Angle("시동법 순위", ("메일", "정리", "물"), gist="물 마시기가 일 위다.", level=4, how="월요일 시동법을 세 가지로 꼽는다")
+    assert HOW_COUNT_RULE in _block(count)
+
+
+def test_hard_feelings_do_not_end_on_the_feelings():
+    """위로 주제의 덩어리가 허탈함·불안·자기 의심을 늘어놓고 거기서 끝났다 (버그 방, 사람이 고른 결과).
+
+    마음을 짚는 갈래에만 붙는다 — 모든 갈래에 붙였을 때는 위로 주제가 아닌 방에도 "나는 네 편이야"가 나왔다.
+    """
+    assert HOW_COMFORT_RULE not in _block(parse_angles(PLAN)[0])
+    feelings = Angle("버그 앞에서 멈춘 시간", ("고친 줄 알았는데 그대로일 때",), gist="애쓰고 있다는 마음과 닿아 있어.", level=4,
+                     how="버그가 안 잡힐 때 차례로 밀려오는 마음을 하나씩 짚어 간다")
+    assert HOW_COMFORT_RULE in _block(feelings)
+    assert "편" not in HOW_COMFORT_RULE, "지시에 쓴 낱말이 대본으로 샌다"
 
 
 def test_engine_hands_the_dj_to_the_plan(tmp_path):
