@@ -56,6 +56,14 @@ Lavalink(OAuth + remoteCipher) 다운로드 → MP3 변환 → 기존 Redis 큐 
   - 맞는 영상이 없으면 502 `{"detail": {"code": "audio_truncated"}}`로 거부합니다. 뮤직비디오에만 있는 도입부 때문에
     음원과 길이가 15초 넘게 다른 곡이 여기에 해당합니다.
   - 잘린 곡은 받기와 변환을 한 번 더 하므로 신청 응답이 몇 초 늦어집니다.
+- **곡 제목과 가수는 영상 제목과 채널 이름을 다듬어 알립니다** (`app/track_names.py`).
+  - 영상 종류를 알리는 말을 뺍니다: `(Official Music Video)`, `[MV]`, `(Lyrics)`, 끝의 `Official Audio` 등.
+    `(Live at Wembley)`처럼 어떤 녹음인지 알리는 괄호는 남깁니다.
+  - 제목이 `가수 - 곡`이나 `가수 '곡'` 꼴이면 나눕니다. 어느 쪽이 가수인지는 채널 이름으로 정하고,
+    가사·음원·기획사 채널이면 앞쪽을 가수로 봅니다. 채널이 어느 쪽과도 다르면 나누지 않습니다.
+  - 채널 이름에서 `VEVO`, `- Topic`, `Official`을 뗍니다 (`NickDrakeVEVO` → `Nick Drake`).
+  - 예: `Nick Drake - Pink Moon (Official Music Video)` / `NickDrakeVEVO` → 제목 `Pink Moon`, 가수 `Nick Drake`.
+  - 곡 검색 결과(`POST .../tracks/search`)는 고를 때 구별할 수 있게 영상 제목 그대로 보여 줍니다.
 
 ### PowerShell 호출
 
@@ -147,6 +155,8 @@ macOS/Linux에서는 가상환경 실행 파일이 `.venv/bin/python`입니다.
 - `pyproject.toml`: 엔진과 동일한 방식의 Python 버전 및 의존성 선언
 
 기본값은 HOST=127.0.0.1, PORT=3000이며 OS 환경변수가 .env보다 우선합니다.
+운영 서버에서는 `ONAIR_JWT_SECRET`을 반드시 임의의 긴 값으로 지정합니다. 기본값은 저장소에 공개돼 있어
+그대로 두면 누구나 로그인 토큰을 만들 수 있고, 시작할 때 경고 로그가 남습니다. 값을 바꾸면 이미 발급한 토큰은 모두 무효가 됩니다.
 방송 소비자와 HLS 발행기는 한 서버 프로세스에서만 실행합니다.
 
 ## API와 현재 한계
@@ -326,7 +336,7 @@ FFmpeg를 먼저 설치하고 `ffmpeg -version`을 확인합니다. PATH에서 �
 - GET /api/stations/{station_id}/stream/state: HLS 준비 상태와 hlsUrl, 발행기 오류
 - GET /hls/st_local_dev/index.m3u8: 라이브 목록 (준비 전 503)
 - GET /hls/st_local_dev/{파일명}.ts: AAC 오디오가 담긴 TS
-- 세그먼트별 음량 정규화 후 약 4초 조각 생성, 최소 24초 목록 유지
+- 세그먼트별 음량 정규화 후 약 2초 조각 생성(`ONAIR_HLS_SEGMENT_SECONDS`, #359), 최소 24초 목록 유지
 - 소스 경계에 DISCONTINUITY 삽입, 목록은 임시 파일에서 원자적으로 교체
 - 큐가 비면 무음으로 방송 유지. 실제 청취는 발행보다 버퍼만큼 늦음
 
