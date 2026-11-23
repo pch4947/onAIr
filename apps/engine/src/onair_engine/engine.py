@@ -168,6 +168,7 @@ def profile_from(persona: Persona) -> StationProfile:
         dj_name=persona.dj_name, tone=persona.tone, concept=persona.concept,
         examples=list(persona.examples), forbidden=list(persona.forbidden),
         signature_phrases=list(persona.signature_phrases), energy=persona.style.energy,
+        humor=persona.style.humor,
     )
 
 
@@ -343,6 +344,7 @@ class StationEngine:
             use_style(style, pauses=self.settings.tts_pauses)
         # 발성 태그는 받는 TTS에서만 쓰게 한다 — 대본 프롬프트가 이 값을 본다 (corners/base.py)
         profile.vocal_tags = self.settings.tts_vocal_tags and bool(getattr(client, "vocal_tags", False))
+        profile.voice_first = self.settings.talk_gist >= 3  # 실험 — 방송 시작과 페르소나 전환 때 함께 정한다
         return client
 
     def _plan_dilemmas(self, fmt, corners: list[str] | None) -> None:

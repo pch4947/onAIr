@@ -40,6 +40,37 @@ RADIO_CRAFT = (
 )
 
 
+# 페르소나를 앞세우는 말하기 (실험 talk_gist 3, 2026-11-23). 같은 DJ 설정으로 채팅 세션에서 쓴 대본은 성격이 또렷한데
+# 엔진의 이야기 대목은 어느 DJ가 써도 같은 글이었다. 원인은 지시가 페르소나를 누른 것이다 — "과장된 감탄 대신
+# 구체적인 한마디", "청취자에게 질문하지 않는다", "평범한 낱말로", 그리고 문단 넷에 2~3문장이라는 하나뿐인 틀.
+# 본보기 문장은 적지 않는다(적으면 모든 DJ가 그 문장을 쓴다, T-007) — 말하는 방식의 종류만 적는다
+RADIO_CRAFT_FREE = "라디오 멘트는 귀로 듣는 말이다. 청취자 한 사람에게 말하듯 쓴다."
+VOICE_FIRST = ("이 DJ가 마이크 앞에서 실제로 하는 말로 쓴다. 글로 쓴 수필이 아니다. 위의 말투와 아래 말투 예시에 드러난 "
+               "성격이 문장마다 들려야 한다 — 어느 DJ가 써도 같을 문장은 쓰지 않는다.")
+VOICE_BY_ENERGY = {
+    "high": ("텐션이 높은 DJ다. 짧게 끊어 치는 말과 감탄으로 분위기를 끌어올리고, 청취자에게 바로 말을 건다 — "
+             "같이 해 보자고 시키기, 몇 가지로 꼽기, 같이 외칠 구호 같은 방식을 쓴다."),
+    "mid": "편하게 수다 떠는 DJ다. 혼잣말처럼 던지는 말, 맞장구, 자기 얘기를 섞어 말한다.",
+    "low": "차분한 DJ다. 서두르지 않고 낮은 목소리로, 곁에 앉은 사람에게 말하듯 한다.",
+}
+VOICE_BY_HUMOR = {
+    # "웃기려는 과장과 엉뚱한 비교는 좋다"고만 했을 때는 "혼자 들면 덤벨인데 같이 들면 풍선"처럼 지어낸 말장난이 늘었다 —
+    # 고른 사람이 싫어한 "주판도 얼큰하게 돌아가네"와 같은 종류다. 입으로 하는 농담으로 좁힌다
+    "often": ("농담을 아끼지 않는다. 친구끼리 말로 주고받는 식의 농담과 과장이다 — 글에서나 쓸 법한 "
+              "멋 부린 말장난이나 억지 비유는 하지 않는다."),
+    "some": "가벼운 농담을 가끔 섞는다.",
+    "rare": "",
+}
+# 시처럼 꾸민 말은 고른 사람들이 가장 자주 싫어했다(T-022). 웃기려는 과장은 그것과 다르다
+NO_POETRY = "풍경이나 감정을 시처럼 꾸미는 말은 쓰지 않는다."
+
+
+def voice_first_rules(profile: StationProfile) -> str:
+    parts = [VOICE_FIRST, VOICE_BY_ENERGY.get(profile.energy, VOICE_BY_ENERGY["mid"]),
+             VOICE_BY_HUMOR.get(profile.humor, ""), NO_POETRY]
+    return " ".join(p for p in parts if p)
+
+
 # 뉴스 형식 — 주관 금지를 프롬프트로도 건다. 결정적으로 지키는 것은 L2 규칙이다 (CORNER_DESIGN 6.4절)
 PLAIN_RULES = "의견·평가·감정 표현 없이 사실만 전한다. 농담이나 입버릇을 쓰지 않는다."
 
@@ -63,7 +94,8 @@ def system_prompt(profile: StationProfile, *, plain: bool = False) -> str:
     if profile.forbidden:
         parts.append("다음은 하지 않는다: " + "; ".join(profile.forbidden) + ".")
     spoken = f"{SPOKEN_RULES} {VOCAL_RULES}" if profile.vocal_tags and not plain else SPOKEN_RULES
-    parts += [RADIO_CRAFT, "대본 텍스트만 출력한다.", spoken, L1_GUARD, DATA_RULES]
+    craft = f"{RADIO_CRAFT_FREE} {voice_first_rules(profile)}" if profile.voice_first and not plain else RADIO_CRAFT
+    parts += [craft, "대본 텍스트만 출력한다.", spoken, L1_GUARD, DATA_RULES]
     prompt = " ".join(parts)
     if profile.examples:
         # 예시는 호스트가 쓴 텍스트다 — 데이터 블록으로 넣어 지시로 읽히지 않게 한다

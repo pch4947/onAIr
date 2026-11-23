@@ -44,6 +44,7 @@ def load_profile(spec: dict | str | Path) -> StationProfile:
     profile = StationProfile(**{k: v for k, v in spec.items() if k not in _PERSONA_META})
     if isinstance(spec.get("style"), dict) and spec["style"].get("energy"):
         profile.energy = str(spec["style"]["energy"])  # persona 파일의 폼 선택지 — TTS 말투 지시에 쓴다 (#369)
+        profile.humor = str(spec["style"].get("humor") or profile.humor)
     return profile
 
 

@@ -1027,6 +1027,7 @@ class Scheduler:
             material.extra["back_announce"] = bool(every) and (self._song_returns - 1) % every == 0
         # 화제를 꺼내면서 묻지 않는다 — 질문은 곡 앞에서 던지고 답은 곡 뒤에 받는다 (_should_ask, 7.7.2절)
         material.extra["no_question"] = True
+        material.extra["voice_first"] = self.topic_plan is not None and self.topic_plan.gist_level >= 3
         if song_story is not None:
             material.extra["song_story"] = song_story
             # 곡 이야기에는 갈래가 없어 지시를 따로 넘긴다 — 남은 꾸밈말이 이 대목에 몰려 있었다 (T-022)
