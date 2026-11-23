@@ -542,11 +542,16 @@ class GenerationPipeline:
     def _worn_note(self) -> str:
         """방송에서 여러 번 쓴 구절을 알려 준다 — 직전 멘트 창에 없어도 되풀이하지 않게."""
         phrases = self._worn.worn()
-        if not phrases:
-            return ""
-        return ("\n\n아래는 오늘 방송에서 이미 여러 번 쓴 표현이다. 같은 표현을 다시 쓰지 않고 다른 말로 한다. "
-                "주제를 같은 구절로 다시 풀어 말하지 않는다. 곡 제목이나 청취자 글처럼 소재에 있는 말은 그대로 써도 된다.\n"
-                + data_block(WORN, "\n".join(f"- {p}" for p in phrases)))
+        note = ""
+        if phrases:
+            note = ("\n\n아래는 오늘 방송에서 이미 여러 번 쓴 표현이다. 같은 표현을 다시 쓰지 않고 다른 말로 한다. "
+                    "주제를 같은 구절로 다시 풀어 말하지 않는다. 곡 제목이나 청취자 글처럼 소재에 있는 말은 그대로 써도 된다.\n"
+                    + data_block(WORN, "\n".join(f"- {p}" for p in phrases)))
+        if words := self._worn.worn_words():
+            # 낱말은 엔진이 정한 목록에서만 나온다(repeats.MOOD_WORDS) — 데이터 블록에 넣지 않아도 된다
+            note += ("\n\n다음 낱말은 오늘 방송에서 이미 여러 번 썼다. 이번에는 쓰지 않는다(이 낱말로 시작하는 말도): "
+                     + ", ".join(words) + ".")
+        return note
 
     def _check_quote(self, job: GenerationJob, kind: str, chat: str, script: str, started: float,
                      request_ref: str) -> bool:

@@ -19,6 +19,11 @@ _PAIR_MIN_SCRIPTS = 3
 _PAIR_MIN_CHARS = 6  # 띄어쓰기를 뺀 글자 수
 _EDGE = " \t\n.,!?…~\"'“”‘’()[]·"
 MIN_SCRIPTS = 2  # 서로 다른 멘트 이만큼에 나왔으면 이미 여러 번 쓴 표현이다
+# 분위기를 내는 낱말 — 어절 묶음으로는 잡히지 않아 낱말로 따로 센다. 차분한 DJ의 멘트 151개에 "마음"이 62번,
+# "곁에" 15번, "조용히" 11번 나왔고, 들은 사람이 "조용히, 놓아둘게요, 머무름, 천천히가 너무 반복된다"고 짚었다
+# (실행 20261123-132356). 어간으로 적는다 — "놓아둘게요", "놓아 드려요"가 모두 "놓아"에 걸린다
+MOOD_WORDS = ("조용히", "천천히", "마음", "곁에", "잠시", "잠깐", "놓아", "머무", "온기", "포근", "살며시", "가만히", "여운")
+MOOD_WORD_MIN_SCRIPTS = 3  # 서로 다른 멘트 이만큼에 나왔으면 그만 쓰게 한다 [임시값]
 MAX_PHRASES = 6  # 프롬프트에 알려 주는 수 — 많으면 지시가 묻힌다
 
 
@@ -41,22 +46,29 @@ class WornPhrases:
         self.max_phrases = max_phrases
         self._counts: Counter[str] = Counter()
         self._last_seen: dict[str, int] = {}
+        self._words: Counter[str] = Counter()  # 분위기를 내는 낱말이 나온 멘트 수
         self._scripts = 0
 
     def clear(self) -> None:
         self._counts.clear()
         self._last_seen.clear()
+        self._words.clear()
         self._scripts = 0
 
     def add(self, script: str, material: str = "") -> None:
         """대본 하나를 센다. 소재(프롬프트의 곡 제목·청취자 글·주제)에 있는 말이 든 묶음은 세지 않는다 —
         DJ의 말버릇이 아니라 말해야 하는 내용이다. 소재와 이어진 두 어절이 겹치면 소재의 말로 본다."""
         self._scripts += 1
+        self._words.update(word for word in MOOD_WORDS if word in script and word not in material)
         given = _pairs(_words(material))
         for phrase in _phrases(script):
             if not _pairs(phrase.split()) & given:
                 self._counts[phrase] += 1
                 self._last_seen[phrase] = self._scripts
+
+    def worn_words(self) -> list[str]:
+        """여러 멘트에 나온 분위기 낱말 — 많이 쓴 것부터."""
+        return [word for word, n in self._words.most_common() if n >= MOOD_WORD_MIN_SCRIPTS]
 
     def _needed(self, phrase: str) -> float:
         """이만큼의 멘트에 나와야 되풀이로 본다. 짧은 두 어절은 세지 않는다."""

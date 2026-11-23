@@ -117,4 +117,4 @@ def test_song_story_can_be_told_in_plain_words():
 
 def test_operating_config_turns_it_on():
     _, settings = load_config(Path("config/station.example.yaml"))
-    assert settings.talk_gist == 2
+    assert settings.talk_gist >= 2  # 3은 2의 내용에 페르소나를 앞세운다 (#376)
