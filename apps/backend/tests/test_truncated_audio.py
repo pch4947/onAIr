@@ -75,6 +75,19 @@ class SubstituteChoiceTests(unittest.TestCase):
             candidate(OTHER, 'Queen - Bohemian Rhapsody (Lyrics)', 352),
             candidate(THIRD, 'Bohemian Rhapsody', 358, 'Queen - Topic')), [THIRD, OTHER, FOURTH])
 
+    def test_altered_sound_is_another_recording(self):
+        self.assertEqual(self.order(
+            candidate(OTHER, 'Queen - Bohemian Rhapsody 12D AUDIO (Multi-directional)', 361),
+            candidate(THIRD, 'Queen - Bohemian Rhapsody (432Hz)', 360),
+            candidate(FOURTH, 'Queen - Bohemian Rhapsody (Bass Boosted)', 360)), [])
+
+    def test_upload_by_the_same_channel_comes_first(self):
+        ids = [row.video_id for row in substitute_order([
+            candidate(OTHER, 'Queen - Somebody To Love (Audio)', 310, 'someone'),
+            candidate(THIRD, 'Queen - Somebody To Love (Official Lyric Video)', 308, 'Queen Official')],
+            VIDEO, 'Queen - Somebody To Love (Official Video)', 310000, 'Queen Official')]
+        self.assertEqual(ids, [THIRD, OTHER])
+
     def test_title_with_only_video_words_finds_nothing(self):
         self.assertEqual(self.order(candidate(OTHER, 'Official Audio', 360), title='Official MV'), [])
 

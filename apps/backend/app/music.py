@@ -316,8 +316,9 @@ _TITLE_NOISE = frozenset((
 # 같은 곡이라도 다른 녹음임을 알리는 말 — 원래 영상과 후보에서 같아야 한다
 _VERSION_WORDS = frozenset((
     'live', 'remix', 'cover', 'karaoke', 'instrumental', 'inst', 'mr', 'acoustic', 'nightcore', 'slowed', 'sped',
-    'reverb', '8d', 'reaction', 'concert', 'session', 'demo', 'mashup', 'medley',
+    'reverb', 'reaction', 'concert', 'session', 'demo', 'mashup', 'medley', 'mix', 'edit', 'clean', 'bass', 'boosted',
     '라이브', '리믹스', '커버', '노래방', '반주', '직캠', '무대', '콘서트', '어쿠스틱', '메들리', '모음'))
+_ALTERED = re.compile(r'[0-9]+(d|hz|k?bps)')
 # 화면이 멈춰 있는 영상임을 알리는 말 — 이런 후보를 먼저 받아 본다
 _STILL_WORDS = frozenset(('audio', 'lyric', 'lyrics', 'topic', '가사', '음원'))
 
@@ -332,24 +333,33 @@ def substitute_query(title):
     return ' '.join(kept + ['audio'])[:120]
 
 
-def substitute_order(candidates, video_id, title, expected_ms):
-    """검색 결과에서 원래 영상 대신 받아 볼 후보를 고르고 차례를 정한다."""
+def version_marks(words):
+    """제목 낱말 가운데 어떤 녹음인지 알리는 것. "8d"·"12d"·"432hz"처럼 소리를 손본 표시도 여기에 든다."""
+    return {word for word in words if word in _VERSION_WORDS or _ALTERED.fullmatch(word)}
+
+
+def substitute_order(candidates, video_id, title, expected_ms, channel=''):
+    """검색 결과에서 원래 영상 대신 받아 볼 후보를 고르고 차례를 정한다.
+
+    차례: 원래 영상과 같은 채널이 올린 것(가수 채널의 음원·가사 영상), 음원·가사 영상, 길이가 가까운 것.
+    """
     wanted = [word for word in title_words(title) if word not in _TITLE_NOISE]
     if not wanted:
         return []
-    version = _VERSION_WORDS.intersection(wanted)
+    version = version_marks(wanted)
     kept = []
     for candidate in candidates:
         words = set(title_words(candidate.title))
         gap = abs(candidate.duration_ms - expected_ms)
         if (candidate.video_id == video_id or gap > SUBSTITUTE_LENGTH_TOLERANCE_SEC * 1000
-                or _VERSION_WORDS.intersection(words) != version):
+                or version_marks(words) != version):
             continue
         known = words.union(title_words(candidate.channel))
         if sum(word in known for word in wanted) < SUBSTITUTE_TITLE_OVERLAP * len(wanted):
             continue
-        kept.append((not _STILL_WORDS.intersection(known), gap, len(kept), candidate))
-    return [row[-1] for row in sorted(kept, key=lambda row: row[:3])]
+        other_channel = not channel or candidate.channel.strip().lower() != channel.strip().lower()
+        kept.append((other_channel, not _STILL_WORDS.intersection(known), gap, len(kept), candidate))
+    return [row[-1] for row in sorted(kept, key=lambda row: row[:4])]
 
 
 def ffprobe_path(settings):
@@ -447,7 +457,8 @@ class MusicService:
             found = await search_youtube(self.settings, substitute_query(metadata['title']), SUBSTITUTE_SEARCH)
         except HTTPException:
             return None
-        chosen = substitute_order(found, video_id, metadata['title'], expected_ms)[:SUBSTITUTE_TRIES]
+        chosen = substitute_order(found, video_id, metadata['title'], expected_ms,
+                                  metadata.get('artist', ''))[:SUBSTITUTE_TRIES]
         for index, candidate in enumerate(chosen):
             folder = root / f'substitute-{index}'
             folder.mkdir()
