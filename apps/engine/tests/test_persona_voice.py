@@ -69,10 +69,10 @@ def test_calm_dj_is_kept_from_going_lyrical():
 def test_jokes_are_spoken_jokes_not_wordplay():
     """들은 사람이 짚은 것: "뿌듯함이 갑자기 가정용품 점검으로 번져", "물건값은 흥정해도 안전은 깎지 말기", "오완완"."""
     lively = system_prompt(_dj("high", "often"))
-    assert "사물이나 감정을 사람처럼 말하는 농담" in lively and "낱말을 비튼 말장난" in lively
+    assert "농담하는 문장의 주어는 사람" in lively and "낱말을 비튼 말장난" in lively
     assert "표어처럼 앞뒤 짝을 맞춘 문장은 짓지 않는다" in lively and "구호" not in lively
     assert NO_SLANG in lively
-    assert "사람처럼 말하는 농담" not in system_prompt(_dj("low", "rare")), "농담을 하지 않는 DJ에게는 필요 없다"
+    assert "농담하는 문장의 주어" not in system_prompt(_dj("low", "rare")), "농담을 하지 않는 DJ에게는 필요 없다"
 
 
 def test_signature_phrases_are_not_glued_on():
