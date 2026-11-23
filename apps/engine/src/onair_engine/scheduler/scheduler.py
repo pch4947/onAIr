@@ -1029,6 +1029,8 @@ class Scheduler:
         material.extra["no_question"] = True
         if song_story is not None:
             material.extra["song_story"] = song_story
+            # 곡 이야기에는 갈래가 없어 지시를 따로 넘긴다 — 남은 꾸밈말이 이 대목에 몰려 있었다 (T-022)
+            material.extra["plain_words"] = self.topic_plan is not None and self.topic_plan.gist_level >= 2
             return
         if run is None:
             return

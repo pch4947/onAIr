@@ -209,7 +209,7 @@ class TopicPlan:
         self._broadcast = broadcast_id or station_id
         self._fmt = fmt
         self._persona = persona
-        self._gist_level = gist_level  # 설정 talk_gist
+        self.gist_level = gist_level  # 설정 talk_gist — 0이면 하려는 말을 붙이지 않는다
         self._vectors: dict = {}  # 갈래 제목 → 벡터 (usage.screen이 만든 것). 꺼낼 때 기록에 함께 남긴다
         self._angles: list[Angle] = []
         self.used: list[Angle] = []  # 꺼낸 순서대로 — 다음 갈래 프롬프트에 "이미 다룬 갈래"로 넣는다
@@ -222,7 +222,7 @@ class TopicPlan:
         avoid = await self._aired_elsewhere()
         try:
             prompt = build_prompt(self._topic, self._count, self._forbidden, references=references, avoid=avoid,
-                                  gist_level=self._gist_level)
+                                  gist_level=self.gist_level)
             text = await self._llm.complete(prompt, max_tokens=self.max_tokens)
             angles = parse_angles(text, [item.id for item in references])
         except (LlmError, ValueError, OSError) as exc:  # 제공자 장애·해석 실패
@@ -235,7 +235,7 @@ class TopicPlan:
                 angles, method = [], "failed"
         else:
             method = "llm"
-        angles = [replace(a, level=self._gist_level) for a in angles]
+        angles = [replace(a, level=self.gist_level) for a in angles]
         kept = [a for a in angles if self._violates(a.text()) is None]
         dropped = len(angles) - len(kept)
         reused: list[Angle] = []
@@ -265,9 +265,9 @@ class TopicPlan:
             return [], []
         try:
             prompt = build_prompt(self._topic, need, self._forbidden, avoid=list(dict.fromkeys(avoid)),
-                                  taken=[a.title for a in kept], gist_level=self._gist_level)
+                                  taken=[a.title for a in kept], gist_level=self.gist_level)
             angles = parse_angles(await self._llm.complete(prompt, max_tokens=self.max_tokens))
-            angles = [replace(a, level=self._gist_level) for a in angles]
+            angles = [replace(a, level=self.gist_level) for a in angles]
         except (LlmError, ValueError, OSError) as exc:
             log.warning("빠진 갈래를 다시 짜지 못했다: %s", exc)
             return [], []

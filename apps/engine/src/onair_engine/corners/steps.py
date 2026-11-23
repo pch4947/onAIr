@@ -331,6 +331,8 @@ def _talk_block(m: Material) -> str:
                  "곡을 다시 소개하거나 다시 틀겠다고 하지 않는다. "
                  "수상·발매 시기·일화처럼 확인할 수 없는 사실은 말하지 않는다. "
                  "오늘 주제와 닿는 데가 있으면 가볍게 잇는다.")
+        if m.extra.get("plain_words"):
+            text += f" {PLAIN_WORDS_RULE}"
         if PREV_TRACK not in blocks:  # 곡을 알려 주는 지시가 이미 곡을 넣었다
             blocks += "\n" + data_block(PREV_TRACK, track_line(song))
     elif m.extra.get("angle"):
