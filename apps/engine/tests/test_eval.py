@@ -27,6 +27,14 @@ def test_speech_level():
     assert checks.speech_level("이 노래 진짜 좋아.") == "casual"
     assert checks.speech_level("일단 이 곡만 듣고 하자.") == "casual"
     assert checks.speech_level("주말 오후 수다 라디오.") is None  # 명사로 끝나면 판단하지 않는다
+    # "~니까", "~니다"는 앞 글자에 ㅂ 받침이 있을 때만 존댓말이다 (#377)
+    assert checks.speech_level("준비되셨습니까?") == "polite"
+    assert checks.speech_level("이건 제 취향입니다.") == "polite"
+    assert checks.speech_level("그러니까.") == "casual"
+    assert checks.speech_level("설거지는 내일의 나한테 넘기면 되니까.") == "casual"
+    assert checks.speech_level("사람은 꼭 급할 때 새 비밀번호를 만든다니까.") == "casual"
+    assert checks.speech_level("그건 아니다.") == "casual"
+    assert checks.speech_level("괜찮으니까요.") == "polite"
 
 
 def test_expected_level_reads_tone():

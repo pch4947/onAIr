@@ -13,7 +13,11 @@ SYLLABLES_PER_SEC = 6.0
 _SENTENCE_RE = re.compile(r"[^.!?…~]+[.!?…~]*")
 _TRAIL = " .!?…~,"
 # 존댓말 종결: 해요체·하십시오체. "~죠"는 "~지요"의 준말이다
-_POLITE_END = re.compile(r"(요|니다|니까|죠)$")
+_POLITE_END = re.compile(r"(요|죠)$")
+# 하십시오체 "~ㅂ니다/~ㅂ니까"는 앞 글자에 ㅂ 받침이 있다(합니다, 입니까). 받침이 없으면 반말이다 — "그러니까", "되니까",
+# "만든다니까", "아니다". 가리지 않았을 때 반말 DJ의 입버릇 "그러니까"가 존댓말로 판정돼 초안이 떨어졌다 (#377)
+_FORMAL_END = re.compile(r"([가-힣])(니다|니까)$")
+_BIEUP = 17  # 받침 ㅂ의 종성 번호
 # 반말·해라체 종결 — "~다"는 "입니다"가 위에서 먼저 걸리므로 여기서는 해라체만 남는다
 _CASUAL_END = re.compile(
     r"(다|야|어|아|지|네|자|래|걸|게|까|니|냐|군|구나|해|거든|잖아|더라|든|라)$")
@@ -36,6 +40,8 @@ def speech_level(sentence: str) -> str | None:
     """'polite' | 'casual' | None(명사로 끝나는 등 판단 불가)."""
     s = sentence.rstrip(_TRAIL)
     if _POLITE_END.search(s):
+        return "polite"
+    if (formal := _FORMAL_END.search(s)) and (ord(formal.group(1)) - 0xAC00) % 28 == _BIEUP:
         return "polite"
     if _CASUAL_END.search(s):
         return "casual"

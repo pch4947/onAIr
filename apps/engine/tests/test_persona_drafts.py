@@ -15,6 +15,7 @@ from onair_engine.personas import (
     TONE_DETAIL_RULE,
     PersonaDrafter,
     build_prompt,
+    vague_detail,
 )
 from onair_engine.pipeline.llm import DummyLlmClient
 from onair_engine.pipeline.safety import SafetyChecker
@@ -56,6 +57,30 @@ def test_examples_carry_the_energy_of_the_dj():
         assert all(EXAMPLE_ENERGY[other] not in user for other in EXAMPLE_ENERGY if other != energy)
     # "서두르지 않는"이라고 썼더니 입버릇 "천천히 볼게요"가 다섯 명에게 생겼다
     assert not any(word in EXAMPLE_ENERGY["low"] for word in ("천천히", "서두르", "느린", "느리게"))
+
+
+def test_tone_detail_is_plain_behaviour():
+    """사용자가 짚은 묘사 — 빗댄 말과 분위기 낱말은 코드로도 거른다."""
+    for flagged in ("빗방울을 세듯 천천히 말을 이어가", "책장을 넘기듯 여백을 두며 작은 농담을 건넨다",
+                    "골목 모퉁이처럼 살짝만 드러낸다", "친한 언니 같은 말투로 안부를 묻는다", "맞장구를 빠르게 얹는다"):
+        assert vague_detail(flagged), flagged
+    for plain in ("선택지를 숫자로 세어 좁히고, 자기 실수도 바로 인정하며 웃는다.",
+                  "청취자를 같은 편으로 끌어들여 같이 호들갑 떨어.", "청취자와 같이 웃고 늘 같은 순서로 묻는다.",
+                  "문장을 반듯하게 끊고 결론부터 말한다."):
+        assert vague_detail(plain) == [], plain
+    assert "비유는 쓰지 않는다" in TONE_DETAIL_RULE and "대본을 읽으면 그렇게 했는지 확인할 수 있는 행동" in TONE_DETAIL_RULE
+
+
+def test_figurative_tone_detail_is_sent_back():
+    form = _form()
+    drafter = PersonaDrafter(lambda: DummyLlmClient(delay_sec=0), SafetyChecker(RULES))
+    good = asyncio.run(drafter.drafts(form, 1))[0]
+    item = {"dj_name": "새이름", "concept": good.concept, "examples": good.examples,
+            "signature_phrases": good.signature_phrases, "forbidden": good.forbidden}
+    persona, problem = drafter._finish(form, {**item, "tone_detail": "빗방울을 세듯 천천히 말을 이어가."}, set())
+    assert persona is None and problem.startswith("tone_detail: 빗댄 말")
+    persona, problem = drafter._finish(form, {**item, "tone_detail": "질문을 짧게 던지고 답에 크게 맞장구친다."}, set())
+    assert persona is not None and problem is None
 
 
 def test_host_note_comes_first():

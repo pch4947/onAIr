@@ -95,8 +95,35 @@ def _keeps_every_genre(form: PersonaForm) -> bool:
 # 만든 DJ의 예시 멘트 150개 가운데 59개(39%)에 위로하는 말이 들었고, 차분한 DJ 일곱 명 가운데 셋의 입버릇이
 # "천천히 들어봐요"류였으며, 말투 묘사는 "빗소리와 노래 사이에 위로를 놓아드려요" 같은 분위기 문장이었다(#377).
 # 본보기 문장은 적지 않는다 — 적으면 모든 초안이 그 문장을 닮는다 (T-007)
-TONE_DETAIL_RULE = ("풍경이나 분위기가 아니라 이 DJ가 어떻게 말하는 사람인지를 쓴다 — 문장의 길이, 자주 하는 반응, "
-                    "무엇에 웃는지, 청취자를 어떻게 대하는지 같은 것이다.")
+# 사용자가 짚은 말투 묘사 — "빗방울을 세듯 천천히 말을 이어가", "책장을 넘기듯 여백을 두며 작은 농담을 건넨다",
+# "골목 모퉁이처럼 살짝만 드러낸다". 두루뭉술한 비유와 분위기 말은 대본에서 확인할 수 없고, 시스템 프롬프트에 들어가
+# 대본을 서정적으로 끈다. 프롬프트로 막고 코드로도 거른다(vague_detail). (#377)
+# 처음에는 적을 행동을 "문장을 어떻게 끊는지, 글에서 무엇에 먼저 반응하는지, 질문을 어떻게 하는지, 무엇에 웃는지"로
+# 못 박았다. 그러자 초안 86개의 묘사가 거의 모두 "문장을 짧게 끊고, 청취자 글의 …부터 짚고, 질문은 하나씩 한다"가 됐다.
+# 무엇을 적을지는 DJ마다 고르게 한다
+TONE_DETAIL_RULE = ("풍경이나 분위기가 아니라 이 DJ가 방송에서 실제로 하는 행동을 글자 그대로 적는다 — 문장의 길이, 자주 하는 "
+                    "반응, 무엇에 웃는지, 청취자를 어떻게 대하는지 가운데 이 DJ를 다른 DJ와 가르는 것을 고른다. 대본을 읽으면 "
+                    "그렇게 했는지 확인할 수 있는 행동이어야 한다. 비유는 쓰지 않는다 — 다른 것에 빗대는 말('처럼', '듯', "
+                    "'같은')도, 뜻을 옮겨 쓴 동사도 쓰지 않고 낱말을 글자 그대로의 뜻으로만 쓴다. 풍경, 날씨, 사물, 분위기, "
+                    "느낌을 나타내는 말도 쓰지 않는다. 초안마다 서로 다른 행동을 적는다.")
+_COMPARISON = re.compile(r"처럼|마냥|(?<!반)듯")
+_LIKE = re.compile(r"([가-힣]+)(\s?)같([은이])")
+# "청취자를 같은 편으로", "청취자와 같이 웃는다", "끌어들여 같이 떠든다", "늘 같은 말"은 빗댄 말이 아니다 —
+# 조사나 부사 뒤의 '같은/같이', 띄어 쓴 '같이'(함께)는 넘긴다
+_NOT_LIKE_ENDS = "을를이가은는와과랑도에로고"
+_NOT_LIKE_WORDS = {"늘", "항상", "매번", "다", "또", "똑", "모두", "함께", "서로"}
+VAGUE_WORDS = ("여백", "여운", "온기", "온도", "포근", "살며시", "풍경", "창밖", "빗소리", "빗방울", "달빛", "별빛", "밤공기",
+               "골목", "책장", "담요", "잔잔", "은은", "스며", "물들", "감싸", "어루만", "건져", "갈림길", "올라타", "숨결",
+               "쉼표", "얹")
+
+
+def vague_detail(text: str) -> list[str]:
+    """말투 묘사에 든 빗댄 말과 분위기 낱말. 비어 있으면 통과."""
+    found = _COMPARISON.findall(text)
+    found += [m.group(0) for m in _LIKE.finditer(text)
+              if m.group(1)[-1] not in _NOT_LIKE_ENDS and m.group(1) not in _NOT_LIKE_WORDS
+              and not (m.group(3) == "이" and m.group(2))]
+    return found + [word for word in VAGUE_WORDS if word in text]
 APART_RULE = ("같은 조건에서도 무엇에 반응하고, 어떻게 웃고, 청취자를 어떻게 대하는지가 다른 세 사람이다 — "
               "분위기만 다르고 말하는 방식이 같은 초안은 만들지 않는다.")
 # 처음 문구로는 둘째 예시 89개 가운데 52개가 "보내주신 글"로 시작했다 — 예시는 매 멘트에 들어가 그 첫머리가 대본에 샌다
@@ -159,7 +186,7 @@ def build_prompt(form: PersonaForm, count: int, avoid_names: list[str]) -> Promp
          '"forbidden": ["..."]}]}'),
         "",
         DRAFT_RULES[0],
-        f"- tone_detail: 기본 말투에 덧붙일 말버릇 묘사 한 문장, {detail_max}자 이내. {TONE_DETAIL_RULE}",
+        f"- tone_detail: 기본 말투에 덧붙일 행동 묘사 한 문장, {detail_max}자 이내. {TONE_DETAIL_RULE}",
         *DRAFT_RULES[1:],
         f"- examples의 에너지: {EXAMPLE_ENERGY[form.energy]}",
         f"- 초안 {count}개는 이름·컨셉이 겹치지 않고 성격이 서로 다르다. {APART_RULE}",
@@ -276,6 +303,8 @@ class PersonaDrafter:
             persona = Persona.model_validate(candidate)
         except ValidationError as exc:
             return None, error_detail(exc)
+        if vague := vague_detail(detail):
+            return None, f"tone_detail: 빗댄 말·분위기 낱말 {vague[:2]}"
         if not form.dj_name and persona.dj_name in taken:
             return None, f"이름 중복: {persona.dj_name}"
         if _keeps_every_genre(form) and (named := genres_named(persona.concept, list(form.music_taste))):
