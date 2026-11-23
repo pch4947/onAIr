@@ -30,7 +30,7 @@ from .inputs.song_picks import Pick, SongPicker
 from .inputs.stories import StoryPool
 from .inputs.story_judge import StoryJudge
 from .inputs.talk_bank import TalkBank, persona_text, shared_bank
-from .inputs.topic_plan import TopicPlan, angle_count
+from .inputs.topic_plan import TopicPlan, angle_count, dj_text
 from .inputs.topic_usage import DAYS as TOPIC_REUSE_DAYS
 from .inputs.topic_usage import TopicUsage
 from .personas import unsafe_fields
@@ -330,7 +330,7 @@ class StationEngine:
             telemetry=self.telemetry, bank=self._bank, usage=self._usage,
             station_id=self.config.station_id, broadcast_id=self._broadcast_id, fmt=fmt.format,
             persona=persona_text(self.config.profile.concept, self.config.profile.tone),
-            gist_level=self._talk_gist,
+            gist_level=self._talk_gist, dj=dj_text(self.config.profile), energy=self.config.profile.energy,
         )
 
     def _tts_client(self, voice: str | None, profile: StationProfile) -> TtsClient:

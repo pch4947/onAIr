@@ -190,6 +190,12 @@ GIST_FREE_RULE = ("이 덩어리는 아래 이번 갈래의 '하려는 말' 하�
                   "하려는 말은 덩어리 어디에서든 한 번, 이 DJ의 말로 분명하게 한다 — 끝에 결론처럼 붙이지 않아도 되고 "
                   "'~라고 생각한다'는 꼴이 아니어도 된다. 어떤 방식으로 풀지는 DJ가 정한다. "
                   "빛·소리·향기 같은 분위기 묘사와 위로하는 말은 덩어리 전체에서 한두 문장을 넘기지 않는다.")
+# 갈래에 '풀어 가는 방식'이 붙어 있을 때의 덩어리 (설정 talk_gist 4, T-025) — 형식이 뼈대이고, 하려는 말은 방향이다.
+# "한 번 분명하게 한다"만 있으면 덩어리가 교훈 문장으로 맺는다 ("내 방이 내 편이 된 것 같달까")
+GIST_HOW_RULE = ("이 덩어리는 아래 이번 갈래를 '풀어 가는 방식'에 적힌 형식으로 푼다 — 그 형식이 덩어리의 뼈대다. "
+                 "말할 거리는 재료이고 다 쓰지 않아도 된다. '하려는 말'은 이 이야기가 향하는 쪽이다 — 이 DJ의 말로 "
+                 "한 번 드러나면 되고, 교훈이나 결론을 정리하는 문장으로 덩어리를 맺지 않는다. "
+                 "빛·소리·향기 같은 분위기 묘사와 위로하는 말은 덩어리 전체에서 한두 문장을 넘기지 않는다.")
 SOFT_QUESTION_RULE = ("청취자의 대답을 기다리는 질문은 하지 않는다. 대답을 기다리지 않고 던지는 물음은 써도 된다.")
 # 이야기 덩어리 — 곡 사이 말을 한 번에 쓴다. 문단 하나가 세그먼트 하나로 합성된다 (pipeline._write_block)
 BLOCK_STEP = "talk_block"
@@ -351,7 +357,7 @@ def _talk_block(m: Material) -> str:
     elif m.extra.get("angle"):
         text += _angle_rule(m, " 주제는 이미 소개했으니 다시 소개하지 않고, 아래 이번 갈래로 바로 시작한다.")
         if free and m.extra["angle"].gist:
-            text += f" {GIST_FREE_RULE} {DJ_OPINION_RULE}"
+            text += f" {GIST_HOW_RULE if m.extra['angle'].how else GIST_FREE_RULE} {DJ_OPINION_RULE}"
         else:
             text += _gist(m, GIST_BLOCK_RULE) or " 이번 갈래의 말할 거리를 문단에 차례로 풀어 쓴다."
     else:
