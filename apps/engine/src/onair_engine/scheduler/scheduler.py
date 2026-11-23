@@ -17,7 +17,7 @@ import asyncio
 import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 
 from ..corners.run import CornerRun, MaterialSources, PlannedStep, Thread
@@ -55,7 +55,7 @@ from ..inputs.pool import QuotePool, leans
 from ..inputs.router import BOARD_STORY, CHAT, MESSAGE, SONG_REQUEST, normalize_kind
 from ..inputs.rules import ChatRules
 from ..inputs.selector import RELEVANCE, QuoteSelector
-from ..inputs.topic_plan import NEW, Angle, TopicPlan
+from ..inputs.topic_plan import NEW, TopicPlan
 from ..inputs.votes import PENDING, VoteRound, view
 from ..pipeline.pipeline import GenerationPipeline
 from ..pipeline.tts import TtsClient
@@ -1029,6 +1029,8 @@ class Scheduler:
         material.extra["no_question"] = True
         if song_story is not None:
             material.extra["song_story"] = song_story
+            # 곡 이야기에는 갈래가 없어 지시를 따로 넘긴다 — 남은 꾸밈말이 이 대목에 몰려 있었다 (T-022)
+            material.extra["plain_words"] = self.topic_plan is not None and self.topic_plan.gist_level >= 2
             return
         if run is None:
             return
@@ -1223,7 +1225,7 @@ class Scheduler:
             material.extra["callback"] = point["callback"]
             self.telemetry.log_callback(point["callback"])
         elif point["source"] == "angle" and self._run is not None and self._run.thread.angle:
-            material.extra["angle"] = Angle(self._run.thread.angle.title, (point["point"],))
+            material.extra["angle"] = replace(self._run.thread.angle, points=(point["point"],))
 
     def _next_anchor_id(self, kind: str) -> str:
         self._anchor_no += 1

@@ -171,6 +171,17 @@ BACK_ANNOUNCE_THEN_RULE = "청취자의 채팅이나 반응을 받을 것이 있
 ANGLE_CONTINUE_RULE = "아래 이번 갈래는 앞에서 하던 이야기다. 처음 꺼내듯 말하지 않고 하던 이야기를 이어 간다."
 ANGLE_HANDOFF_RULE = ("아래 다룬 갈래 가운데 마지막 것이 바로 앞에서 한 이야기다. "
                       "그 이야기에서 자연스럽게 넘어오며 이번 갈래를 꺼낸다.")
+# 갈래에 '하려는 말'이 붙어 있을 때의 지시 (Angle.gist, inputs/topic_plan.py, T-022)
+GIST_BLOCK_RULE = ("이 덩어리 전체가 아래 이번 갈래의 '하려는 말' 하나를 향한다. 말할 거리는 그 말을 풀어 가는 재료이고, "
+                   "다 쓰지 않아도 된다. 문단이 바뀌며 새 이야깃거리를 꺼낼 때는 그것이 앞 문단의 이야기와 어떻게 "
+                   "이어지는지를 말로 잇는다. 마지막 문단에서는 하려는 말을 DJ 자신의 생각으로 분명하게 말한다. "
+                   "빛·소리·향기 같은 분위기 묘사와 위로하는 말은 덩어리 전체에서 한두 문장을 넘기지 않는다.")
+GIST_TALK_RULE = ("말할 거리는 아래 '하려는 말'을 풀어 가는 재료다. 분위기 묘사나 위로하는 말만으로 멘트를 채우지 않는다.")
+DJ_OPINION_RULE = "DJ 자신의 취향이나 의견을 말해도 된다."
+# 고른 사람들이 가장 자주 적은 이유가 꾸밈말이었다 — "거래의 첫 박자", "식사의 마침표 같아", "각자의 고요로 돌아가는 불빛".
+# 예로 든 말은 프롬프트에 넣지 않는다(넣으면 그 낱말이 나온다, T-007)
+PLAIN_WORDS_RULE = ("사물이나 상황을 다른 것에 빗대는 비유와 시처럼 꾸민 표현은 쓰지 않는다. "
+                    "아는 사람에게 말하듯 평범한 낱말로 말한다.")
 # 이야기 덩어리 — 곡 사이 말을 한 번에 쓴다. 문단 하나가 세그먼트 하나로 합성된다 (pipeline._write_block)
 BLOCK_STEP = "talk_block"
 BLOCK_MARKER = "이야기 한 덩어리"
@@ -242,6 +253,15 @@ def _after_song(m: Material, first: str = "첫 문장은") -> tuple[str, str]:
     return f" {AFTER_SONG_RULE}", ""
 
 
+def _gist(m: Material, rule: str) -> str:
+    """갈래에 하려는 말이 붙어 있으면 그 지시, 아니면 빈 문자열 (설정 talk_gist)."""
+    angle = m.extra.get("angle")
+    level = getattr(angle, "level", 0)
+    if not level or not angle.gist:
+        return ""
+    return f" {rule} {DJ_OPINION_RULE}" + (f" {PLAIN_WORDS_RULE}" if level >= 2 else "")
+
+
 def _angle_rule(m: Material, fresh: str) -> str:
     """이번 갈래를 어떻게 꺼낼지 — 하던 갈래면 잇고, 새 갈래면 앞 갈래에서 넘어온다."""
     if not m.extra.get("angle"):
@@ -291,7 +311,7 @@ def _talk(m: Material) -> str:
     if callback := m.extra.get("callback"):
         return _with_topic(f"{text} {CALLBACK_RULE}", m) + "\n" + data_block(CALLBACK, callback.text())
     if m.extra.get("angle"):
-        text += " 아래 이번 갈래의 말할 거리로 이야기한다."
+        text += " 아래 이번 갈래의 말할 거리로 이야기한다." + _gist(m, GIST_TALK_RULE)
     return _with_topic(text, m) + _angle(m)
 
 
@@ -311,11 +331,13 @@ def _talk_block(m: Material) -> str:
                  "곡을 다시 소개하거나 다시 틀겠다고 하지 않는다. "
                  "수상·발매 시기·일화처럼 확인할 수 없는 사실은 말하지 않는다. "
                  "오늘 주제와 닿는 데가 있으면 가볍게 잇는다.")
+        if m.extra.get("plain_words"):
+            text += f" {PLAIN_WORDS_RULE}"
         if PREV_TRACK not in blocks:  # 곡을 알려 주는 지시가 이미 곡을 넣었다
             blocks += "\n" + data_block(PREV_TRACK, track_line(song))
     elif m.extra.get("angle"):
         text += _angle_rule(m, " 주제는 이미 소개했으니 다시 소개하지 않고, 아래 이번 갈래로 바로 시작한다.")
-        text += " 이번 갈래의 말할 거리를 문단에 차례로 풀어 쓴다."
+        text += _gist(m, GIST_BLOCK_RULE) or " 이번 갈래의 말할 거리를 문단에 차례로 풀어 쓴다."
     else:
         text += " 오늘 주제에서 아직 하지 않은 말을 풀어 간다."
     if callback := m.extra.get("callback"):

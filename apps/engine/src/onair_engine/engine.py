@@ -103,6 +103,9 @@ class EngineSettings:
     talk_bank_dir: Path | None = None
     talk_bank_cache: Path = field(default_factory=lambda: Path("var/talk_bank.sqlite"))  # 벡터 캐시 — 지워도 된다
     embedder: str = "dummy"  # dummy(글자 겹침, 키 불필요) | gemini(GEMINI_API_KEY 필요)
+    # 갈래마다 '하려는 말'을 붙이고 대본이 그 말을 풀어 가게 한다 (inputs/topic_plan.py). 0이면 붙이지 않는다.
+    # 1: 하려는 말 + DJ의 취향·의견  2: 1 + 공감을 바라는 주제는 마음을 알아주는 말로, 비유 없이 평범한 말로
+    talk_gist: int = 0
     # 방송별로 쓴 갈래의 기록 — 기간 안에 다른 방송이 쓴 갈래를 규칙으로 뺀다. None이면 적지도 거르지도 않는다
     topic_usage_path: Path | None = None
     topic_reuse_days: float = TOPIC_REUSE_DAYS
@@ -201,6 +204,7 @@ class StationEngine:
             raise StationRejected("llm_unavailable", str(exc)) from exc
 
         self.telemetry = Telemetry(settings.sqlite_path, config.station_id)
+        self._talk_gist = settings.talk_gist
         self.telemetry.corner_titles = {"filler": "대체 멘트",
                                         **{name: spec.title for name, spec in fmt.corners.items()}}
         if config.snapshot is not None:
@@ -324,6 +328,7 @@ class StationEngine:
             telemetry=self.telemetry, bank=self._bank, usage=self._usage,
             station_id=self.config.station_id, broadcast_id=self._broadcast_id, fmt=fmt.format,
             persona=persona_text(self.config.profile.concept, self.config.profile.tone),
+            gist_level=self._talk_gist,
         )
 
     def _tts_client(self, voice: str | None, profile: StationProfile) -> TtsClient:
