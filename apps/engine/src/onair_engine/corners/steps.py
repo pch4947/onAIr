@@ -182,6 +182,15 @@ DJ_OPINION_RULE = "DJ 자신의 취향이나 의견을 말해도 된다."
 # 예로 든 말은 프롬프트에 넣지 않는다(넣으면 그 낱말이 나온다, T-007)
 PLAIN_WORDS_RULE = ("사물이나 상황을 다른 것에 빗대는 비유와 시처럼 꾸민 표현은 쓰지 않는다. "
                     "아는 사람에게 말하듯 평범한 낱말로 말한다.")
+# 페르소나를 앞세울 때의 덩어리 (설정 talk_gist 3, #376) — 내용은 정해 주고, 어떻게 말할지는 DJ에게 맡긴다 (corners/base.py)
+FREE_BLOCK_RULE = ("문단은 {parts}개까지로 나누고 문단 사이는 빈 줄로 띄운다. 문단의 길이는 고르지 않아도 된다 — 짧게 치고 "
+                   "나가는 문단과 길게 푸는 문단을 섞어도 좋다. 전체는 8~12문장이다. 새로 인사하거나 주제를 다시 소개하지 "
+                   "않고, 같은 말을 되풀이하지 않는다.")
+GIST_FREE_RULE = ("이 덩어리는 아래 이번 갈래의 '하려는 말' 하나를 향한다. 말할 거리는 재료이고 다 쓰지 않아도 된다. "
+                  "하려는 말은 덩어리 어디에서든 한 번, 이 DJ의 말로 분명하게 한다 — 끝에 결론처럼 붙이지 않아도 되고 "
+                  "'~라고 생각한다'는 꼴이 아니어도 된다. 어떤 방식으로 풀지는 DJ가 정한다. "
+                  "빛·소리·향기 같은 분위기 묘사와 위로하는 말은 덩어리 전체에서 한두 문장을 넘기지 않는다.")
+SOFT_QUESTION_RULE = ("청취자의 대답을 기다리는 질문은 하지 않는다. 대답을 기다리지 않고 던지는 물음은 써도 된다.")
 # 이야기 덩어리 — 곡 사이 말을 한 번에 쓴다. 문단 하나가 세그먼트 하나로 합성된다 (pipeline._write_block)
 BLOCK_STEP = "talk_block"
 BLOCK_MARKER = "이야기 한 덩어리"
@@ -318,9 +327,13 @@ def _talk(m: Material) -> str:
 def _talk_block(m: Material) -> str:
     """곡과 곡 사이 말 전체를 한 번에 — 채팅이 없는 동안의 DJ 주도 진행 (CORNER_DESIGN 7.7.1절)."""
     parts = int(m.extra.get("parts", 3))
-    text = (f"곡과 곡 사이에 DJ가 혼자 이어 말할 {BLOCK_MARKER}를 쓴다. 문단 {parts}개로 나누고, 문단마다 2~3문장을 쓰고, "
-            "문단 사이는 빈 줄로 띄운다. 한 사람이 한 호흡으로 말하듯 문단이 앞 문단을 받아 이어져야 한다. "
-            "문단마다 새로 인사하거나 주제를 다시 소개하지 않고, 같은 말을 되풀이하지 않는다.")
+    free = bool(m.extra.get("voice_first"))
+    if free:
+        text = f"곡과 곡 사이에 DJ가 혼자 이어 말할 {BLOCK_MARKER}를 쓴다. " + FREE_BLOCK_RULE.format(parts=parts)
+    else:
+        text = (f"곡과 곡 사이에 DJ가 혼자 이어 말할 {BLOCK_MARKER}를 쓴다. 문단 {parts}개로 나누고, 문단마다 2~3문장을 쓰고, "
+                "문단 사이는 빈 줄로 띄운다. 한 사람이 한 호흡으로 말하듯 문단이 앞 문단을 받아 이어져야 한다. "
+                "문단마다 새로 인사하거나 주제를 다시 소개하지 않고, 같은 말을 되풀이하지 않는다.")
     rule, blocks = _after_song(m, "첫 문단의 첫 문장은")
     text += rule
     if song := m.extra.get("song_story"):
@@ -331,13 +344,16 @@ def _talk_block(m: Material) -> str:
                  "곡을 다시 소개하거나 다시 틀겠다고 하지 않는다. "
                  "수상·발매 시기·일화처럼 확인할 수 없는 사실은 말하지 않는다. "
                  "오늘 주제와 닿는 데가 있으면 가볍게 잇는다.")
-        if m.extra.get("plain_words"):
+        if m.extra.get("plain_words") and not free:
             text += f" {PLAIN_WORDS_RULE}"
         if PREV_TRACK not in blocks:  # 곡을 알려 주는 지시가 이미 곡을 넣었다
             blocks += "\n" + data_block(PREV_TRACK, track_line(song))
     elif m.extra.get("angle"):
         text += _angle_rule(m, " 주제는 이미 소개했으니 다시 소개하지 않고, 아래 이번 갈래로 바로 시작한다.")
-        text += _gist(m, GIST_BLOCK_RULE) or " 이번 갈래의 말할 거리를 문단에 차례로 풀어 쓴다."
+        if free and m.extra["angle"].gist:
+            text += f" {GIST_FREE_RULE} {DJ_OPINION_RULE}"
+        else:
+            text += _gist(m, GIST_BLOCK_RULE) or " 이번 갈래의 말할 거리를 문단에 차례로 풀어 쓴다."
     else:
         text += " 오늘 주제에서 아직 하지 않은 말을 풀어 간다."
     if callback := m.extra.get("callback"):
@@ -346,7 +362,7 @@ def _talk_block(m: Material) -> str:
     if m.extra.get("question"):
         text += " 마지막 문단 끝에만 청취자에게 가볍게 질문을 하나 던진다. 다른 문단에서는 묻지 않는다."
     else:
-        text += f" {NO_QUESTION_RULE}"
+        text += f" {SOFT_QUESTION_RULE if free else NO_QUESTION_RULE}"
     if covered := m.extra.get("covered_angles"):
         text += " 아래 이미 다룬 갈래는 되풀이하지 않는다."
         blocks += "\n" + data_block(COVERED_ANGLES, "\n".join(f"- {t}" for t in covered))
