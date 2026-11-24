@@ -25,6 +25,7 @@ from .song_fit import song_fits
 from .station_runtime import station_runtime
 from .stations import User
 from .streaming.tracks import MUSIC_SEGMENT_PREFIX, REGISTER, now_playing
+from .track_names import clean_names
 
 router = APIRouter(prefix='/api/stations')
 search_router = APIRouter(prefix='/api/tracks')
@@ -423,7 +424,7 @@ class MusicService:
                 if metadata['title'] == video_id:
                     enriched = await fetch_oembed_title(video_id)
                     if enriched:
-                        metadata['title'], metadata['artist'] = enriched
+                        metadata['title'], metadata['artist'] = clean_names(*enriched)
                         manifest.write_text(json.dumps(metadata), encoding='utf-8')
                 return audio, metadata
             raise HTTPException(409, 'Idempotency-Key already used for another video')
@@ -446,6 +447,9 @@ class MusicService:
             staged = audio.with_suffix('.tmp')
             await asyncio.to_thread(shutil.copyfile, converted, staged)
             staged.replace(audio)
+            if metadata['title'] != video_id:
+                # 영상 제목과 채널 이름 그대로면 화면에 그대로 보이고 DJ도 그대로 읽는다
+                metadata['title'], metadata['artist'] = clean_names(metadata['title'], metadata['artist'])
             manifest.write_text(json.dumps(metadata), encoding='utf-8')
         return audio, metadata
 

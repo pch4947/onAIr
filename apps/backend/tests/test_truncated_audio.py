@@ -156,9 +156,9 @@ class TruncatedAudioTests(unittest.IsolatedAsyncioTestCase):
             audio, metadata = await self.service.prepare(VIDEO, 'music_swapped')
         self.assertEqual(self.searched, ('가수 노래 audio', music.SUBSTITUTE_SEARCH))
         self.assertEqual(self.downloaded, [VIDEO, OTHER])
-        # 곡 정보는 신청한 영상 그대로이고 길이만 실제로 나갈 소리의 것이다
+        # 곡 정보는 신청한 영상의 것이고(제목과 가수는 다듬는다) 길이만 실제로 나갈 소리의 것이다
         self.assertEqual((metadata['track_ref'], metadata['title'], metadata['artist']),
-                         ('yt:' + VIDEO, '가수 - 노래 MV', '가수'))
+                         ('yt:' + VIDEO, '노래', '가수'))
         self.assertAlmostEqual(metadata['duration_ms'], 3000, delta=150)
         self.assertAlmostEqual(await audio_seconds(ffprobe_path(self.settings), audio), 3.0, delta=0.15)
         self.assertEqual(json.loads((self.directory / 'music_swapped.json').read_text(encoding='utf-8')), metadata)
