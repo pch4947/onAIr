@@ -13,6 +13,8 @@ _VIDEO_WORDS = frozenset((
     'hd', 'hq', '4k', 'uhd', 'full', 'clip', 'performance', 'teaser', 'color', 'coded', 'eng', 'han', 'rom', 'sub',
     'remaster', 'remastered', 'upgrade', 'upgraded', 'original',
     '뮤직비디오', '뮤비', '공식', '가사', '음원', '고음질', '자막', '한글', '영상'))
+# 가사 영상 표시. 가사 영상은 대개 가수가 아닌 사람이 올리고 제목이 "가수 - 곡"이다 (#385)
+_LYRIC_WORDS = frozenset(('lyric', 'lyrics', '가사'))
 _BRACKET = re.compile(r'\(([^()]*)\)|\[([^\[\]]*)\]|【([^【】]*)】|《([^《》]*)》|〈([^〈〉]*)〉')
 _WORD = re.compile(r'[0-9A-Za-z]+|[가-힣]+')
 # 괄호 없이 끝에 붙는 말: "... Official Music Video", "... | Official Audio", "... MV".
@@ -36,14 +38,24 @@ def _video_only(text):
 
 
 def _strip_video_words(title):
+    """(영상 종류를 알리는 말을 뺀 제목, 뺀 말에 가사 영상 표시가 있었는가)."""
+    removed = []
+
     def bracket(match):
         inner = next(group for group in match.groups() if group is not None)
+        if _video_only(inner):
+            removed.append(inner)
         return ' ' if _video_only(inner) or not inner.strip() else match.group(0)
+
+    def tail(match):
+        removed.append(match.group(0))
+        return ''
     cleaned = _BRACKET.sub(bracket, title)
     previous = None
     while cleaned != previous:  # "Song Official Video MV"처럼 겹쳐 붙은 것까지
-        previous, cleaned = cleaned, _TAIL.sub('', cleaned)
-    return re.sub(r'\s{2,}', ' ', cleaned).strip(' -–—_|:')
+        previous, cleaned = cleaned, _TAIL.sub(tail, cleaned)
+    lyric = any(word in _LYRIC_WORDS for text in removed for word in _WORD.findall(text.lower()))
+    return re.sub(r'\s{2,}', ' ', cleaned).strip(' -–—_|:'), lyric
 
 
 def _key(text):
@@ -72,7 +84,8 @@ def _same_name(part, channel_key):
 
 def clean_names(title, channel):
     """(곡 제목, 가수). 가려낼 수 없으면 영상 종류를 알리는 말만 뺀 제목과 다듬은 채널 이름을 돌려준다."""
-    stripped = _strip_video_words(title) or title.strip()
+    stripped, lyric_video = _strip_video_words(title)
+    stripped = stripped or title.strip()
     artist = clean_channel(channel)
     quoted = _QUOTED.match(stripped)
     if quoted:
@@ -84,6 +97,6 @@ def clean_names(title, channel):
     channel_key = _key(artist)
     if _same_name(right, channel_key) and not _same_name(left, channel_key):
         return left, right          # "곡 - 가수"
-    if _same_name(left, channel_key) or not channel_key or _COLLECTOR.search(channel):
-        return right, left          # "가수 - 곡". 가사·음원 채널의 제목도 이 순서다
+    if _same_name(left, channel_key) or not channel_key or _COLLECTOR.search(channel) or lyric_video:
+        return right, left          # "가수 - 곡". 가사·음원 채널의 제목과 가사 영상도 이 순서다
     return stripped, artist         # 채널이 어느 쪽과도 다르다 — 나누지 않는다

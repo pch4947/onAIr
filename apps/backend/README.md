@@ -60,7 +60,7 @@ Lavalink(OAuth + remoteCipher) 다운로드 → MP3 변환 → 기존 Redis 큐 
   - 영상 종류를 알리는 말을 뺍니다: `(Official Music Video)`, `[MV]`, `(Lyrics)`, 끝의 `Official Audio` 등.
     `(Live at Wembley)`처럼 어떤 녹음인지 알리는 괄호는 남깁니다.
   - 제목이 `가수 - 곡`이나 `가수 '곡'` 꼴이면 나눕니다. 어느 쪽이 가수인지는 채널 이름으로 정하고,
-    가사·음원·기획사 채널이면 앞쪽을 가수로 봅니다. 채널이 어느 쪽과도 다르면 나누지 않습니다.
+    가사·음원·기획사 채널이거나 제목에 `가사`·`Lyrics` 표시가 있던 가사 영상이면 앞쪽을 가수로 봅니다(#385). 그 밖에 채널이 어느 쪽과도 다르면 나누지 않습니다.
   - 채널 이름에서 `VEVO`, `- Topic`, `Official`을 뗍니다 (`NickDrakeVEVO` → `Nick Drake`).
   - 예: `Nick Drake - Pink Moon (Official Music Video)` / `NickDrakeVEVO` → 제목 `Pink Moon`, 가수 `Nick Drake`.
   - 곡 검색 결과(`POST .../tracks/search`)는 고를 때 구별할 수 있게 영상 제목 그대로 보여 줍니다.
