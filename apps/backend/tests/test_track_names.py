@@ -27,6 +27,19 @@ class CleanNamesTests(unittest.TestCase):
         self.check('아이유 (IU) - 밤편지 (Through the Night) [가사]', '가사 채널',
                    ('밤편지 (Through the Night)', '아이유 (IU)'))
 
+    def test_lyric_video_is_split_whoever_uploaded_it(self):
+        # 가사 영상을 올리는 개인 채널: 이름에 가사 채널이라는 표시가 없다 (#385)
+        self.check('김광석 - 바람이 불어오는 곳 [가사/Lyrics]', '웅키', ('바람이 불어오는 곳', '김광석'))
+        self.check('Queen - Bohemian Rhapsody (Lyrics)', 'john1985', ('Bohemian Rhapsody', 'Queen'))
+        self.check('Adele - Hello Lyric Video', 'somebody', ('Hello', 'Adele'))
+        # 채널이 제목의 뒤쪽이면 가사 영상이어도 "곡 - 가수"다
+        self.check('Yellow - Coldplay [가사]', 'Coldplay', ('Yellow', 'Coldplay'))
+        # 가사 표시가 없으면 전처럼 나누지 않는다
+        self.check('김광석 - 바람이 불어오는 곳 [HD]', '웅키', ('김광석 - 바람이 불어오는 곳', '웅키'))
+        # 구분자가 없거나 둘 이상이면 가사 영상이어도 나누지 않는다
+        self.check('바람이 불어오는 곳 [가사]', '웅키', ('바람이 불어오는 곳', '웅키'))
+        self.check('A - B - C (Lyrics)', 'x', ('A - B - C', 'x'))
+
     def test_quoted_song_title(self):
         self.check("BTS (방탄소년단) 'Dynamite' Official MV", 'HYBE LABELS', ('Dynamite', 'BTS (방탄소년단)'))
         self.check("Girls' Generation 소녀시대 'Gee' MV", 'SMTOWN', ('Gee', "Girls' Generation 소녀시대"))
