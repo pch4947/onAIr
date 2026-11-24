@@ -562,7 +562,10 @@ class Telemetry:
         head = "신청곡 도착" if requested else "DJ 선곡 도착" if track.get("dj_pick") else "다음 곡"
         self._event("track", f"{head} · {title}",
                     track_ref=track.get("track_ref"), request_id=track.get("request_id"),
-                    with_comment=bool(track.get("requester_comment")))
+                    with_comment=bool(track.get("requester_comment")),
+                    # 제안한 이름으로 바꿔 소개하는 곡 — 백엔드가 알려 온 이름을 남긴다 (#385)
+                    **({"found": " - ".join(str(track[k]) for k in ("found_title", "found_artist") if track.get(k))}
+                       if track.get("found_title") else {}))
         self._db.commit()
 
     def log_rss(self, counts: dict[str, int], failed: int) -> None:

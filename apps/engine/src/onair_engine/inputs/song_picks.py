@@ -61,6 +61,37 @@ def song_key(title: str) -> str:
     return _KEY_RE.sub("", re.sub(r"[(\[].*?[)\]]", "", title).lower())
 
 
+# 다른 사람이 부른 것, 공연 실황처럼 제안한 음원이 아님을 알리는 말. 이런 영상은 올린 사람의 이름이 맞는 소개일 수 있다
+_OTHER_RECORDING = re.compile(r"(?i)\b(cover|live|remix|inst|instrumental|karaoke|mr)\b|커버|라이브|리믹스|노래방")
+_SHORT_NAME = 2  # 이 길이까지의 이름은 낱말째 같아야 한다 — "IU"가 "premium" 안에서 걸리지 않게
+
+
+def _named(name: str, found: str) -> bool:
+    """found(영상 제목과 채널 이름)에 name이 들어 있는가. 띄어쓰기·기호·대소문자는 보지 않는다."""
+    key = song_key(name)
+    if not key:
+        return False
+    if len(key) <= _SHORT_NAME:
+        return key in re.sub(r"[\W_]+", " ", found.lower()).split()
+    return key in _KEY_RE.sub("", found.lower())
+
+
+def confirmed_names(pick: Pick, track: dict) -> tuple[str, str] | None:
+    """찾은 곡이 제안한 곡이 맞으면 제안한 (제목, 가수). 확인할 수 없으면 None — 받은 곡 정보로 소개한다.
+
+    가사 영상을 올리는 채널의 곡은 제목이 "가수 - 곡", 가수가 채널 이름으로 온다("김광석 - 바람이 불어오는 곳" / "웅키").
+    그대로 소개하면 DJ가 "웅키의 …"라고 한다(#385). 제안한 제목과 가수가 영상 제목·채널 이름에 모두 들어 있으면
+    같은 곡이므로 엔진이 아는 이름을 쓴다. 하나라도 없으면 검색 결과가 다른 곡일 수 있어 건드리지 않는다.
+    """
+    title, artist = str(track.get("title") or ""), str(track.get("artist") or "")
+    if _OTHER_RECORDING.search(title) and not _OTHER_RECORDING.search(pick.title):
+        return None
+    found = f"{title} {artist}"
+    if _named(pick.title, found) and _named(pick.artist, found):
+        return pick.title, pick.artist
+    return None
+
+
 def build_prompt(profile: StationProfile, genres: list[str], topic: str | None, played: list[str],
                  count: int, *, turn_of_many: bool = False) -> Prompt:
     """turn_of_many: 방의 장르가 여럿이고 genres는 그 가운데 이번 차례의 것이다 (SongPicker.genres_for_turn)."""
