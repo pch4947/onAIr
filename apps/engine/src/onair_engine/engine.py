@@ -26,7 +26,7 @@ from .inputs.inbox import MessageInbox
 from .inputs.router import BOARD_STORY
 from .inputs.rules import load_chat_rules
 from .inputs.song_fit import SongFitJudge
-from .inputs.song_picks import Pick, SongPicker
+from .inputs.song_picks import Pick, SongPicker, confirmed_names
 from .inputs.stories import StoryPool
 from .inputs.story_judge import StoryJudge
 from .inputs.talk_bank import TalkBank, persona_text, shared_bank
@@ -437,7 +437,8 @@ class StationEngine:
     def _note_queued(self, track: dict, payload: dict) -> None:
         """다음 곡이 정해졌다 — 튼 곡으로 적어 두고, DJ가 제안한 곡이면 고른 까닭을 붙인다.
 
-        소개는 track의 실제 곡 정보로 하고, 고른 까닭만 제안에서 가져온다.
+        소개는 track의 실제 곡 정보로 한다. 제안에서는 고른 까닭을 가져오고, 찾은 곡이 제안한 곡으로 확인되면
+        제목과 가수도 제안한 것으로 바꾼다 — 영상을 올린 채널 이름이 가수로 오는 경우가 있다 (#385).
         """
         self._played.append(_song_label(track))
         # 백엔드가 다음 곡을 알려 왔다 — 이 곡이 나갈 때까지는 고를 일이 없다
@@ -449,8 +450,15 @@ class StationEngine:
         self._pick_failures = 0
         index = payload.get("candidate")
         known = isinstance(index, int) and not isinstance(index, bool) and 0 <= index < len(pending[1])
-        if known and pending[1][index].why:
-            track["pick_why"] = pending[1][index].why
+        if not known:
+            return
+        pick = pending[1][index]
+        if pick.why:
+            track["pick_why"] = pick.why
+        if (names := confirmed_names(pick, track)) and names != (track.get("title"), track.get("artist")):
+            track["found_title"], track["found_artist"] = track.get("title"), track.get("artist")
+            track["title"], track["artist"] = names
+            self._played[-1] = _song_label(track)
 
     def on_track_suggest_failed(self, payload: dict) -> None:
         """백엔드가 제안한 곡을 넣지 못했다 (계약 3.4절) — 다른 후보로 다시 제안한다. 연달아 실패하면 쉰다."""

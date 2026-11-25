@@ -197,9 +197,51 @@ BLOCK_MARKER = "이야기 한 덩어리"
 PREV_TRACK = "방금 나간 곡"
 
 
+_TITLE_SEPARATOR = re.compile(r"\s+[-–—_]\s+")
+_NAME_KEY = re.compile(r"[\W_]")
+ANONYMOUS = "익명"  # 백엔드가 이름을 밝히지 않은 신청자에게 붙이는 닉네임
+# "신청자: 익명"으로 넘기면 "익명 님의 신청곡"이라고 부르거나, 닉네임을 찾다가 곡 정보의 다른 이름을 신청자로 삼는다
+ANONYMOUS_REQUEST_RULE = ("익명으로 들어온 신청곡임을 알린다 — 신청자를 이름으로 부르지 않고, "
+                          "곡 정보에 있는 다른 이름을 신청자로 부르지도 않는다.")
+
+
+def upload_channel(track: dict) -> str | None:
+    """가수 자리에 온 이름이 영상을 올린 채널의 것이면 그 이름.
+
+    가사 영상을 올리는 채널의 곡은 제목이 "김광석 - 바람이 불어오는 곳", 가수가 "웅키"로 온다 — 백엔드는 채널이 제목의
+    어느 쪽과도 다르면 나누지 않는다. 그대로 "곡: 제목 — 웅키"로 넘기자 익명 신청곡 열 번 중 다섯 번을 "익명으로 신청해
+    주신 웅키님의 곡"이라고 소개했다 (#385). 제목이 둘로 나뉘는데 가수 자리의 이름이 어느 쪽에도 없으면 채널로 본다.
+    """
+    artist = str(track.get("artist") or "")
+    parts = [_NAME_KEY.sub("", part.lower()) for part in _TITLE_SEPARATOR.split(str(track.get("title") or ""))]
+    name = _NAME_KEY.sub("", artist.lower())
+    if len(parts) != 2 or not all(parts) or not name or any(name in part or part in name for part in parts):
+        return None
+    return artist
+
+
 def track_line(track: dict) -> str:
-    line = f"곡: {track['title']} — {track.get('artist') or '알 수 없는 아티스트'}"
+    if channel := upload_channel(track):
+        # 채널 이름을 지우지 않는다 — 가수의 채널일 수도 있다("밤편지 - Through the Night" / "아이유"). 무엇인지 알려 주고
+        # 가수인지는 제목을 보고 정하게 한다
+        line = f"곡: {track['title']}\n영상을 올린 채널(가수가 아닐 수 있다): {channel}"
+    else:
+        line = f"곡: {track['title']} — {track.get('artist') or '알 수 없는 아티스트'}"
     return line + (f" (무드: {track['mood']})" if track.get("mood") else "")
+
+
+def _requester_lines(track: dict, text: str, info: str, opening: str) -> tuple[str, str]:
+    """신청곡 소개에 붙는 지시와 곡 정보. 이름을 밝히지 않은 신청자는 닉네임으로 넘기지 않는다."""
+    nickname = track["requester_nickname"]
+    if nickname == ANONYMOUS:
+        text += f" {ANONYMOUS_REQUEST_RULE}"
+    else:
+        text += f" {opening}"
+        info += "\n신청자: " + nickname
+    if comment := track.get("requester_comment"):
+        text += " 신청자가 남긴 한마디도 언급한다."
+        info += "\n한마디: " + comment
+    return text, info
 
 
 def news_lines(items: list[dict]) -> str:
@@ -418,12 +460,8 @@ def _music_intro(m: Material) -> str:
     # 문장처럼 읽히는 제목은 말에 녹여 버린다 — "겨울을 걷는다"를 "윤딴딴의 겨울을 걷습니다"로 소개했다 (2026-11-15, #295)
     text = ("다음 곡을 소개하는 멘트를 2문장 이내로 작성하라. 곡 제목은 적힌 그대로 한 글자도 바꾸지 않고 부른다 — "
             "제목이 문장처럼 보여도 말끝을 바꾸거나 풀어 말하지 않는다.")
-    if nickname := m.track.get("requester_nickname"):
-        text += " 청취자의 신청곡임을 닉네임과 함께 소개한다."
-        info = track_line(m.track) + "\n신청자: " + nickname
-        if comment := m.track.get("requester_comment"):
-            text += " 신청자가 남긴 한마디도 언급한다."
-            info += "\n한마디: " + comment
+    if m.track.get("requester_nickname"):
+        text, info = _requester_lines(m.track, text, track_line(m.track), "청취자의 신청곡임을 닉네임과 함께 소개한다.")
         return text + "\n" + data_block(TRACK, info)
     blocks = data_block(TRACK, track_line(m.track))
     if m.track.get("dj_pick"):  # DJ가 고른 곡 (계약 3.4절 track.suggest, #295)
@@ -572,12 +610,8 @@ def _closing_farewell(m: Material) -> str:
         return text
     info = track_line(m.track)
     # 엔딩 곡이 된 신청곡은 신청자 없이 소개됐다 — 곡 소개로 나간 신청곡에는 모두 닉네임이 있었다 (O-008)
-    if nickname := m.track.get("requester_nickname"):
-        text += " 마지막 곡이 청취자의 신청곡임을 닉네임과 함께 소개한다."
-        info += "\n신청자: " + nickname
-        if comment := m.track.get("requester_comment"):
-            text += " 신청자가 남긴 한마디도 언급한다."
-            info += "\n한마디: " + comment
+    if m.track.get("requester_nickname"):
+        text, info = _requester_lines(m.track, text, info, "마지막 곡이 청취자의 신청곡임을 닉네임과 함께 소개한다.")
     return text + "\n" + data_block(TRACK, info)
 
 

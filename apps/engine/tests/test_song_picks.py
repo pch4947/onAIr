@@ -9,6 +9,7 @@ import pytest
 import onair_engine.engine as engine_module
 from onair_engine.corners import build_prompt
 from onair_engine.corners.run import TrackSource
+from onair_engine.corners.steps import ANONYMOUS, ANONYMOUS_REQUEST_RULE, track_line, upload_channel
 from onair_engine.domain import Material, Prompt, StationConfig, StationProfile
 from onair_engine.engine import EngineSettings, StationEngine
 from onair_engine.inputs.song_picks import (
@@ -16,6 +17,7 @@ from onair_engine.inputs.song_picks import (
     TURN_RULE,
     Pick,
     SongPicker,
+    confirmed_names,
     dummy_picks_json,
     parse_picks,
     song_key,
@@ -201,6 +203,83 @@ def test_engine_suggests_when_it_holds_no_song_and_introduces_what_the_backend_f
     events = _summaries(tmp_path)
     assert any(e.startswith("선곡 제안 · ") and e.endswith("외 2곡") for e in events)
     assert "DJ 선곡 도착 · 찾은 곡 (Official Audio) - 아이유" in events
+
+
+def test_confirmed_names_need_both_title_and_artist_in_what_was_found():
+    """가사 영상을 올리는 채널의 곡은 가수 자리에 채널 이름이 온다 — DJ가 "웅키의 …"라고 소개했다 (#385)."""
+    pick = Pick("바람이 불어오는 곳", "김광석")
+    assert confirmed_names(pick, {"title": "김광석 - 바람이 불어오는 곳", "artist": "웅키"}) == ("바람이 불어오는 곳", "김광석")
+    assert confirmed_names(Pick("밤편지", "아이유"), {"title": "밤편지 (Through the Night)", "artist": "아이유 (IU)"}) \
+        == ("밤편지", "아이유")
+    # 가수가 어디에도 없다 — 올린 사람이 부른 곡일 수 있다
+    assert confirmed_names(Pick("숲", "최유리"), {"title": "숲", "artist": "웅키"}) is None
+    # 다른 곡이다
+    assert confirmed_names(Pick("찾는 곡", "아이유"), {"title": "찾은 곡 (Official Audio)", "artist": "아이유"}) is None
+    # 짧은 이름은 낱말째 같아야 한다
+    assert confirmed_names(Pick("숲", "최유리"), {"title": "숲속의 노래 - 최유리", "artist": "누군가"}) is None
+    assert confirmed_names(Pick("Blueming", "IU"), {"title": "Blueming premium mix", "artist": "누군가"}) is None
+    assert confirmed_names(Pick("Blueming", "IU"), {"title": "IU - Blueming", "artist": "1theK"}) == ("Blueming", "IU")
+    # 다른 사람이 부른 것은 올린 사람의 이름이 맞는 소개일 수 있다. 제목에 그 말이 든 곡("Alive")은 걸리지 않는다
+    assert confirmed_names(Pick("숲", "최유리"), {"title": "최유리 - 숲 (Cover by 웅키)", "artist": "웅키"}) is None
+    assert confirmed_names(Pick("Alive", "Sia"), {"title": "Sia - Alive", "artist": "lyricsbox"}) == ("Alive", "Sia")
+
+
+def test_engine_introduces_a_confirmed_pick_by_the_suggested_names(tmp_path):
+    backend = Backend()
+    engine = _engine(tmp_path, backend)
+
+    async def scenario():
+        task = asyncio.create_task(engine._pick_songs())
+        await _until(lambda: backend.suggests(), "선곡 제안")
+        suggest = backend.suggests()[0]
+        wanted = suggest["candidates"][0]
+        engine.on_track_queued({"track": {**SONG, "title": f"{wanted['artist']} - {wanted['title']}", "artist": "웅키"},
+                                "source": "dj", "suggest_id": suggest["suggest_id"], "candidate": 0})
+        task.cancel()
+        return wanted
+
+    wanted = asyncio.run(scenario())
+    track = engine.tracks.take()
+    assert (track["title"], track["artist"]) == (wanted["title"], wanted["artist"]), "제안한 이름으로 소개한다"
+    assert track["found_artist"] == "웅키" and track["track_ref"] == SONG["track_ref"]
+    assert engine._played[-1] == f"{wanted['title']} — {wanted['artist']}", "튼 곡 목록도 같은 이름이다"
+    engine.telemetry.close()
+    assert f"DJ 선곡 도착 · {wanted['title']} - {wanted['artist']}" in _summaries(tmp_path)
+
+
+def test_requested_song_keeps_the_names_the_backend_sent(tmp_path):
+    """청취자가 신청한 곡은 엔진이 가수를 모른다 — 받은 곡 정보 그대로다."""
+    backend = Backend()
+    engine = _engine(tmp_path, backend)
+    engine.on_track_queued({"track": {**SONG, "title": "김광석 - 바람이 불어오는 곳", "artist": "웅키"},
+                            "source": "request", "request_id": "rq_1"})
+    track = engine.tracks.take()
+    assert (track["title"], track["artist"]) == ("김광석 - 바람이 불어오는 곳", "웅키") and "found_title" not in track
+    engine.telemetry.close()
+
+
+def test_upload_channel_is_not_handed_over_as_the_artist():
+    """익명 신청곡 열 번 중 다섯 번을 "익명으로 신청해 주신 웅키님의 곡"이라고 소개했다 (#385)."""
+    lyric = {**SONG, "title": "김광석 - 바람이 불어오는 곳", "artist": "웅키"}
+    assert upload_channel(lyric) == "웅키"
+    assert track_line(lyric) == "곡: 김광석 - 바람이 불어오는 곳\n영상을 올린 채널(가수가 아닐 수 있다): 웅키"
+    # 가수의 채널일 수도 있다 — 이름을 지우지 않고 무엇인지 알려 준다
+    assert "영상을 올린 채널(가수가 아닐 수 있다): 아이유" in track_line({**SONG, "title": "밤편지 - Through the Night"})
+    # 백엔드가 가려낸 곡, 제목에 가수가 있는 곡, 나뉘지 않는 제목은 지금 그대로다
+    assert track_line(SONG) == "곡: 밤편지 — 아이유"
+    assert track_line({**SONG, "title": "아이유 - 밤편지"}) == "곡: 아이유 - 밤편지 — 아이유"
+    assert track_line({**SONG, "title": "A - B - C", "artist": "누군가"}) == "곡: A - B - C — 누군가"
+    assert upload_channel({**SONG, "artist": ""}) is None
+
+
+def test_anonymous_request_is_not_called_by_a_name():
+    lyric = {**SONG, "title": "김광석 - 바람이 불어오는 곳", "artist": "웅키", "requester_comment": "퇴근길에 듣고 싶어요"}
+    for step in ("music_intro", "closing_farewell"):
+        hidden = build_prompt(step, Material(track={**lyric, "requester_nickname": ANONYMOUS}), PROFILE).user
+        assert ANONYMOUS_REQUEST_RULE in hidden and "신청자:" not in hidden and "닉네임과 함께" not in hidden
+        assert "한마디: 퇴근길에 듣고 싶어요" in hidden
+        named = build_prompt(step, Material(track={**lyric, "requester_nickname": "밤고양이"}), PROFILE).user
+        assert "신청자: 밤고양이" in named and "닉네임과 함께 소개한다" in named and ANONYMOUS_REQUEST_RULE not in named
 
 
 def test_failed_suggestion_is_retried_with_other_songs_and_rests_after_repeated_failures(tmp_path):
