@@ -105,13 +105,23 @@ TONE_DETAIL_RULE = ("풍경이나 분위기가 아니라 이 DJ가 방송에서 
                     "반응, 무엇에 웃는지, 청취자를 어떻게 대하는지 가운데 이 DJ를 다른 DJ와 가르는 것을 고른다. 대본을 읽으면 "
                     "그렇게 했는지 확인할 수 있는 행동이어야 한다. 비유는 쓰지 않는다 — 다른 것에 빗대는 말('처럼', '듯', "
                     "'같은')도, 뜻을 옮겨 쓴 동사도 쓰지 않고 낱말을 글자 그대로의 뜻으로만 쓴다. 풍경, 날씨, 사물, 분위기, "
-                    "느낌을 나타내는 말도 쓰지 않는다. 초안마다 서로 다른 행동을 적는다.")
+                    "느낌을 나타내는 말도 쓰지 않는다. 초안마다 서로 다른 행동을 적는다. "
+                    # 행동을 적게 하자 몸짓과 한 가지 소재에 매인 행동이 나왔다 — 힙합 방 초안 36개 가운데 "박자가 바뀌는 곳에서
+                    # 손가락으로 수를 세고", "손뼉으로 리듬을 세어 준다", "박자를 입으로 짧게 흉내 내고". 이 묘사는 매 멘트에
+                    # 들어가므로 DJ가 오프닝부터 곡 소개까지 "손가락으로 하나, 둘, 셋, 넷"을 되풀이했다 (#388)
+                    "말로 하는 행동만 적는다 — 손짓, 몸짓, 표정, 목소리 크기처럼 대본의 글자로 드러나지 않는 것은 적지 "
+                    "않는다. 무엇을 다루는지(곡의 박자, 가사, 악기 같은 소재)가 아니라 어떻게 말하는지를 적는다 — 주제 "
+                    "이야기, 청취자 글, 곡 소개 어느 멘트에서나 할 수 있는 행동이어야 하고, 한 가지 소재가 있어야만 할 수 "
+                    "있는 행동은 적지 않는다.")
 _COMPARISON = re.compile(r"처럼|마냥|(?<!반)듯")
 _LIKE = re.compile(r"([가-힣]+)(\s?)같([은이])")
 # "청취자를 같은 편으로", "청취자와 같이 웃는다", "끌어들여 같이 떠든다", "늘 같은 말"은 빗댄 말이 아니다 —
 # 조사나 부사 뒤의 '같은/같이', 띄어 쓴 '같이'(함께)는 넘긴다
 _NOT_LIKE_ENDS = "을를이가은는와과랑도에로고"
 _NOT_LIKE_WORDS = {"늘", "항상", "매번", "다", "또", "똑", "모두", "함께", "서로"}
+# 대본의 글자로 드러나지 않는 것 — DJ의 몸짓과 목소리 크기. 적혀 있으면 대본이 그 몸짓을 말로 중계한다 (#388)
+UNSPOKEN_WORDS = ("손가락", "손뼉", "박수", "손짓", "손으로", "몸짓", "고개", "어깨", "표정", "미소", "눈빛", "목소리",
+                  "입으로", "발을", "발로")
 VAGUE_WORDS = ("여백", "여운", "온기", "온도", "포근", "살며시", "풍경", "창밖", "빗소리", "빗방울", "달빛", "별빛", "밤공기",
                "골목", "책장", "담요", "잔잔", "은은", "스며", "물들", "감싸", "어루만", "건져", "갈림길", "올라타", "숨결",
                "쉼표", "얹")
@@ -124,6 +134,13 @@ def vague_detail(text: str) -> list[str]:
               if m.group(1)[-1] not in _NOT_LIKE_ENDS and m.group(1) not in _NOT_LIKE_WORDS
               and not (m.group(3) == "이" and m.group(2))]
     return found + [word for word in VAGUE_WORDS if word in text]
+
+
+def unspoken_detail(text: str) -> list[str]:
+    """말투 묘사에 든 몸짓·목소리 낱말. 비어 있으면 통과."""
+    return [word for word in UNSPOKEN_WORDS if word in text]
+
+
 APART_RULE = ("같은 조건에서도 무엇에 반응하고, 어떻게 웃고, 청취자를 어떻게 대하는지가 다른 세 사람이다 — "
               "분위기만 다르고 말하는 방식이 같은 초안은 만들지 않는다.")
 # 처음 문구로는 둘째 예시 89개 가운데 52개가 "보내주신 글"로 시작했다 — 예시는 매 멘트에 들어가 그 첫머리가 대본에 샌다
@@ -305,6 +322,8 @@ class PersonaDrafter:
             return None, error_detail(exc)
         if vague := vague_detail(detail):
             return None, f"tone_detail: 빗댄 말·분위기 낱말 {vague[:2]}"
+        if unspoken := unspoken_detail(detail):
+            return None, f"tone_detail: 대본에 드러나지 않는 몸짓·목소리 {unspoken[:2]}"
         if not form.dj_name and persona.dj_name in taken:
             return None, f"이름 중복: {persona.dj_name}"
         if _keeps_every_genre(form) and (named := genres_named(persona.concept, list(form.music_taste))):
