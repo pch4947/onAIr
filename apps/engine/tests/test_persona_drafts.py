@@ -15,6 +15,7 @@ from onair_engine.personas import (
     TONE_DETAIL_RULE,
     PersonaDrafter,
     build_prompt,
+    unspoken_detail,
     vague_detail,
 )
 from onair_engine.pipeline.llm import DummyLlmClient
@@ -81,6 +82,27 @@ def test_figurative_tone_detail_is_sent_back():
     assert persona is None and problem.startswith("tone_detail: 빗댄 말")
     persona, problem = drafter._finish(form, {**item, "tone_detail": "질문을 짧게 던지고 답에 크게 맞장구친다."}, set())
     assert persona is not None and problem is None
+
+
+def test_gestures_are_not_a_way_of_talking():
+    """말투 묘사는 매 멘트에 들어간다 — "손가락으로 횟수를 세고"가 적힌 DJ는 첫 다섯 멘트 모두에서 손가락을 셌다 (#388)."""
+    for gesture in ("박자가 바뀌는 곳에서 손가락으로 수를 세고, 청취자에게 들린 횟수를 물어봐.",
+                    "청취자에게 박자를 묻고, 답을 들은 뒤 손뼉으로 리듬을 세어 준다.",
+                    "작은 목소리로 말하고, 청취자의 말을 들은 뒤 핵심 단어를 한 번 되짚어요.",
+                    "박자를 입으로 짧게 흉내 내고, 틀린 리듬에도 먼저 웃는다."):
+        assert unspoken_detail(gesture), gesture
+    for spoken in ("선택지를 숫자로 세어 좁히고, 자기 실수도 바로 인정하며 웃는다.",
+                   "청취자의 의견에 먼저 동의하거나 반대하고 이유를 한 문장으로 붙인다.",
+                   "질문을 짧게 던지고 답에 크게 맞장구친다."):
+        assert unspoken_detail(spoken) == [], spoken
+    assert "말로 하는 행동만 적는다" in TONE_DETAIL_RULE and "어느 멘트에서나 할 수 있는 행동" in TONE_DETAIL_RULE
+    form = _form()
+    drafter = PersonaDrafter(lambda: DummyLlmClient(delay_sec=0), SafetyChecker(RULES))
+    good = asyncio.run(drafter.drafts(form, 1))[0]
+    item = {"dj_name": "새이름", "concept": good.concept, "examples": good.examples,
+            "signature_phrases": good.signature_phrases, "forbidden": good.forbidden}
+    persona, problem = drafter._finish(form, {**item, "tone_detail": "박자를 짚을 때 손가락으로 횟수를 센다."}, set())
+    assert persona is None and problem.startswith("tone_detail: 대본에 드러나지 않는 몸짓")
 
 
 def test_host_note_comes_first():

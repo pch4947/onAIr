@@ -90,6 +90,16 @@ def voice_first_rules(profile: StationProfile) -> str:
 PLAIN_RULES = "의견·평가·감정 표현 없이 사실만 전한다. 농담이나 입버릇을 쓰지 않는다."
 
 
+# 말투 묘사에는 "박자가 바뀌는 곳에서 손가락으로 수를 세고"처럼 이 DJ만의 행동이 적힌다(초안 생성, #377). 그대로
+# "말투는 …."으로만 넘기자 멘트마다 그 행동을 했다 — 방송 첫 다섯 멘트가 모두 "손가락으로 하나, 둘, 셋, 넷"이었고,
+# 첫 블록을 열여섯 번 만들었을 때 문장 212개 가운데 53개(25%)에 그 행동이 들었다 (#388). 이 문구로 14%가 됐다.
+# 값도 치른다 — 말투가 "청취자 말에 질문 하나를 덧붙인다"인 DJ가 청취자 글에 질문을 붙인 멘트가 71% → 48%로 줄었다.
+# "직전 멘트에서 했으면 이번에는 하지 않는다"까지 쓰면 되풀이는 더 줄지만(4%) 질문도 37%까지 눌린다. 문구를 더 붙여도
+# (같은 내용으로 다시 하지 않는다, 가끔 보이는 버릇이다) 되풀이는 더 줄지 않았다 (ENGINE_TUNING_LOG T-025)
+TONE_HABIT_RULE = ("말투에 적힌 행동은 그 행동을 할 거리가 이번 멘트의 소재에 실제로 있을 때 한다 — 할 거리가 없는 멘트에 "
+                   "끼워 넣지 않는다.")
+
+
 def system_prompt(profile: StationProfile, *, plain: bool = False) -> str:
     """persona 블록 조립 — docs/persona.md 4절 순서 (정체성 → 말투·예시 → 금지 → 출력 형식 → L1).
 
@@ -100,7 +110,7 @@ def system_prompt(profile: StationProfile, *, plain: bool = False) -> str:
     # 시간대 낱말로도 나오자(steps.DAYTIME_RULE) 오프닝 40번 가운데 5번이 "새벽다입니다"였고, 이 문장을 넣자 0번이 됐다 (T-016)
     parts = [f"당신은 라디오 스테이션 [{profile.concept}]의 DJ {profile.dj_name}다.",
              f"DJ의 이름은 '{profile.dj_name}'이다.",
-             f"말투는 {profile.tone}."]
+             f"말투는 {profile.tone}.", TONE_HABIT_RULE]
     if plain:
         parts.append(PLAIN_RULES)
     elif profile.signature_phrases:
